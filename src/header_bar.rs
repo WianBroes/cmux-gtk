@@ -57,6 +57,29 @@ pub fn build_header_bar(config: &crate::config::Config) -> Option<gtk4::HeaderBa
     Some(header)
 }
 
+/// Upstream's titlebar notification bell: opens the notification list, with an unread badge.
+pub fn notification_bell() -> (gtk4::Overlay, gtk4::Label) {
+    let button = gtk4::Button::new();
+    let icon = gtk4::gio::ThemedIcon::from_names(&[
+        "notifications-symbolic",
+        "preferences-system-notifications-symbolic",
+    ]);
+    button.set_child(Some(&gtk4::Image::from_gicon(&icon)));
+    button.set_tooltip_text(Some("Notifications (Ctrl+Shift+I)"));
+    button.set_action_name(Some("win.notifications"));
+    button.add_css_class("headerbar-btn");
+    let badge = gtk4::Label::new(None);
+    badge.add_css_class("header-badge");
+    badge.set_halign(gtk4::Align::End);
+    badge.set_valign(gtk4::Align::Start);
+    badge.set_can_target(false);
+    badge.set_visible(false);
+    let overlay = gtk4::Overlay::new();
+    overlay.set_child(Some(&button));
+    overlay.add_overlay(&badge);
+    (overlay, badge)
+}
+
 /// Create a consistently styled header button bound to an existing GIO action.
 fn action_button(icon: &str, tooltip: &str, action: &str) -> gtk4::Button {
     let button = gtk4::Button::from_icon_name(icon);

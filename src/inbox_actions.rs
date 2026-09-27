@@ -231,6 +231,11 @@ fn open(state: &mut AppState, id: Uuid) -> Result<Value, Error> {
 
 /// Reconcile unread rings and sidebar dots without disturbing independent terminal BEL attention.
 pub fn refresh(state: &AppState) {
+    if let Some(badge) = &state.notifications_badge {
+        let unread = state.inbox.records.iter().filter(|record| !record.is_read).count();
+        badge.set_text(&if unread > 99 { "99+".into() } else { unread.to_string() });
+        badge.set_visible(unread > 0);
+    }
     for (index, engine) in state.split_engines.iter().enumerate() {
         let unread_panes: std::collections::HashSet<_> = state
             .inbox
