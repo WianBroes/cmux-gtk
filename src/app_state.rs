@@ -640,6 +640,9 @@ impl AppState {
         }
         // Phase 4: clear attention when user switches to a workspace (D-05).
         self.clear_workspace_attention(index);
+        // Upstream: switching to a workspace marks its own (terminal-less) notifications read.
+        let workspace = self.workspaces[index].uuid;
+        crate::inbox_actions::mark_read_where(self, workspace, None);
         self.active_index = index;
         let page_name = self.workspaces[index].stack_page_name.clone();
         self.stack.set_visible_child_name(&page_name);

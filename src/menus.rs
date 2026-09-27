@@ -64,6 +64,18 @@ pub fn register_actions(
     });
     window.add_action(&action);
 
+    // win.terminal-focused — keyboard focus entered a terminal; mark its notifications read.
+    let action = gio::SimpleAction::new("terminal-focused", Some(&u64::static_variant_type()));
+    action.connect_activate({
+        let state = state.clone();
+        move |_, parameter| {
+            if let Some(pane_id) = parameter.and_then(|value| value.get::<u64>()) {
+                crate::inbox_actions::terminal_focused(&state, pane_id);
+            }
+        }
+    });
+    window.add_action(&action);
+
     // win.new-browser-tab — sibling surface in the focused pane.
     let action = gio::SimpleAction::new("new-browser-tab", None);
     action.set_enabled(crate::browser::agent_browser_available());
