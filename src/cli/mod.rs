@@ -9,6 +9,7 @@ mod bounded_json;
 mod browser_address;
 mod comments;
 mod events;
+mod feed;
 use cmux_platform::discovery;
 pub mod format;
 mod hooks;
@@ -223,6 +224,13 @@ pub fn run(cli: Cli) -> Result<(), CliError> {
         Commands::Project { .. } => Duration::from_secs(30),
         Commands::ProjectActions { .. } => Duration::from_secs(7),
         Commands::ProjectRun { .. } => Duration::from_secs(30),
+        // The Feed holds the hook until a human answers or its two-minute wait expires.
+        Commands::Hooks {
+            command:
+                args::HookCommands::Claude {
+                    event: args::ClaudeHookEvent::PermissionRequest,
+                },
+        } => Duration::from_secs(feed::WAIT_SECONDS + 5),
         _ => Duration::from_secs(5),
     };
 

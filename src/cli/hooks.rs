@@ -317,7 +317,10 @@ fn merge_claude_hooks(settings: &mut Value, binary: &Path) -> Result<(), CliErro
         ("SessionEnd", "session-end"),
         ("Stop", "stop"),
         ("Notification", "notification"),
+        ("PermissionRequest", "permission-request"),
     ] {
+        // The Feed bridge waits for a human for up to two minutes.
+        let timeout = if event == "PermissionRequest" { 125 } else { 10 };
         let entries = hooks
             .entry(event)
             .or_insert_with(|| json!([]))
@@ -336,7 +339,7 @@ fn merge_claude_hooks(settings: &mut Value, binary: &Path) -> Result<(), CliErro
             }
             true
         });
-        entries.push(json!({"hooks": [{"type": "command", "command": format!("{} hooks claude {} {}", shell_argument(&binary.to_string_lossy()), command, MARKER), "timeout": 10}]}));
+        entries.push(json!({"hooks": [{"type": "command", "command": format!("{} hooks claude {} {}", shell_argument(&binary.to_string_lossy()), command, MARKER), "timeout": timeout}]}));
     }
     Ok(())
 }
@@ -1670,10 +1673,14 @@ pub fn claude_event(client: &mut SocketClient, event: ClaudeHookEvent) -> Result
         ClaudeHookEvent::SessionEnd => "SessionEnd",
         ClaudeHookEvent::Stop => "Stop",
         ClaudeHookEvent::Notification => "Notification",
+        ClaudeHookEvent::PermissionRequest => "PermissionRequest",
     };
     let (payload, id, surface) = read_hook_payload(expected)?;
     report_hook(client, "claude", &payload, Some(&id), &surface);
     match event {
+        ClaudeHookEvent::PermissionRequest => {
+            return super::feed::claude_permission(client, &payload, &id, &surface)
+        }
         ClaudeHookEvent::SessionStart => {
             set_agent_resume(
                 client,

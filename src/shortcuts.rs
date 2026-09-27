@@ -187,6 +187,10 @@ pub fn install_shortcuts(
                     handle_browser_close(&state);
                     gtk4::glib::Propagation::Stop
                 }
+                Some(ShortcutAction::ToggleFeed) => {
+                    crate::feed::toggle(&state);
+                    gtk4::glib::Propagation::Stop
+                }
                 None if keyval == gtk4::gdk::Key::comma
                     && mods.intersection(
                         gtk4::gdk::ModifierType::CONTROL_MASK
