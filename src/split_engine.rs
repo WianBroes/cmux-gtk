@@ -304,6 +304,26 @@ fn project_launch(command: &str) -> String {
     )
 }
 
+/// Zone a tab dropped on a pane lands in: the pane's own tab strip joins its tabs, the outer
+/// quarter of the body splits that way, and the middle joins at the drop's x position.
+fn pane_drop_direction(x: f64, y: f64, width: f64, height: f64, tab_bar_bottom: f64) -> &'static str {
+    if y <= tab_bar_bottom {
+        return "center";
+    }
+    let candidates = [
+        (x / width, "left"),
+        ((width - x) / width, "right"),
+        (y / height, "up"),
+        ((height - y) / height, "down"),
+    ];
+    candidates
+        .into_iter()
+        .min_by(|(left, _), (right, _)| left.total_cmp(right))
+        .filter(|(distance, _)| *distance <= 0.25)
+        .map(|(_, direction)| direction)
+        .unwrap_or("center")
+}
+
 /// Construct a tabbed pane and synchronize native focus when its selected page changes.
 fn create_pane(pane_id: u64, initial_surface: PaneSurface) -> SplitNode {
     let notebook = gtk4::Notebook::new();
@@ -428,8 +448,9 @@ fn create_pane(pane_id: u64, initial_surface: PaneSurface) -> SplitNode {
     });
 
     // Accept stable surface IDs over the pane body. The nearest outer quarter creates a
-    // directional split; the center transfers the tab into this pane. The action resolves
-    // current ownership at drop time, so no widget/model borrow crosses the callback.
+    // directional split; the tab strip and the center transfer the tab into this pane. The
+    // action resolves current ownership at drop time, so no widget/model borrow crosses the
+    // callback.
     let drop_target = gtk4::DropTarget::new(String::static_type(), gtk4::gdk::DragAction::MOVE);
     drop_target.connect_drop({
         let surfaces = std::rc::Rc::downgrade(&surfaces);
@@ -440,24 +461,22 @@ fn create_pane(pane_id: u64, initial_surface: PaneSurface) -> SplitNode {
             let Some(notebook) = target.widget().and_downcast::<gtk4::Notebook>() else {
                 return false;
             };
+            let Some(surfaces) = surfaces.upgrade() else {
+                return false;
+            };
             let width = f64::from(notebook.width().max(1));
             let height = f64::from(notebook.height().max(1));
-            let candidates = [
-                (x / width, "left"),
-                ((width - x) / width, "right"),
-                (y / height, "up"),
-                ((height - y) / height, "down"),
-            ];
-            let direction = candidates
-                .into_iter()
-                .min_by(|(left, _), (right, _)| left.total_cmp(right))
-                .filter(|(distance, _)| *distance <= 0.25)
-                .map(|(_, direction)| direction)
-                .unwrap_or("center");
+            // The tab strip sits inside the top quarter, so measure it: a tab dropped on the
+            // tabs must join this pane's tabs, not split the pane again.
+            let tab_bar_bottom = surfaces
+                .borrow()
+                .iter()
+                .filter_map(|surface| notebook.tab_label(&surface.widget()))
+                .filter_map(|label| label.compute_bounds(&notebook))
+                .map(|bounds| f64::from(bounds.y() + bounds.height()))
+                .fold(0.0_f64, f64::max);
+            let direction = pane_drop_direction(x, y, width, height, tab_bar_bottom);
             let position = if direction == "center" {
-                let Some(surfaces) = surfaces.upgrade() else {
-                    return false;
-                };
                 let surfaces = surfaces.borrow();
                 let mut position = surfaces.len();
                 for (index, surface) in surfaces.iter().enumerate() {
@@ -2324,6 +2343,24 @@ impl SplitNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verify a tab dropped on the tab strip joins the pane instead of splitting its top quarter.
+    #[test]
+    fn pane_drop_zones_keep_the_tab_strip_out_of_the_split_quarters() {
+        let (width, height, tab_bar_bottom) = (400.0, 400.0, 35.0);
+        let zone = |x, y| pane_drop_direction(x, y, width, height, tab_bar_bottom);
+        // Anywhere on the tabs (and just under them) adds the tab to this pane.
+        assert_eq!(zone(10.0, 10.0), "center");
+        assert_eq!(zone(200.0, 35.0), "center");
+        // The body keeps the split quarters, top one included.
+        assert_eq!(zone(200.0, 40.0), "up");
+        assert_eq!(zone(10.0, 200.0), "left");
+        assert_eq!(zone(390.0, 200.0), "right");
+        assert_eq!(zone(200.0, 390.0), "down");
+        // The middle of the body joins at the drop's x, and a missing tab strip splits nothing.
+        assert_eq!(zone(200.0, 200.0), "center");
+        assert_eq!(pane_drop_direction(200.0, 5.0, width, height, 0.0), "up");
+    }
 
     /// Verify legacy leaf JSON retains the stable surface identity.
     #[test]
