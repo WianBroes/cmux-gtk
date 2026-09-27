@@ -797,6 +797,11 @@ pub fn create_surface(
             // bit 0: scroll_is_pixel (1 if touchpad, 0 if mouse wheel)
             // bit 1: momentum (1 if momentum scrolling)
             let scroll_mods = if is_pixel { 1 } else { 0 };
+            let (dx, dy) = if crate::preferences::invert_scroll() {
+                (-dx, -dy)
+            } else {
+                (dx, dy)
+            };
 
             unsafe {
                 ffi::ghostty_surface_mouse_scroll(surface, dx, dy, scroll_mods);
