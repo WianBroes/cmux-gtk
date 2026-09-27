@@ -1,9 +1,26 @@
 use gtk4::prelude::*;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::LazyLock;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Preferences {
     font_size: f32,
+    #[serde(default = "enabled")]
+    auto_resume_agents: bool,
+}
+
+fn enabled() -> bool {
+    true
+}
+
+/// Automatic resume of hook-written agent sessions, on by default like upstream; updated on Apply.
+static AUTO_RESUME_AGENTS: LazyLock<AtomicBool> =
+    LazyLock::new(|| AtomicBool::new(read(&path()).is_none_or(|prefs| prefs.auto_resume_agents)));
+
+/// Whether agent sessions recorded by the built-in hooks resume without a manual approval.
+pub fn auto_resume_agents() -> bool {
+    AUTO_RESUME_AGENTS.load(Ordering::Relaxed)
 }
 
 /// Locate terminal preferences beside the application configuration.
@@ -16,10 +33,16 @@ fn valid(size: f32) -> bool {
     size.is_finite() && (6.0..=72.0).contains(&size)
 }
 
+/// Load stored preferences, ignoring missing or malformed files.
+fn read(path: &Path) -> Option<Preferences> {
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
 /// Load a valid stored font size, ignoring missing or malformed preferences.
 fn read_size(path: &Path) -> Option<f32> {
-    let prefs: Preferences = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
-    valid(prefs.font_size).then_some(prefs.font_size)
+    read(path)
+        .map(|prefs| prefs.font_size)
+        .filter(|size| valid(*size))
 }
 
 /// Return the optional user-selected terminal size without changing native configuration.
@@ -27,13 +50,16 @@ pub fn saved_font_size() -> Option<f32> {
     read_size(&path())
 }
 
-/// Validate and atomically persist the font size, returning user-readable errors.
-fn save_size(path: &Path, size: f32) -> Result<(), String> {
+/// Validate and atomically persist the preferences, returning user-readable errors.
+fn save(path: &Path, size: f32, auto_resume_agents: bool) -> Result<(), String> {
     if !valid(size) {
         return Err("Font size must be between 6 and 72 points.".into());
     }
-    let contents = serde_json::to_vec_pretty(&Preferences { font_size: size })
-        .map_err(|error| error.to_string())?;
+    let contents = serde_json::to_vec_pretty(&Preferences {
+        font_size: size,
+        auto_resume_agents,
+    })
+    .map_err(|error| error.to_string())?;
     cmux_platform::filesystem::atomic_write(path, &contents).map_err(|error| error.to_string())
 }
 
@@ -84,6 +110,15 @@ pub fn show(parent: &gtk4::ApplicationWindow, state: &crate::app_state::AppState
     help.set_xalign(0.0);
     help.set_wrap(true);
     content.append(&help);
+    let auto_resume = gtk4::CheckButton::with_label("Resume agent sessions on reopen");
+    auto_resume.set_active(auto_resume_agents());
+    content.append(&auto_resume);
+    let auto_resume_help = gtk4::Label::new(Some(
+        "Agents recorded by cmux hooks (Claude, Codex, pi…) restart with their session. Other resume commands still need an approval below.",
+    ));
+    auto_resume_help.set_xalign(0.0);
+    auto_resume_help.set_wrap(true);
+    content.append(&auto_resume_help);
     crate::resume_review::append(&content, state);
     let error_label = gtk4::Label::new(None);
     error_label.set_wrap(true);
@@ -95,10 +130,11 @@ pub fn show(parent: &gtk4::ApplicationWindow, state: &crate::app_state::AppState
         }
         size.update();
         let value = size.value() as f32;
-        if let Err(error) = save_size(&path(), value) {
+        if let Err(error) = save(&path(), value, auto_resume.is_active()) {
             error_label.set_text(&format!("Could not save preferences: {error}"));
             return;
         }
+        AUTO_RESUME_AGENTS.store(auto_resume.is_active(), Ordering::Relaxed);
         let action = format!("set_font_size:{value}");
         let mut failed = false;
         for surface in surfaces() {
@@ -135,10 +171,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("cmux-font-{}", uuid::Uuid::new_v4()));
         let path = dir.join("preferences.json");
         assert_eq!(read_size(&path), None);
-        save_size(&path, 15.5).unwrap();
+        save(&path, 15.5, false).unwrap();
+        assert!(!read(&path).unwrap().auto_resume_agents);
+        std::fs::write(&path, r#"{"font_size": 14.0}"#).unwrap();
+        assert!(read(&path).unwrap().auto_resume_agents);
+        save(&path, 15.5, true).unwrap();
         assert_eq!(read_size(&path), Some(15.5));
         for invalid in [0.0, 73.0, f32::NAN, f32::INFINITY] {
-            assert!(save_size(&path, invalid).is_err());
+            assert!(save(&path, invalid, true).is_err());
             assert_eq!(read_size(&path), Some(15.5));
         }
         std::fs::write(&path, "broken json").unwrap();

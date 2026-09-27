@@ -78,6 +78,20 @@ pub fn initialize() {
     let _ = SIGNING_KEY.set(key.ok());
 }
 
+/// A binding in exactly the shape a built-in agent hook writes, from an absolute directory.
+pub fn trusted_agent(binding: &ResumeBinding) -> bool {
+    binding.validate().is_ok()
+        && binding
+            .cwd
+            .as_deref()
+            .is_some_and(|cwd| std::path::Path::new(cwd).is_absolute())
+        && binding.kind.as_deref().is_some_and(|kind| {
+            crate::resume_command::literal_arguments(&binding.command).is_some_and(|arguments| {
+                crate::agent_resume::trusted(kind, &arguments, binding.environment.keys())
+            })
+        })
+}
+
 /// Canonical signing input binds the policy mode, reviewed command/prefix, directory and environment.
 fn payload(
     command: &str,
@@ -98,13 +112,18 @@ impl ResumePolicy {
     /// Schedule approved local execution through the owning CLI, which rechecks approval at launch.
     /// Return to an interactive shell after command exit/failure so the restored terminal remains usable.
     pub fn launch_command(&self, binding: &ResumeBinding) -> Option<String> {
-        if !self.allows(binding) {
+        if !self.allows_automatic(binding) {
             return None;
         }
         let cli = std::env::current_exe().ok()?.with_file_name("cmux");
         let cli = cli.to_str()?.replace('\'', "'\\''");
+        let approval = if self.allows(binding) {
+            "signed"
+        } else {
+            "agent_hook"
+        };
         crate::diagnostics::event(format_args!(
-            "resume.launch stage=schedule location=local approval=signed"
+            "resume.launch stage=schedule location=local approval={approval}"
         ));
         Some(format!(
             "'{cli}' restore --automatic; exec \"${{SHELL:-/bin/sh}}\" -i"
@@ -158,6 +177,11 @@ impl ResumePolicy {
         self.approvals.truncate(MAX_APPROVALS);
         self.approvals.retain(Approval::valid_signature);
         self
+    }
+
+    /// Automatic local resume: a signed approval, or a hook-written agent session when enabled.
+    pub fn allows_automatic(&self, binding: &ResumeBinding) -> bool {
+        self.allows(binding) || (crate::preferences::auto_resume_agents() && trusted_agent(binding))
     }
 
     /// Match a signed exact command or literal argument prefix, with exact directory and environment.
