@@ -11,6 +11,11 @@ pub fn build_header_bar(config: &crate::config::Config) -> Option<gtk4::HeaderBa
     header.add_css_class("cmux-headerbar");
     for (icon, tooltip, action) in [
         (
+            "sidebar-show-symbolic",
+            "Toggle Sidebar (Ctrl+B)",
+            "win.toggle-sidebar",
+        ),
+        (
             "tab-new-symbolic",
             "New Workspace (Ctrl+N)",
             "win.new-workspace",
@@ -36,11 +41,6 @@ pub fn build_header_bar(config: &crate::config::Config) -> Option<gtk4::HeaderBa
     // GTK packs end children from right to left, starting with the menu.
     header.pack_end(&menu);
     for (icon, tooltip, action) in [
-        (
-            "sidebar-show-symbolic",
-            "Toggle Sidebar (Ctrl+B)",
-            "win.toggle-sidebar",
-        ),
         (
             "object-flip-vertical-symbolic",
             "Split Down (Ctrl+Shift+D)",
