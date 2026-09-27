@@ -285,6 +285,28 @@ fn create_pane(pane_id: u64, initial_surface: PaneSurface) -> SplitNode {
     browser_btn.add_css_class("surface-tab-action");
     actions.append(&terminal_btn);
     actions.append(&browser_btn);
+    // Split this pane, not whichever pane had focus: select it first, then split.
+    for (icon, tooltip, action) in [
+        (
+            "view-dual-symbolic",
+            "Split Right (Ctrl+D)",
+            "win.split-right",
+        ),
+        (
+            "object-flip-vertical-symbolic",
+            "Split Down (Ctrl+Shift+D)",
+            "win.split-down",
+        ),
+    ] {
+        let button = gtk4::Button::from_icon_name(icon);
+        button.set_tooltip_text(Some(tooltip));
+        button.add_css_class("surface-tab-action");
+        button.connect_clicked(move |button| {
+            let _ = button.activate_action("win.focus-pane", Some(&pane_id.to_variant()));
+            let _ = button.activate_action(action, None);
+        });
+        actions.append(&button);
+    }
     notebook.set_action_widget(&actions, gtk4::PackType::End);
 
     let surfaces = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
