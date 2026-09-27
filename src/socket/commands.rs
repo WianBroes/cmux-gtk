@@ -20,12 +20,6 @@ pub enum SocketCommand {
         trace_id: uuid::Uuid,
         queued_at: std::time::Instant,
     },
-    /// Park an agent hook until a human answers in the Feed or the wait expires.
-    FeedPush {
-        req_id: Value,
-        request: crate::feed::Request,
-        resp_tx: RespTx,
-    },
     // -- system.* --
     Ping {
         req_id: Value,

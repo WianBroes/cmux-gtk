@@ -806,8 +806,6 @@ pub enum ClaudeHookEvent {
     SessionEnd,
     Stop,
     Notification,
-    /// Wait for a Feed decision on a permission, question or plan (up to two minutes)
-    PermissionRequest,
 }
 
 #[derive(Clone, Copy, Subcommand)]

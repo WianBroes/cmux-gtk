@@ -342,7 +342,6 @@ fn handle_socket_command_traced(
                 "sidebar.clear_progress",
                 "events.agent_hook",
                 "events.stream",
-                "feed.push",
                 "system.diagnostics",
                 "workspace.list",
                 "workspace.current",
@@ -1450,12 +1449,6 @@ fn handle_socket_command_traced(
         }
 
         // -- notification.* (Phase 4) --
-        SocketCommand::FeedPush {
-            req_id,
-            request,
-            resp_tx,
-        } => crate::feed::push(state, req_id, request, resp_tx),
-
         SocketCommand::NotificationList { req_id, resp_tx } => {
             // SOCK-05: No focus side effects. Read-only attention state query.
             let s = state.borrow();

@@ -379,14 +379,6 @@ pub fn register_actions(
     });
     window.add_action(&action);
 
-    // win.feed-toggle — right panel of agent decisions (upstream Feed).
-    let action = gio::SimpleAction::new("feed-toggle", None);
-    action.connect_activate({
-        let state = state.clone();
-        move |_, _| crate::feed::toggle(&state)
-    });
-    window.add_action(&action);
-
     let action = gio::SimpleAction::new("notifications", None);
     action.connect_activate({
         let window = window.downgrade();
@@ -526,7 +518,6 @@ pub fn register_accels(app: &gtk4::Application, shortcuts: &crate::config::Short
         (ShortcutAction::SplitRight, "win.split-right"),
         (ShortcutAction::SplitDown, "win.split-down"),
         (ShortcutAction::RenameWorkspace, "win.rename-workspace"),
-        (ShortcutAction::ToggleFeed, "win.feed-toggle"),
     ] {
         let accelerator = shortcuts.accelerator_for(action);
         let accelerators: Vec<&str> = accelerator.as_deref().into_iter().collect();
@@ -572,7 +563,6 @@ pub fn build_hamburger_menu() -> gio::Menu {
     let view_section = gio::Menu::new();
     view_section.append(Some("Toggle Sidebar"), Some("win.toggle-sidebar"));
     view_section.append(Some("Notifications"), Some("win.notifications"));
-    view_section.append(Some("Feed"), Some("win.feed-toggle"));
     view_section.append(Some("Split Right"), Some("win.split-right"));
     view_section.append(Some("Split Down"), Some("win.split-down"));
     menu.append_section(Some("View"), &view_section);

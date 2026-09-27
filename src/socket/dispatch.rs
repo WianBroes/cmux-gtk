@@ -125,29 +125,6 @@ async fn dispatch_request(
         return err(req_id, "invalid_params", "params must be an object or null");
     }
 
-    if method == "feed.push" {
-        let request = match crate::feed::parse(&params) {
-            Ok(request) => request,
-            Err(message) => return err(req_id, "invalid_params", message),
-        };
-        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-        let command = commands::SocketCommand::FeedPush {
-            req_id: req_id.clone(),
-            request,
-            resp_tx,
-        };
-        if cmd_tx.try_send(command).is_err() {
-            return err(req_id, "overloaded", "GTK command queue is full");
-        }
-        operation.pending();
-        // The GTK side answers when a human decides, the wait expires or the hook goes away.
-        let response = resp_rx
-            .await
-            .unwrap_or_else(|_| err(req_id, "internal_error", "feed dropped the request"));
-        operation.finish(true);
-        return response;
-    }
-
     // Agent hook bridges report here; the event needs no GTK state, only the process-wide bus.
     if method == "events.agent_hook" {
         return match agent_hook_event(&params) {
