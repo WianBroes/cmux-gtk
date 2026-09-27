@@ -361,11 +361,20 @@ pub fn run(command: &super::args::LocalTmuxCommands, socket: Option<&str>) -> Re
                 .find(|s| s.name == name)
                 .ok_or_else(|| error(format!("no local-tmux session named {name}")))?;
             if *json {
+                // The exact guarded attach lets a caller find a surface already bound to it.
+                let attach_command = profile.binding(name).ok().map(|binding| {
+                    shared::attach_command(
+                        &profile.tmux,
+                        &profile.socket,
+                        &binding.server_id,
+                        &binding.session_id,
+                    )
+                });
                 println!(
                     "{}",
                     json!({"session_name": session.name, "tmux_session_id": session.id,
                         "cwd": session.path, "clients": session.clients, "live": true,
-                        "socket_path": profile.socket})
+                        "socket_path": profile.socket, "attach_command": attach_command})
                 );
             } else {
                 println!(
