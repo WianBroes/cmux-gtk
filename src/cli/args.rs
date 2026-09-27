@@ -140,6 +140,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: LocalTmuxCommands,
     },
+    /// Attach-only alias of `local-tmux attach`, for scripts using tmux vocabulary
+    Tmux {
+        #[command(subcommand)]
+        command: TmuxAliasCommands,
+    },
     /// Manage durable diff-review comments keyed by Git repository
     Comments {
         #[command(subcommand)]
@@ -629,6 +634,17 @@ pub enum LocalTmuxCommands {
     Detach { name: String },
     /// Terminate a session and its processes
     Close { name: String },
+}
+
+/// `cmux tmux` accepts only attach; lifecycle stays under `local-tmux`.
+#[derive(Subcommand)]
+pub enum TmuxAliasCommands {
+    /// Attach this terminal to an existing local-tmux session
+    Attach {
+        name: String,
+        #[arg(long)]
+        headless: bool,
+    },
 }
 
 /// Surface operations grouped to match upstream command spelling.

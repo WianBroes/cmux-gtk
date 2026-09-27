@@ -25,7 +25,7 @@ fn error(message: impl Into<String>) -> CliError {
 }
 
 impl Profile {
-    /// One user-owned server under `$XDG_STATE_HOME/cmux/local-tmux`, directory mode 0700.
+    /// One user-owned server under `~/.cmux/local-tmux` (or `CMUX_LOCAL_TMUX_STATE_DIR`), mode 0700.
     fn open() -> Result<Self, CliError> {
         let tmux = std::env::var_os("CMUX_LOCAL_TMUX_BIN")
             .map(PathBuf::from)
@@ -33,18 +33,45 @@ impl Profile {
             .or_else(|| Some(PathBuf::from("/usr/bin/tmux")).filter(|path| path.is_file()))
             .and_then(|path| std::path::absolute(path).ok())
             .ok_or_else(|| error("local-tmux requires tmux on PATH (or CMUX_LOCAL_TMUX_BIN)"))?;
-        let state = std::env::var_os("XDG_STATE_HOME")
+        let state = std::env::var_os("CMUX_LOCAL_TMUX_STATE_DIR")
+            .filter(|dir| !dir.is_empty())
             .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".local/state")))
-            .ok_or_else(|| error("cannot resolve the state directory"))?
-            .join("cmux/local-tmux");
+            .or_else(|| {
+                std::env::var_os("HOME").map(|home| Path::new(&home).join(".cmux/local-tmux"))
+            })
+            .and_then(|dir| std::path::absolute(dir).ok())
+            .ok_or_else(|| error("cannot resolve the local-tmux state directory"))?;
+        let socket = state.join("server.sock").to_string_lossy().into_owned();
+        if socket.len() >= 100 {
+            return Err(error(format!(
+                "local-tmux state directory is too long for a Unix socket: {socket}"
+            )));
+        }
         cmux_platform::filesystem::create_private_directory(&state)
             .map_err(|e| error(e.to_string()))?;
-        Ok(Self {
+        let profile = Self {
             tmux: tmux.to_string_lossy().into_owned(),
-            socket: state.join("server.sock").to_string_lossy().into_owned(),
-        })
+            socket,
+        };
+        profile.validate_socket(&state)?;
+        Ok(profile)
+    }
+
+    /// Refuse a socket left by another user or open to group/world (the private state
+    /// directory, just created or checked by us, gives the owner to compare with).
+    fn validate_socket(&self, state: &Path) -> Result<(), CliError> {
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
+        let Ok(info) = std::fs::symlink_metadata(&self.socket) else {
+            return Ok(());
+        };
+        let owner = std::fs::metadata(state).map(|dir| dir.uid()).ok();
+        if !info.file_type().is_socket() || info.mode() & 0o077 != 0 || Some(info.uid()) != owner {
+            return Err(error(format!(
+                "insecure local-tmux socket: {}",
+                self.socket
+            )));
+        }
+        Ok(())
     }
 
     fn command(&self, arguments: &[&str]) -> Command {
@@ -195,10 +222,35 @@ pub fn run(command: &super::args::LocalTmuxCommands, socket: Option<&str>) -> Re
             detached,
         } => {
             let name = checked_name(name)?;
-            let cwd = match cwd {
-                Some(cwd) => std::path::absolute(cwd).map_err(|e| error(e.to_string()))?,
+            let requested = cwd
+                .as_deref()
+                .map(|cwd| {
+                    std::fs::canonicalize(cwd).map_err(|e| error(format!("{}: {e}", cwd.display())))
+                })
+                .transpose()?;
+            // Like upstream: an existing session is reused, never recreated or retargeted.
+            if let Ok(binding) = profile.binding(name) {
+                if requested
+                    .as_deref()
+                    .is_some_and(|cwd| cwd != Path::new(&binding.path))
+                {
+                    return Err(error("local-tmux session already exists with a different working directory; use attach or close it first"));
+                }
+                if command.as_deref().is_some_and(|c| !c.trim().is_empty()) {
+                    return Err(error("local-tmux session already exists; use attach or close it before supplying a new command"));
+                }
+                if *detached {
+                    return Ok(());
+                }
+                return attach(&profile, &binding, socket, false);
+            }
+            let cwd = match requested {
+                Some(cwd) => cwd,
                 None => std::env::current_dir().map_err(|e| error(e.to_string()))?,
             };
+            if !cwd.is_dir() {
+                return Err(error(format!("not a directory: {}", cwd.display())));
+            }
             let cwd = cwd.to_string_lossy();
             let mut arguments = vec![
                 "set-option",
@@ -219,16 +271,17 @@ pub fn run(command: &super::args::LocalTmuxCommands, socket: Option<&str>) -> Re
             profile.run(&arguments)?;
             profile.ensure_identity()?;
             let binding = profile.binding(name)?;
-            profile.guarded(
+            // tmux owns scrollback for this profile; keep a useful bounded history.
+            let _ = profile.guarded(
                 &binding,
                 &[
-                    "set-option",
+                    "set-window-option",
                     "-t",
                     &binding.session_id,
                     "history-limit",
                     "10000",
                 ],
-            )?;
+            );
             if *detached {
                 println!("Started local-tmux session {name}");
                 return Ok(());

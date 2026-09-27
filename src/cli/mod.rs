@@ -114,6 +114,16 @@ pub fn run(cli: Cli) -> Result<(), CliError> {
     if let Commands::LocalTmux { command } = &cli.command {
         return local_tmux::run(command, cli.socket.as_deref());
     }
+    if let Commands::Tmux {
+        command: args::TmuxAliasCommands::Attach { name, headless },
+    } = &cli.command
+    {
+        let command = args::LocalTmuxCommands::Attach {
+            name: name.clone(),
+            headless: *headless,
+        };
+        return local_tmux::run(&command, cli.socket.as_deref());
+    }
     if let Commands::ProjectActions {
         directory,
         workspace: None,
@@ -689,7 +699,9 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
         },
         Commands::Hooks { .. } => unreachable!("hooks are handled before ordinary RPC dispatch"),
         Commands::Restore { .. } => unreachable!("restore executes in the caller terminal"),
-        Commands::LocalTmux { .. } => unreachable!("local-tmux runs before socket dispatch"),
+        Commands::LocalTmux { .. } | Commands::Tmux { .. } => {
+            unreachable!("local-tmux runs before socket dispatch")
+        }
         Commands::ListSurfaces => ("surface.list", json!({})),
         Commands::Split { direction, id } => {
             let mut p = serde_json::Map::new();
