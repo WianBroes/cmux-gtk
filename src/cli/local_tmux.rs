@@ -76,8 +76,7 @@ impl Profile {
 
     fn command(&self, arguments: &[&str]) -> Command {
         let mut command = Command::new(&self.tmux);
-        command
-            .env_remove("TMUX")
+        without_cmux_identity(&mut command)
             .arg("-S")
             .arg(&self.socket)
             .args(arguments);
@@ -165,6 +164,19 @@ impl Profile {
     }
 }
 
+/// Like upstream: the detached server and its clients must not inherit this pane's
+/// surface/workspace identity or socket credentials, so agent hooks inside tmux stay inert.
+fn without_cmux_identity(command: &mut Command) -> &mut Command {
+    command.env_remove("TMUX");
+    for (key, _) in std::env::vars_os() {
+        let key = key.to_string_lossy();
+        if key.starts_with("CMUX_") || key.starts_with("CMUXD_") {
+            command.env_remove(key.as_ref());
+        }
+    }
+    command
+}
+
 fn checked_name(name: &str) -> Result<&str, CliError> {
     if shared::valid_name(name) {
         Ok(name)
@@ -204,7 +216,7 @@ fn attach(
         )?;
     }
     let mut client = Command::new("/bin/sh");
-    client.arg("-c").arg(&command);
+    without_cmux_identity(&mut client).arg("-c").arg(&command);
     Err(error(format!(
         "tmux attach failed: {}",
         cmux_platform::process::replace_current(&mut client)
