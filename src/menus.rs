@@ -263,6 +263,25 @@ pub fn register_actions(
     });
     window.add_action(&action);
 
+    // win.local-tmux-close: only offered on a terminal bound by `cmux local-tmux`;
+    // win.context-menu-refresh updates that before each terminal context menu opens.
+    let close_session = gio::SimpleAction::new("local-tmux-close", None);
+    close_session.set_enabled(false);
+    close_session.connect_activate({
+        let state = state.clone();
+        let window = window.clone();
+        move |_, _| crate::local_tmux_settings::close_active_session(&state, &window)
+    });
+    window.add_action(&close_session);
+    let action = gio::SimpleAction::new("context-menu-refresh", None);
+    action.connect_activate({
+        let state = state.clone();
+        move |_, _| {
+            close_session.set_enabled(crate::local_tmux_settings::active_is_bound(&state));
+        }
+    });
+    window.add_action(&action);
+
     // win.close-workspace
     let action = gio::SimpleAction::new("close-workspace", None);
     action.connect_activate({
@@ -561,6 +580,12 @@ pub fn build_terminal_context_menu() -> gio::Menu {
     pane_section.append(Some("Split Right"), Some("win.split-right"));
     pane_section.append(Some("Split Down"), Some("win.split-down"));
     pane_section.append(Some("Close Pane"), Some("win.close-pane"));
+    let close_session = gio::MenuItem::new(
+        Some("Kill tmux Session…"),
+        Some("win.local-tmux-close"),
+    );
+    close_session.set_attribute_value("hidden-when", Some(&"action-disabled".to_variant()));
+    pane_section.append_item(&close_session);
     menu.append_section(None, &pane_section);
 
     let browser_section = gio::Menu::new();
