@@ -67,7 +67,8 @@ window { background-color: #1a1a1a; }
 .workspace-list row.workspace-group { min-height: 28px; padding: 2px 6px; background: #202020; }
 .workspace-list row.workspace-group button { padding: 3px 6px; }
 .workspace-list .group-unread { background: #5b8dd9; color: #ffffff; border-radius: 8px; padding: 0 5px; }
-.notification-unread { box-shadow: inset 0 0 0 2px #5b8dd9; }
+.notification-unread { outline: 2px solid #5b8dd9; outline-offset: -2px; }
+.tab-unread-dot { min-width: 7px; min-height: 7px; border-radius: 4px; background-color: #5b8dd9; }
 .active-pane { border: 1px solid #5b8dd9; }
 .rename-entry { font-size: 14px; padding: 2px 4px; }
 /* GtkPaned separator styling — makes divider visible on dark backgrounds.
@@ -521,6 +522,9 @@ fn build_ui(
                                 "notification.desktop_action outcome=stale_target id={id}"
                             ));
                         }
+                    }
+                    crate::ghostty::events::Event::Title { surface, title } => {
+                        state.borrow_mut().surface_title_changed(surface, &title);
                     }
                     crate::ghostty::events::Event::Notification { surface, content } => {
                         let result = crate::inbox_actions::handle(

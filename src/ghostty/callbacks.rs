@@ -1,7 +1,7 @@
 //! Ghostty callback boundary: coalesced wakeups, validated action targets and deferred GTK mutation.
 
 use gtk4::ffi;
-use gtk4::prelude::{GLAreaExt, WidgetExt};
+use gtk4::prelude::{GLAreaExt, ObjectExt, WidgetExt};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
@@ -111,6 +111,27 @@ pub unsafe extern "C" fn action_cb(
         return true;
     }
 
+    if action.tag == ffi::ghostty_action_tag_e_GHOSTTY_ACTION_SET_TITLE {
+        let (Some(surface), title) = (surface_target, unsafe { action.action.set_title.title }) else {
+            return true;
+        };
+        if title.is_null() {
+            return true;
+        }
+        // SAFETY: the discriminant selects set_title; Ghostty owns the NUL-terminated title
+        // for this callback, so it is copied (bounded) before returning.
+        let title: String = unsafe { std::ffi::CStr::from_ptr(title) }
+            .to_string_lossy()
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(256)
+            .collect();
+        if let Some(uuid) = surface_uuid(surface) {
+            return super::events::push(super::events::Event::Title { surface: uuid, title });
+        }
+        return true;
+    }
+
     if action.tag == ffi::ghostty_action_tag_e_GHOSTTY_ACTION_RING_BELL
         || action.tag == ffi::ghostty_action_tag_e_GHOSTTY_ACTION_NEW_TAB
     {
@@ -131,6 +152,21 @@ pub unsafe extern "C" fn action_cb(
     }
     // Leave unsupported actions to the native caller.
     false
+}
+
+/// The tab identity stored on a live terminal widget, looked up from its native surface.
+fn surface_uuid(target: usize) -> Option<uuid::Uuid> {
+    let area = GL_TO_SURFACE.lock().ok().and_then(|mappings| {
+        mappings
+            .iter()
+            .find(|(_, surface)| **surface == target)
+            .map(|(area, _)| *area)
+    })?;
+    // SAFETY: as in queue_mapped_area, the pointer comes from the live registry on the GTK
+    // thread and is used before any event-loop iteration; the key always stores a Uuid.
+    let area: glib::translate::Borrowed<gtk4::GLArea> =
+        unsafe { glib::translate::from_glib_borrow(area as *mut ffi::GtkGLArea) };
+    unsafe { area.data::<uuid::Uuid>("cmux-surface-uuid") }.map(|uuid| unsafe { *uuid.as_ref() })
 }
 
 /// Route native redraws on the GTK thread without retaining registry locks during GTK calls.

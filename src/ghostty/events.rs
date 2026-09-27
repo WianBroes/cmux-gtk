@@ -16,6 +16,11 @@ pub(crate) enum Event {
         surface: uuid::Uuid,
         content: crate::inbox::Content,
     },
+    /// The terminal program set its title (OSC 0/2).
+    Title {
+        surface: uuid::Uuid,
+        title: String,
+    },
 }
 
 #[derive(Default)]

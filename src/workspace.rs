@@ -76,6 +76,9 @@ pub struct Workspace {
     pub id: u64,
     /// Display name shown in the sidebar GtkListBox row.
     pub name: String,
+    /// The name was chosen by the user (or at creation); otherwise, as upstream, the
+    /// workspace follows its focused terminal's title.
+    pub custom_name: bool,
     /// The name key used with GtkStack::add_named / set_visible_child_name.
     pub stack_page_name: String,
     /// Stable UUID for session persistence and v2 socket protocol identity.
@@ -112,6 +115,7 @@ impl Workspace {
         Self {
             id,
             name,
+            custom_name: false,
             stack_page_name,
             uuid: Uuid::new_v4(),
             has_attention: false,
@@ -141,6 +145,7 @@ impl Workspace {
     ) -> Self {
         let mut workspace = Self::new(id, display_number);
         workspace.name = name;
+        workspace.custom_name = true;
         workspace.working_directory = Some(working_directory);
         workspace
     }
@@ -186,6 +191,14 @@ impl Workspace {
     /// Rename this workspace to a new display name.
     pub fn rename(&mut self, new_name: String) {
         self.name = new_name;
+        self.custom_name = true;
+    }
+
+    /// Default names ("Workspace N") are not user choices; used for sessions saved before
+    /// `custom_name` existed, like upstream restoring pre-provenance titles as user-set.
+    pub fn is_default_name(name: &str) -> bool {
+        name.strip_prefix("Workspace ")
+            .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
     }
 
     /// Create a new remote SSH workspace targeting the given host.
@@ -201,6 +214,19 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only generated names follow the focused terminal; a rename sticks.
+    #[test]
+    fn default_names_and_renames() {
+        assert!(Workspace::is_default_name("Workspace 12"));
+        assert!(!Workspace::is_default_name("Workspace"));
+        assert!(!Workspace::is_default_name("Workspace 1b"));
+        assert!(!Workspace::is_default_name("Continuum"));
+        let mut workspace = Workspace::new(1, 3);
+        assert!(!workspace.custom_name);
+        workspace.rename("Mine".into());
+        assert!(workspace.custom_name);
+    }
 
     /// Require a persisted workspace identity even before it is inserted into GTK state.
     #[test]

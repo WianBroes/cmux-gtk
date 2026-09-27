@@ -549,3 +549,7 @@ The scan resolves one regular manifest or directory, skips symlinks and generate
 ### Notification read and supersede rules
 
 Matches upstream `docs/notifications.md` (Navigation) and `TerminalNotificationStore.recordNotification`: a new notification replaces the earlier ones for the same terminal (or, without a terminal, the same workspace) instead of accumulating; keyboard focus entering a terminal marks that terminal's notifications read; switching to a workspace marks its terminal-less notifications read.
+
+### Tab titles, workspace names and the unread tab dot
+
+Matches upstream `Workspace+TitleOwnership.swift` and `WorkspaceContentView.swift`: a terminal tab shows the title its program sets (OSC 0/2, Ghostty `SET_TITLE`); a workspace without a user-chosen name follows its focused tab's title, while any rename (sidebar, menu, `rename-workspace`) sticks. Sessions saved before this keep non-default names as user-chosen. The unread state that draws the pane ring also shows a dot on the tab, and the ring is now drawn as an outline so the terminal no longer paints over it.
