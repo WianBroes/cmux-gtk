@@ -15,6 +15,14 @@ struct Binding {
     path: String,
 }
 
+/// One row of `list-sessions`.
+struct Session {
+    name: String,
+    id: String,
+    clients: u32,
+    path: String,
+}
+
 struct Profile {
     tmux: String,
     socket: String,
@@ -139,6 +147,26 @@ impl Profile {
             server_id: server_id.into(),
             path: path.into(),
         })
+    }
+
+    /// Live sessions on the profile server; no server yet means none.
+    fn sessions(&self) -> Vec<Session> {
+        let format = "#{session_name}\t#{session_id}\t#{session_attached}\t#{session_path}";
+        let Ok(listing) = self.run(&["list-sessions", "-F", format]) else {
+            return Vec::new();
+        };
+        listing
+            .lines()
+            .filter_map(|line| {
+                let mut fields = line.splitn(4, '\t');
+                Some(Session {
+                    name: fields.next()?.into(),
+                    id: fields.next()?.into(),
+                    clients: fields.next()?.parse().ok()?,
+                    path: fields.next()?.into(),
+                })
+            })
+            .collect()
     }
 
     /// Commands for one session, executed only if the server is still the same incarnation.
@@ -304,12 +332,46 @@ pub fn run(command: &super::args::LocalTmuxCommands, socket: Option<&str>) -> Re
             let binding = profile.binding(checked_name(name)?)?;
             attach(&profile, &binding, socket, *headless)
         }
-        C::List => {
-            let format = "#{session_name}\t#{session_windows} windows\t#{session_attached} attached\t#{session_path}";
-            match profile.run(&["list-sessions", "-F", format]) {
-                Ok(listing) => print!("{listing}"),
-                // No server yet means no sessions, not an error.
-                Err(_) => println!("No local-tmux sessions"),
+        C::List { json } => {
+            let sessions = profile.sessions();
+            if *json {
+                // Upstream's `list --json` contract; without a registry every row is unmanaged.
+                let rows: Vec<_> = sessions
+                    .iter()
+                    .map(|s| {
+                        json!({"id": null, "session_name": s.name, "cwd": s.path,
+                            "clients": s.clients, "managed": false, "live": true})
+                    })
+                    .collect();
+                println!("{}", json!({ "sessions": rows }));
+            } else if sessions.is_empty() {
+                println!("No local-tmux sessions");
+            } else {
+                for s in &sessions {
+                    println!("{}\t{} attached\t{}", s.name, s.clients, s.path);
+                }
+            }
+            Ok(())
+        }
+        C::Status { name, json } => {
+            let name = checked_name(name)?;
+            let session = profile
+                .sessions()
+                .into_iter()
+                .find(|s| s.name == name)
+                .ok_or_else(|| error(format!("no local-tmux session named {name}")))?;
+            if *json {
+                println!(
+                    "{}",
+                    json!({"session_name": session.name, "tmux_session_id": session.id,
+                        "cwd": session.path, "clients": session.clients, "live": true,
+                        "socket_path": profile.socket})
+                );
+            } else {
+                println!(
+                    "{}\t{}\t{} attached\t{}",
+                    session.name, session.id, session.clients, session.path
+                );
             }
             Ok(())
         }
