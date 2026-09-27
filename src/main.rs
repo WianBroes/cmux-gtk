@@ -11,6 +11,7 @@ mod browser_timeout;
 mod config;
 mod diagnostics;
 mod events;
+mod feed;
 mod ghostty;
 mod git_metadata;
 mod header_bar;
@@ -122,6 +123,8 @@ paned > separator:hover { background-color: #5b8dd9; }
 .headerbar-btn { min-width: 28px; min-height: 28px; padding: 4px; margin: 0 2px; border-radius: 4px; background-color: transparent; color: #cccccc; border: none; }
 .headerbar-btn:hover { background-color: rgba(255, 255, 255, 0.08); }
 .headerbar-btn:active { background-color: rgba(255, 255, 255, 0.12); }
+.header-badge { background-color: #3584e4; color: #ffffff; border-radius: 8px; min-width: 14px; padding: 0 3px; font-size: 9px; font-weight: bold; margin: 1px; }
+.feed-panel { border-left: 1px solid rgba(255, 255, 255, 0.08); }
 /* Phase 9: Sidebar add button (D-01) */
 .sidebar-add-btn { min-height: 36px; padding: 8px 16px; background-color: transparent; color: #cccccc; border: none; border-top: 1px solid #3a3a3a; font-size: 16px; }
 .sidebar-add-btn:hover { background-color: #2e2e2e; }
@@ -363,15 +366,31 @@ fn build_ui(
     let stack = gtk4::Stack::new();
     stack.set_transition_type(gtk4::StackTransitionType::None);
 
+    // Feed (upstream right sidebar) and notification bell, each with a pending/unread badge.
+    let (feed_button, feed_badge) = crate::feed::header_button(
+        &["network-wireless-symbolic", "network-wireless-signal-excellent-symbolic"],
+        "Feed (Ctrl+Shift+F)",
+        "win.feed-toggle",
+    );
+    let (bell_button, bell_badge) = crate::feed::header_button(
+        &["notifications-symbolic", "preferences-system-notifications-symbolic"],
+        "Notifications (Ctrl+Shift+I)",
+        "win.notifications",
+    );
+    let feed_panel = crate::feed::build_panel(feed_badge);
+
     let hbox = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
     hbox.append(&sidebar_box);
     hbox.append(&stack);
+    hbox.append(&feed_panel.revealer);
     // Make the stack expand to fill remaining width.
     stack.set_hexpand(true);
     stack.set_vexpand(true);
 
     // Phase 9: Set HeaderBar as titlebar (D-04)
     if let Some(header) = crate::header_bar::build_header_bar(config) {
+        header.pack_start(&bell_button);
+        header.pack_end(&feed_button);
         window.set_titlebar(Some(&header));
     }
 
@@ -393,6 +412,8 @@ fn build_ui(
     {
         let mut s = state.borrow_mut();
         s.session_tx = Some(session_tx);
+        s.feed_panel = Some(feed_panel);
+        s.notifications_badge = Some(bell_badge);
         s.ssh_event_tx = Some(ssh_event_tx);
         s.runtime_handle = Some(runtime_handle.clone());
         s.browser_shutdown_tasks = browser_shutdown_tasks;
@@ -742,6 +763,7 @@ fn build_ui(
     // 8. Present the window
     crate::window_state::install(&window);
     crate::inbox_actions::refresh(&state.borrow());
+    crate::feed::refresh(&state);
     window.present();
 
     // Browser widgets are part of the saved pane tree; reconnect them only after

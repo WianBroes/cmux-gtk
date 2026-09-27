@@ -44,6 +44,7 @@ pub struct ShortcutConfig {
     pub workspace_9: Option<String>,
     pub browser_open: Option<String>,
     pub browser_close: Option<String>,
+    pub toggle_feed: Option<String>,
 }
 
 /// UI configuration section -- [ui] in config.toml (D-16).
@@ -107,6 +108,7 @@ pub enum ShortcutAction {
     Workspace9,
     BrowserOpen,
     BrowserClose,
+    ToggleFeed,
 }
 
 /// HashMap-based shortcut lookup table built from config + defaults.
@@ -144,6 +146,7 @@ const KNOWN_SHORTCUTS: &[&str] = &[
     "workspace_9",
     "browser_open",
     "browser_close",
+    "toggle_feed",
 ];
 
 /// Modifier mask for lookup: ignore Caps Lock, Num Lock, etc.
@@ -302,6 +305,11 @@ impl ShortcutMap {
                 ShortcutAction::BrowserClose,
                 &config.browser_close,
                 "<Ctrl><Shift>q",
+            ),
+            (
+                ShortcutAction::ToggleFeed,
+                &config.toggle_feed,
+                "<Ctrl><Shift>f",
             ),
         ];
 
