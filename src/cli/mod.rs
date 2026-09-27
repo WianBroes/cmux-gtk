@@ -657,6 +657,11 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
         Commands::RenameWorkspace { id, name } => {
             ("workspace.rename", json!({"id": id, "name": name}))
         }
+        Commands::SetDescription { id, description } => (
+            "workspace.set_description",
+            json!({"id": id, "description": description}),
+        ),
+        Commands::ClearDescription { id } => ("workspace.clear_description", json!({"id": id})),
         Commands::NextWorkspace => ("workspace.next", json!({})),
         Commands::PrevWorkspace => ("workspace.previous", json!({})),
         Commands::LastWorkspace => ("workspace.last", json!({})),
@@ -991,5 +996,31 @@ mod tests {
         assert!(params.get("pane").is_none());
         assert!(params.get("position").is_none());
         assert_eq!(params["focus"], false);
+    }
+
+    /// The description commands reach the workspace by uuid, set and clear apart.
+    #[test]
+    fn description_commands_map_to_their_socket_methods() {
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "set-description",
+            "20000000-0000-4000-8000-000000000002",
+            "Refreshing investor metrics",
+        ])
+        .expect("set-description arguments should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "workspace.set_description");
+        assert_eq!(params["id"], "20000000-0000-4000-8000-000000000002");
+        assert_eq!(params["description"], "Refreshing investor metrics");
+
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "clear-description",
+            "20000000-0000-4000-8000-000000000002",
+        ])
+        .expect("clear-description arguments should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "workspace.clear_description");
+        assert!(params.get("description").is_none());
     }
 }

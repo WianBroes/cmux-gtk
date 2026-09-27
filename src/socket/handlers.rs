@@ -349,6 +349,8 @@ fn handle_socket_command_traced(
                 "workspace.select",
                 "workspace.close",
                 "workspace.rename",
+                "workspace.set_description",
+                "workspace.clear_description",
                 "workspace.next",
                 "workspace.previous",
                 "workspace.last",
@@ -641,6 +643,28 @@ fn handle_socket_command_traced(
                     let mut s = state.borrow_mut();
                     s.rename_workspace_at(i, name);
                     drop(s);
+                    let _ = resp_tx.send(ok(req_id, json!({})));
+                }
+                None => {
+                    let _ = resp_tx.send(err(req_id, "not_found", "workspace not found"));
+                }
+            }
+        }
+
+        SocketCommand::WorkspaceDescription {
+            req_id,
+            id,
+            description,
+            resp_tx,
+        } => {
+            // SOCK-05: no focus side effects either; describe the workspace found by uuid.
+            let idx = {
+                let s = state.borrow();
+                s.workspaces.iter().position(|ws| ws.uuid.to_string() == id)
+            };
+            match idx {
+                Some(i) => {
+                    state.borrow_mut().set_workspace_description(i, description);
                     let _ = resp_tx.send(ok(req_id, json!({})));
                 }
                 None => {

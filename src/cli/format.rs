@@ -221,6 +221,8 @@ pub fn format_mutation(command_name: &str, result: &Value) -> String {
             let name = result.get("name").and_then(|v| v.as_str()).unwrap_or(title);
             format!("Renamed workspace {} to: {}", id, name)
         }
+        "workspace.set_description" => format!("Set workspace description: {}", id),
+        "workspace.clear_description" => format!("Cleared workspace description: {}", id),
         "surface.split" => format!("Split created: {}", id),
         "surface.close" => format!("Closed surface: {}", id),
         "surface.move" => format!("Moved surface: {}", id),

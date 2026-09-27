@@ -100,6 +100,13 @@ pub enum SocketCommand {
         name: String,
         resp_tx: RespTx,
     },
+    /// `workspace.set_description` / `workspace.clear_description`; None clears the description.
+    WorkspaceDescription {
+        req_id: Value,
+        id: String,
+        description: Option<String>,
+        resp_tx: RespTx,
+    },
     WorkspaceNext {
         req_id: Value,
         resp_tx: RespTx,

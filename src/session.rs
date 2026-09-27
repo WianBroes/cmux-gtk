@@ -15,6 +15,9 @@ pub struct WorkspaceSession {
     /// Absent in older sessions: derived from the name (see `Workspace::is_default_name`).
     #[serde(default)]
     pub custom_name: Option<bool>,
+    /// Markdown description shown under the workspace name in the sidebar.
+    #[serde(default)]
+    pub custom_description: Option<String>,
     #[serde(default)]
     pub color: Option<String>,
     #[serde(default)]
@@ -516,6 +519,7 @@ mod tests {
                 uuid: "test-uuid-1".to_string(),
                 name: name.to_string(),
                 custom_name: None,
+                custom_description: None,
                 color: None,
                 group_id: None,
                 startup_script: None,

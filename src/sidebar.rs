@@ -709,6 +709,11 @@ pub fn workspace_row_content(workspace: &crate::workspace::Workspace) -> gtk4::B
         .and_then(|slot| slot.next_sibling())
         .and_downcast::<gtk4::Box>()
         .unwrap();
+    // Upstream `customDescription` sits under the name, before the notification message.
+    if let Some(title) = vbox.first_child() {
+        let description = description_label(workspace.custom_description.as_deref());
+        vbox.insert_child_after(&description, Some(&title));
+    }
     if let Some(title) = vbox.first_child().and_downcast::<gtk4::Label>() {
         title.set_ellipsize(gtk4::pango::EllipsizeMode::End);
         title.set_max_width_chars(24);
@@ -816,6 +821,41 @@ pub fn set_row_status(
         label.set_text(&text.map_or(String::new(), |text| text.chars().take(4096).collect()));
         label.set_visible(text.is_some());
     }
+}
+
+/// Markdown description under a workspace name (upstream draws 12 lines of it at 10.5 pt).
+fn description_label(text: Option<&str>) -> gtk4::Label {
+    let label = gtk4::Label::new(None);
+    label.add_css_class("workspace-description");
+    label.add_css_class("dim-label");
+    label.set_xalign(0.0);
+    label.set_wrap(true);
+    label.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
+    label.set_lines(12);
+    label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+    label.set_max_width_chars(28);
+    apply_description(&label, text);
+    label
+}
+
+/// Show or clear a workspace's description without rebuilding its row.
+pub fn set_row_description(row: &gtk4::ListBoxRow, text: Option<&str>) {
+    let label = row_text(row)
+        .and_then(|text_box| child_with_class(text_box.upcast_ref(), "workspace-description"))
+        .and_downcast::<gtk4::Label>();
+    if let Some(label) = label {
+        apply_description(&label, text);
+    }
+}
+
+/// A description is markdown; blank text hides the line entirely.
+fn apply_description(label: &gtk4::Label, text: Option<&str>) {
+    let text = text.map(str::trim).filter(|text| !text.is_empty());
+    match text {
+        Some(text) => label.set_markup(&crate::workspace_metadata::description_markup(text)),
+        None => label.set_markup(""),
+    }
+    label.set_visible(text.is_some());
 }
 
 /// Replace the row color provider and full-location tooltip without accumulating providers.

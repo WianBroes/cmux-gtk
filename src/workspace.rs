@@ -79,6 +79,10 @@ pub struct Workspace {
     /// The name was chosen by the user (or at creation); otherwise, as upstream, the
     /// workspace follows its focused terminal's title.
     pub custom_name: bool,
+    /// Markdown text describing what this workspace is about, shown under its name in the sidebar
+    /// (upstream `customDescription`). Written by the user or by an agent, never derived from the
+    /// branch or from the agent lifecycle.
+    pub custom_description: Option<String>,
     /// The name key used with GtkStack::add_named / set_visible_child_name.
     pub stack_page_name: String,
     /// Stable UUID for session persistence and v2 socket protocol identity.
@@ -109,6 +113,9 @@ pub struct Workspace {
     pub terminal_tmux_session: Option<String>,
 }
 
+/// Upstream bounds a workspace description at 4096 characters, and shows 12 lines at most.
+pub const DESCRIPTION_MAX_CHARS: usize = 4096;
+
 impl Workspace {
     /// Create a new workspace with a default "Workspace N" name.
     pub fn new(id: u64, display_number: usize) -> Self {
@@ -118,6 +125,7 @@ impl Workspace {
             id,
             name,
             custom_name: false,
+            custom_description: None,
             stack_page_name,
             uuid: Uuid::new_v4(),
             has_attention: false,
@@ -197,6 +205,14 @@ impl Workspace {
         self.custom_name = true;
     }
 
+    /// Set or clear the sidebar description; blank text clears it, like upstream's
+    /// `set-description` with an empty value. Bounded so one paste cannot fill the sidebar.
+    pub fn describe(&mut self, description: Option<String>) {
+        self.custom_description = description
+            .map(|text| text.trim().chars().take(DESCRIPTION_MAX_CHARS).collect())
+            .filter(|text: &String| !text.is_empty());
+    }
+
     /// Default names ("Workspace N") are not user choices; used for sessions saved before
     /// `custom_name` existed, like upstream restoring pre-provenance titles as user-set.
     pub fn is_default_name(name: &str) -> bool {
@@ -232,6 +248,33 @@ mod tests {
     }
 
     /// Require a persisted workspace identity even before it is inserted into GTK state.
+    #[test]
+    /// Verify a description is trimmed, bounded like upstream, and cleared when left blank.
+    fn describe_trims_bounds_and_clears() {
+        let mut workspace = Workspace::new_bound(
+            1,
+            1,
+            "Test".to_string(),
+            std::path::PathBuf::from("/tmp"),
+        );
+        workspace.describe(Some("  what this is about  ".to_string()));
+        assert_eq!(workspace.custom_description.as_deref(), Some("what this is about"));
+        workspace.describe(Some("   ".to_string()));
+        assert_eq!(workspace.custom_description, None);
+        workspace.describe(Some("x".repeat(DESCRIPTION_MAX_CHARS + 500)));
+        assert_eq!(
+            workspace
+                .custom_description
+                .as_deref()
+                .unwrap()
+                .chars()
+                .count(),
+            DESCRIPTION_MAX_CHARS
+        );
+        workspace.describe(None);
+        assert_eq!(workspace.custom_description, None);
+    }
+
     #[test]
     fn workspace_new_has_uuid() {
         let w = Workspace::new(1, 1);

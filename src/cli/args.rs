@@ -323,6 +323,18 @@ pub enum Commands {
         /// New name
         name: String,
     },
+    /// Set (or replace) a workspace description; blank text clears it
+    SetDescription {
+        /// Workspace UUID
+        id: String,
+        /// Markdown description shown under the workspace name
+        description: String,
+    },
+    /// Clear a workspace description
+    ClearDescription {
+        /// Workspace UUID
+        id: String,
+    },
     /// Switch to next workspace
     NextWorkspace,
     /// Switch to previous workspace

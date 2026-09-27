@@ -454,6 +454,35 @@ pub fn register_actions(
     });
     window.add_action(&action);
 
+    // win.edit-workspace-description — the in-app editor for the sidebar description
+    // (upstream's "Edit workspace description").
+    let action = gio::SimpleAction::new("edit-workspace-description", None);
+    action.connect_activate({
+        let state = state.clone();
+        let window = window.downgrade();
+        move |_, _| {
+            let (Some(window), Some(uuid)) = (
+                window.upgrade(),
+                state.borrow().active_workspace().map(|ws| ws.uuid),
+            ) else {
+                return;
+            };
+            crate::workspace_description::show(&window, &state, uuid);
+        }
+    });
+    window.add_action(&action);
+
+    // win.clear-workspace-description
+    let action = gio::SimpleAction::new("clear-workspace-description", None);
+    action.connect_activate({
+        let state = state.clone();
+        move |_, _| {
+            let index = state.borrow().active_index;
+            state.borrow_mut().set_workspace_description(index, None);
+        }
+    });
+    window.add_action(&action);
+
     // --- Help section actions ---
 
     // win.keyboard-shortcuts (D-14)
@@ -592,6 +621,14 @@ pub fn build_hamburger_menu() -> gio::Menu {
 pub fn build_sidebar_context_menu() -> gio::Menu {
     let menu = gio::Menu::new();
     menu.append(Some("Rename"), Some("win.rename-workspace"));
+    menu.append(
+        Some("Edit Description…"),
+        Some("win.edit-workspace-description"),
+    );
+    menu.append(
+        Some("Clear Description"),
+        Some("win.clear-workspace-description"),
+    );
     menu.append(Some("Close"), Some("win.close-workspace"));
     menu.append(Some("Split Right"), Some("win.split-right"));
     menu.append(Some("Split Down"), Some("win.split-down"));

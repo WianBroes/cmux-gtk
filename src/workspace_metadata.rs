@@ -170,8 +170,7 @@ pub fn parse(method: &str, params: &serde_json::Value) -> Result<Action, &'stati
 
 /// Convert bounded CommonMark to GTK label markup without accepting HTML or fetching resources.
 /// Inline mode collapses block boundaries; multiline mode preserves them. Image alt text remains visible.
-fn markdown_markup(value: &str, links: bool, multiline: bool) -> String {
-    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+fn markdown_markup(value: &str, links: bool, multiline: bool) -> String {    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
     let mut output = String::new();
     let mut closing = Vec::new();
     for event in Parser::new_ext(
@@ -223,6 +222,16 @@ fn markdown_markup(value: &str, links: bool, multiline: bool) -> String {
         }
     }
     output.trim_end().to_owned()
+}
+
+/// Markup for a workspace description shown in the sidebar: markdown, bounded like upstream's
+/// display limit (4096 characters, then the label shows 12 lines at most).
+pub fn description_markup(value: &str) -> String {
+    let bounded: String = value
+        .chars()
+        .take(crate::workspace::DESCRIPTION_MAX_CHARS)
+        .collect();
+    markdown_markup(&bounded, true, true)
 }
 
 /// Produce escaped label markup; an explicit row URL takes precedence over embedded links.

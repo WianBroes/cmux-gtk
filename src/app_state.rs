@@ -314,6 +314,7 @@ impl AppState {
             .custom_name
             .unwrap_or_else(|| !Workspace::is_default_name(&ws.name));
         workspace.metadata = ws.metadata.clone().validated();
+        workspace.describe(ws.custom_description.clone());
         workspace.uuid = uuid::Uuid::parse_str(&ws.uuid).unwrap_or_else(|_| uuid::Uuid::new_v4());
         workspace.color = ws
             .color
@@ -1020,6 +1021,29 @@ impl AppState {
         }
     }
 
+    /// Set or clear a workspace description and show it in its sidebar row (upstream
+    /// `set-description` / `clear-description`: an empty value clears it).
+    pub fn set_workspace_description(&mut self, index: usize, description: Option<String>) {
+        if let Some(workspace) = self.workspaces.get_mut(index) {
+            workspace.describe(description);
+        } else {
+            return;
+        }
+        self.trigger_session_save();
+        self.publish_workspace("workspace.described", index, serde_json::json!({}));
+        self.update_sidebar_description(index);
+    }
+
+    /// Show the workspace's description in its sidebar row.
+    fn update_sidebar_description(&self, index: usize) {
+        let Some(workspace) = self.workspaces.get(index) else {
+            return;
+        };
+        if let Some(row) = crate::sidebar::row_for_workspace(&self.sidebar_list, workspace.id) {
+            crate::sidebar::set_row_description(&row, workspace.custom_description.as_deref());
+        }
+    }
+
     /// Show the workspace's current name in its sidebar row.
     fn update_sidebar_name(&self, index: usize) {
         let Some(workspace) = self.workspaces.get(index) else {
@@ -1492,6 +1516,7 @@ impl AppState {
                             uuid: ws.uuid.to_string(),
                             name: ws.name.clone(),
                             custom_name: Some(ws.custom_name),
+                            custom_description: ws.custom_description.clone(),
                             color: ws.color.clone(),
                             group_id: ws.group_id,
                             startup_script: ws.startup_script.clone(),

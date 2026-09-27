@@ -56,6 +56,7 @@ mod window_state;
 mod workspace;
 mod workspace_dialog;
 mod workspace_group;
+mod workspace_description;
 mod workspace_metadata;
 
 const APP_ID: &str = "io.cmux.App";
@@ -98,6 +99,9 @@ paned > separator:hover { background-color: #5b8dd9; }
 /* Agent Activity (upstream `SidebarWorkspaceLeadingStatusSlot` + `showNotificationMessage`):
    unread badge in the leading slot, latest message under the workspace name. The row's generic
    `label` rules are more specific than a single class, so both are scoped down to their box. */
+.workspace-list row .workspace-row-text .workspace-description {
+    font-size: 11px;
+}
 .workspace-list row .workspace-status-slot .workspace-unread-badge {
     background-color: #5b8dd9;
     color: #ffffff;

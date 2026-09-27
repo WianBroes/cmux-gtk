@@ -419,6 +419,21 @@ async fn dispatch_request(
                 .to_string(),
             resp_tx,
         },
+        "workspace.set_description" | "workspace.clear_description" => {
+            commands::SocketCommand::WorkspaceDescription {
+                req_id: req_id.clone(),
+                id: params
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                description: params
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                resp_tx,
+            }
+        }
         "workspace.next" => commands::SocketCommand::WorkspaceNext {
             req_id: req_id.clone(),
             resp_tx,
