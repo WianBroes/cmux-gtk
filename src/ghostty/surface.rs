@@ -776,6 +776,9 @@ pub fn create_surface(
                     area.queue_render();
                 }
             }
+            if let Some(area) = gl_area_for_focus.upgrade() {
+                let _ = area.activate_action("win.terminal-focused", Some(&pane_id.to_variant()));
+            }
         }
     });
     focus_controller.connect_leave({

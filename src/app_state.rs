@@ -666,6 +666,9 @@ impl AppState {
         // Phase 4: clear attention when user switches to a workspace (D-05).
         self.clear_workspace_attention(index);
         let previous = self.workspaces.get(self.active_index).map(|workspace| workspace.uuid);
+        // Upstream: switching to a workspace marks its own (terminal-less) notifications read.
+        let workspace = self.workspaces[index].uuid;
+        crate::inbox_actions::mark_read_where(self, workspace, None);
         self.active_index = index;
         if previous != Some(self.workspaces[index].uuid) {
             let tabs = self.split_engines.get(index).map_or(0, |engine| engine.all_panes().len());

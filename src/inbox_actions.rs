@@ -300,6 +300,12 @@ fn create(
             "delivery": if focused { "store" } else { "desktop" },
         }),
     );
+    // Upstream keeps one live notification per terminal (or per workspace without one):
+    // a newer message supersedes the older ones instead of piling up.
+    state
+        .inbox
+        .records
+        .retain(|record| !(record.workspace_id == workspace && record.surface_id == surface));
     let evicted = state.inbox.push(Record {
         id,
         workspace_id: workspace,
@@ -316,4 +322,44 @@ fn create(
         json!({"id":id,"workspace":workspace,"surface":surface,"focused":focused,"evicted":evicted}),
     );
     json!({"id": id, "workspace_id": workspace, "surface_id": surface})
+}
+
+/// Upstream read rule: mark exactly this terminal's (or, with `None`, this workspace's own)
+/// notifications read. Returns whether anything changed.
+pub fn mark_read_where(state: &mut AppState, workspace: Uuid, surface: Option<Uuid>) -> bool {
+    let mut changed = false;
+    for record in &mut state.inbox.records {
+        if !record.is_read && record.workspace_id == workspace && record.surface_id == surface {
+            record.is_read = true;
+            changed = true;
+        }
+    }
+    if changed {
+        refresh(state);
+        if let Some(sender) = &state.inbox_updates {
+            sender.send_replace(());
+        }
+        state.trigger_session_save();
+    }
+    changed
+}
+
+/// Focusing a terminal marks its notifications read, as upstream does.
+pub fn terminal_focused(state: &crate::app_state::AppStateRef, pane_id: u64) {
+    let Ok(mut s) = state.try_borrow_mut() else {
+        let state = state.clone();
+        glib::idle_add_local_once(move || terminal_focused(&state, pane_id));
+        return;
+    };
+    let index = s.active_index;
+    let Some(surface) = s
+        .split_engines
+        .get(index)
+        .and_then(|engine| engine.root.find_uuid_for_pane(pane_id))
+        .and_then(|uuid| Uuid::parse_str(&uuid).ok())
+    else {
+        return;
+    };
+    let workspace = s.workspaces[index].uuid;
+    mark_read_where(&mut s, workspace, Some(surface));
 }
