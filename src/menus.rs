@@ -263,8 +263,24 @@ pub fn register_actions(
     });
     window.add_action(&action);
 
-    // win.local-tmux-close: only offered on a terminal bound by `cmux local-tmux`;
-    // win.context-menu-refresh updates that before each terminal context menu opens.
+    // win.local-tmux-split: new pane to the right in a fresh local-tmux session.
+    let action = gio::SimpleAction::new("local-tmux-split", None);
+    action.connect_activate({
+        let state = state.clone();
+        move |_, _| crate::local_tmux_settings::split_right_session(&state)
+    });
+    window.add_action(&action);
+
+    // win.local-tmux-rename / win.local-tmux-close: only offered on a terminal bound by
+    // `cmux local-tmux`; win.context-menu-refresh updates that before each terminal context menu opens.
+    let rename_session = gio::SimpleAction::new("local-tmux-rename", None);
+    rename_session.set_enabled(false);
+    rename_session.connect_activate({
+        let state = state.clone();
+        let window = window.clone();
+        move |_, _| crate::local_tmux_settings::rename_active_session(&state, &window)
+    });
+    window.add_action(&rename_session);
     let close_session = gio::SimpleAction::new("local-tmux-close", None);
     close_session.set_enabled(false);
     close_session.connect_activate({
@@ -277,7 +293,9 @@ pub fn register_actions(
     action.connect_activate({
         let state = state.clone();
         move |_, _| {
-            close_session.set_enabled(crate::local_tmux_settings::active_is_bound(&state));
+            let bound = crate::local_tmux_settings::active_is_bound(&state);
+            rename_session.set_enabled(bound);
+            close_session.set_enabled(bound);
         }
     });
     window.add_action(&action);
@@ -579,13 +597,16 @@ pub fn build_terminal_context_menu() -> gio::Menu {
     let pane_section = gio::Menu::new();
     pane_section.append(Some("Split Right"), Some("win.split-right"));
     pane_section.append(Some("Split Down"), Some("win.split-down"));
+    pane_section.append(Some("Split Right in tmux"), Some("win.local-tmux-split"));
     pane_section.append(Some("Close Pane"), Some("win.close-pane"));
-    let close_session = gio::MenuItem::new(
-        Some("Kill tmux Session…"),
-        Some("win.local-tmux-close"),
-    );
-    close_session.set_attribute_value("hidden-when", Some(&"action-disabled".to_variant()));
-    pane_section.append_item(&close_session);
+    for (label, action) in [
+        ("Rename tmux Session…", "win.local-tmux-rename"),
+        ("Kill tmux Session…", "win.local-tmux-close"),
+    ] {
+        let item = gio::MenuItem::new(Some(label), Some(action));
+        item.set_attribute_value("hidden-when", Some(&"action-disabled".to_variant()));
+        pane_section.append_item(&item);
+    }
     menu.append_section(None, &pane_section);
 
     let browser_section = gio::Menu::new();

@@ -265,6 +265,17 @@ fn append_pane_surface(
     page
 }
 
+/// Launch command for an explicit project command, falling back to a shell when it exits.
+fn project_launch(command: &str) -> String {
+    format!(
+        "/bin/sh -c {}",
+        crate::workspace::shell_quote(&format!(
+            "/bin/sh -c {}\nexec /bin/sh",
+            crate::workspace::shell_quote(command)
+        ))
+    )
+}
+
 /// Construct a tabbed pane and synchronize native focus when its selected page changes.
 fn create_pane(pane_id: u64, initial_surface: PaneSurface) -> SplitNode {
     let notebook = gtk4::Notebook::new();
@@ -954,17 +965,22 @@ impl SplitEngine {
         if self.remote_launch.is_some() {
             return None;
         }
-        let previous_command = self.launch_command.replace(format!(
-            "/bin/sh -c {}",
-            crate::workspace::shell_quote(&format!(
-                "/bin/sh -c {}\nexec /bin/sh",
-                crate::workspace::shell_quote(command)
-            ))
-        ));
+        let previous_command = self.launch_command.replace(project_launch(command));
         let previous_directory = self.working_directory.replace(directory);
         let result = self.new_terminal_tab();
         self.launch_command = previous_command;
         self.working_directory = previous_directory;
+        result
+    }
+
+    /// Launch an explicit local command in a new pane to the right, like Split Right.
+    pub(crate) fn split_right_command(&mut self, command: &str) -> Option<u64> {
+        if self.remote_launch.is_some() {
+            return None;
+        }
+        let previous_command = self.launch_command.replace(project_launch(command));
+        let result = self.split_right();
+        self.launch_command = previous_command;
         result
     }
 
