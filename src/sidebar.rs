@@ -241,12 +241,7 @@ pub fn rebuild_grouped_sidebar(state: &crate::app_state::AppStateRef) {
         let row = row_for_workspace(&list, active_id);
         if let Some(row) = &row {
             row.add_css_class("active-workspace");
-            if let Some(label) = row
-                .child()
-                .and_then(|child| child.first_child())
-                .and_then(|child| child.first_child())
-                .and_downcast::<gtk4::Label>()
-            {
+            if let Some(label) = row_title(row) {
                 label.add_css_class("active-workspace-label");
             }
         }
@@ -370,6 +365,15 @@ pub fn start_inline_rename(
                 }
                 s.trigger_session_save();
             }
+            // Renaming rebuilds the row content: put its status slot and message back.
+            let index = state
+                .borrow()
+                .workspaces
+                .iter()
+                .position(|workspace| workspace.id == workspace_id);
+            if let Some(index) = index {
+                state.borrow().update_sidebar_attention(index);
+            }
             let app = state.borrow().gtk_app.clone();
             wire_row_close_button(&row, state.clone(), &app);
         }
@@ -402,18 +406,47 @@ pub fn start_inline_rename(
 /// Close button is hidden by default, shown on row hover via CSS (D-02).
 pub fn rebuild_sidebar_row_content(name: &str) -> gtk4::Box {
     let hbox = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+    // Upstream's leading status slot: agent spinner over the unread badge.
+    let slot = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+    slot.add_css_class("workspace-status-slot");
+    slot.set_size_request(18, 18);
+    slot.set_valign(gtk4::Align::Start);
+    slot.set_halign(gtk4::Align::Center);
+    let spinner = gtk4::Spinner::new();
+    spinner.set_visible(false);
+    spinner.set_tooltip_text(Some("Agent running"));
+    slot.append(&spinner);
+    let badge = gtk4::Label::new(None);
+    badge.add_css_class("workspace-unread-badge");
+    badge.set_visible(false);
+    slot.append(&badge);
+    let dot = gtk4::Label::new(None);
+    dot.add_css_class("attention-dot");
+    dot.set_valign(gtk4::Align::Center);
+    dot.set_visible(false);
+    slot.append(&dot);
+    hbox.append(&slot);
+
     let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    vbox.add_css_class("workspace-row-text");
     let label = gtk4::Label::new(Some(name));
     label.set_halign(gtk4::Align::Start);
     label.set_hexpand(true);
     vbox.append(&label);
+    // Upstream `showNotificationMessage`: the latest message, up to 12 lines, under the title.
+    let message = gtk4::Label::new(None);
+    message.add_css_class("workspace-notification");
+    message.add_css_class("dim-label");
+    message.set_xalign(0.0);
+    message.set_wrap(true);
+    message.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
+    message.set_lines(12);
+    message.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+    message.set_max_width_chars(28);
+    message.set_visible(false);
+    vbox.append(&message);
     vbox.set_hexpand(true);
     hbox.append(&vbox);
-
-    let dot = gtk4::Label::new(None);
-    dot.add_css_class("attention-dot");
-    dot.set_visible(false);
-    hbox.append(&dot);
 
     // Close button (D-02) -- hidden by default, shown on row hover via CSS
     let close_btn = gtk4::Button::with_label("\u{00D7}"); // Unicode multiplication sign
@@ -669,7 +702,11 @@ pub fn wire_latest_row(
 /// Shared content keeps subtitles, attention and close controls intact after rename.
 pub fn workspace_row_content(workspace: &crate::workspace::Workspace) -> gtk4::Box {
     let hbox = rebuild_sidebar_row_content(&workspace.name);
-    let vbox = hbox.first_child().and_downcast::<gtk4::Box>().unwrap();
+    let vbox = hbox
+        .first_child()
+        .and_then(|slot| slot.next_sibling())
+        .and_downcast::<gtk4::Box>()
+        .unwrap();
     if let Some(title) = vbox.first_child().and_downcast::<gtk4::Label>() {
         title.set_ellipsize(gtk4::pango::EllipsizeMode::End);
         title.set_max_width_chars(24);
@@ -709,10 +746,74 @@ pub fn workspace_row_content(workspace: &crate::workspace::Workspace) -> gtk4::B
         status.add_css_class(workspace.connection_state.css_class());
         vbox.append(&status);
     }
-    if let Some(dot) = vbox.next_sibling().and_downcast::<gtk4::Label>() {
-        dot.set_visible(workspace.has_attention);
-    }
     hbox
+}
+
+/// The row's text column (title first), found by class so leading status widgets can move.
+pub fn row_text(row: &gtk4::ListBoxRow) -> Option<gtk4::Box> {
+    let mut child = row.child()?.first_child();
+    while let Some(widget) = child {
+        if widget.has_css_class("workspace-row-text") {
+            return widget.downcast().ok();
+        }
+        child = widget.next_sibling();
+    }
+    None
+}
+
+/// The workspace title label of a row.
+pub fn row_title(row: &gtk4::ListBoxRow) -> Option<gtk4::Label> {
+    row_text(row)?.first_child().and_downcast()
+}
+
+/// First child of `parent` carrying `class`.
+fn child_with_class(parent: &gtk4::Widget, class: &str) -> Option<gtk4::Widget> {
+    let mut child = parent.first_child();
+    while let Some(widget) = child {
+        if widget.has_css_class(class) {
+            return Some(widget);
+        }
+        child = widget.next_sibling();
+    }
+    None
+}
+
+/// Upstream leading slot and message line: spinner while an agent runs, else the unread count
+/// (a plain dot for terminal bell attention without a message), and the latest message.
+pub fn set_row_status(
+    row: &gtk4::ListBoxRow,
+    unread: usize,
+    attention: bool,
+    running: bool,
+    message: Option<&str>,
+) {
+    let Some(hbox) = row.child() else {
+        return;
+    };
+    if let Some(slot) = child_with_class(&hbox, "workspace-status-slot") {
+        if let Some(spinner) = slot.first_child().and_downcast::<gtk4::Spinner>() {
+            spinner.set_visible(running);
+            spinner.set_spinning(running);
+        }
+        if let Some(badge) = child_with_class(&slot, "workspace-unread-badge") {
+            if let Ok(label) = badge.clone().downcast::<gtk4::Label>() {
+                label.set_text(&if unread > 99 { "99+".into() } else { unread.to_string() });
+            }
+            badge.set_visible(!running && unread > 0);
+        }
+        if let Some(dot) = child_with_class(&slot, "attention-dot") {
+            dot.set_visible(!running && unread == 0 && attention);
+        }
+    }
+    if let Some(label) = row_text(row)
+        .and_then(|text| child_with_class(text.upcast_ref(), "workspace-notification"))
+        .and_downcast::<gtk4::Label>()
+    {
+        let text = message.map(str::trim).filter(|text| !text.is_empty());
+        // Bounded like upstream (4096 characters) before GTK lays it out.
+        label.set_text(&text.map_or(String::new(), |text| text.chars().take(4096).collect()));
+        label.set_visible(text.is_some());
+    }
 }
 
 /// Replace the row color provider and full-location tooltip without accumulating providers.

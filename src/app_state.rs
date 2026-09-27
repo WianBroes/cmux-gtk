@@ -453,6 +453,7 @@ impl AppState {
     pub(crate) fn build_sidebar_row(&self, workspace: &Workspace) -> gtk4::ListBoxRow {
         let row = gtk4::ListBoxRow::new();
         row.set_child(Some(&crate::sidebar::workspace_row_content(workspace)));
+        self.apply_row_status(&row, workspace);
         crate::sidebar::style_workspace_row(&row, workspace);
         crate::sidebar::bind_workspace_row(&row, workspace.id);
         let workspace_uuid = workspace.uuid;
@@ -567,17 +568,15 @@ impl AppState {
             }
             // Update sidebar subtitle
             if let Some(row) = crate::sidebar::row_for_workspace(&self.sidebar_list, workspace_id) {
-                if let Some(hbox) = row.child().and_downcast::<gtk4::Box>() {
-                    if let Some(vbox) = hbox.first_child().and_downcast::<gtk4::Box>() {
-                        // Last child in vbox is the status label (if it has connection-state class)
-                        if let Some(status) = vbox.last_child().and_downcast::<gtk4::Label>() {
-                            if status.has_css_class("connection-state") {
-                                status.set_text(state.display_text());
-                                status.remove_css_class("connected");
-                                status.remove_css_class("disconnected");
-                                status.remove_css_class("reconnecting");
-                                status.add_css_class(state.css_class());
-                            }
+                if let Some(vbox) = crate::sidebar::row_text(&row) {
+                    // Last child in vbox is the status label (if it has connection-state class)
+                    if let Some(status) = vbox.last_child().and_downcast::<gtk4::Label>() {
+                        if status.has_css_class("connection-state") {
+                            status.set_text(state.display_text());
+                            status.remove_css_class("connected");
+                            status.remove_css_class("disconnected");
+                            status.remove_css_class("reconnecting");
+                            status.add_css_class(state.css_class());
                         }
                     }
                 }
@@ -691,23 +690,13 @@ impl AppState {
             // All rows: remove first, then add to active.
             for r in crate::sidebar::workspace_rows(&self.sidebar_list) {
                 r.remove_css_class("active-workspace");
-                // Phase 4: navigate nested layout: row > hbox > vbox > label
-                if let Some(hbox) = r.child().and_downcast::<gtk4::Box>() {
-                    if let Some(vbox) = hbox.first_child().and_downcast::<gtk4::Box>() {
-                        if let Some(label) = vbox.first_child().and_downcast::<gtk4::Label>() {
-                            label.set_css_classes(&[]);
-                        }
-                    }
+                if let Some(label) = crate::sidebar::row_title(&r) {
+                    label.set_css_classes(&[]);
                 }
             }
             row.add_css_class("active-workspace");
-            // Phase 4: navigate nested layout: row > hbox > vbox > label
-            if let Some(hbox) = row.child().and_downcast::<gtk4::Box>() {
-                if let Some(vbox) = hbox.first_child().and_downcast::<gtk4::Box>() {
-                    if let Some(label) = vbox.first_child().and_downcast::<gtk4::Label>() {
-                        label.add_css_class("active-workspace-label");
-                    }
-                }
+            if let Some(label) = crate::sidebar::row_title(&row) {
+                label.add_css_class("active-workspace-label");
             }
         }
         // Restore focus through the selected surface for every workspace-switch caller.
@@ -1031,18 +1020,14 @@ impl AppState {
         }
     }
 
-    /// Show the workspace's current name in its sidebar row (row > hbox > vbox > label).
+    /// Show the workspace's current name in its sidebar row.
     fn update_sidebar_name(&self, index: usize) {
         let Some(workspace) = self.workspaces.get(index) else {
             return;
         };
         if let Some(row) = crate::sidebar::row_for_workspace(&self.sidebar_list, workspace.id) {
-            if let Some(hbox) = row.child().and_downcast::<gtk4::Box>() {
-                if let Some(vbox) = hbox.first_child().and_downcast::<gtk4::Box>() {
-                    if let Some(label) = vbox.first_child().and_downcast::<gtk4::Label>() {
-                        label.set_text(&workspace.name);
-                    }
-                }
+            if let Some(label) = crate::sidebar::row_title(&row) {
+                label.set_text(&workspace.name);
             }
         }
     }
@@ -1156,31 +1141,86 @@ impl AppState {
         self.update_sidebar_attention(index);
     }
 
+    /// Unread count and latest message for one workspace, from the inbox (upstream row model).
+    fn inbox_row_summary(
+        records: &[crate::inbox::Record],
+        workspace_uuid: uuid::Uuid,
+    ) -> (usize, Option<String>) {
+        let mut records = records
+            .iter()
+            .filter(|record| record.workspace_id == workspace_uuid);
+        let unread = records.clone().filter(|record| !record.is_read).count();
+        // Upstream: the latest message stays, read or not; body first, else title.
+        let latest = records.next_back().map(|record| {
+            let content = &record.content;
+            if content.body.trim().is_empty() {
+                content.title.clone()
+            } else {
+                content.body.clone()
+            }
+        });
+        (unread, latest)
+    }
+
+    /// Fill the status slot and message line of a row just built. A built row has no engine yet,
+    /// so a running agent is read from the workspace itself; hook events prune it afterwards.
+    pub(crate) fn apply_row_status(&self, row: &gtk4::ListBoxRow, workspace: &Workspace) {
+        let (unread, latest) = Self::inbox_row_summary(&self.inbox.records, workspace.uuid);
+        crate::sidebar::set_row_status(
+            row,
+            unread,
+            workspace.has_attention || unread > 0,
+            !workspace.agents_running.is_empty(),
+            latest.as_deref(),
+        );
+    }
+
     /// Update the sidebar dot visibility for workspace at `index`.
     pub(crate) fn update_sidebar_attention(&self, index: usize) {
         if let Some(row) =
             crate::sidebar::row_for_workspace(&self.sidebar_list, self.workspaces[index].id)
         {
-            let has_attention = self
-                .workspaces
-                .get(index)
-                .map(|ws| {
-                    ws.has_attention
-                        || self
-                            .inbox
-                            .records
-                            .iter()
-                            .any(|record| record.workspace_id == ws.uuid && !record.is_read)
-                })
-                .unwrap_or(false);
-            // Row layout: GtkBox(H) > [GtkBox(V) > [GtkLabel(name)], GtkLabel(dot)]
-            if let Some(hbox) = row.child().and_downcast::<gtk4::Box>() {
-                if let Some(dot) = hbox.last_child() {
-                    dot.set_visible(has_attention);
-                }
-            }
+            let workspace = &self.workspaces[index];
+            let (unread, latest) = Self::inbox_row_summary(&self.inbox.records, workspace.uuid);
+            // A turn counts while its terminal is still open; closed ones were pruned on hook.
+            let running = workspace.agents_running.iter().any(|(surface, _)| {
+                self.split_engines[index]
+                    .find_pane_id_by_uuid(surface)
+                    .is_some()
+            });
+            crate::sidebar::set_row_status(
+                &row,
+                unread,
+                workspace.has_attention || unread > 0,
+                running,
+                latest.as_deref(),
+            );
         }
         crate::sidebar::update_group_attention(self);
+    }
+
+    /// Agent hook turn boundaries drive the sidebar spinner (upstream `showAgentActivity`).
+    pub fn set_agent_running(&mut self, surface: &str, source: &str, running: bool) {
+        let Some(index) = self
+            .split_engines
+            .iter()
+            .position(|engine| engine.find_pane_id_by_uuid(surface).is_some())
+        else {
+            return;
+        };
+        let engine = &self.split_engines[index];
+        let agents = &mut self.workspaces[index].agents_running;
+        // Forget terminals that closed without reporting the end of their turn.
+        agents.retain(|(surface, _)| engine.find_pane_id_by_uuid(surface).is_some());
+        let key = (surface.to_owned(), source.to_owned());
+        let changed = if running {
+            agents.insert(key)
+        } else {
+            agents.remove(&key)
+        };
+        if changed {
+            self.update_sidebar_attention(index);
+        }
     }
 
     /// Remove the manager and cancel its local work now; close its daemon on Tokio without GTK I/O.

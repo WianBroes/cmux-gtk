@@ -2,6 +2,7 @@ use gtk4::prelude::*;
 use gtk4::{gio, Application, ApplicationWindow, CssProvider};
 use std::ffi::CString;
 
+mod agent_activity;
 mod agent_resume;
 mod app_state;
 mod bounded_json;
@@ -87,6 +88,21 @@ paned > separator:hover { background-color: #5b8dd9; }
     min-width: 8px;
     min-height: 8px;
     margin: 0 4px;
+}
+/* Agent Activity (upstream `SidebarWorkspaceLeadingStatusSlot` + `showNotificationMessage`):
+   unread badge in the leading slot, latest message under the workspace name. The row's generic
+   `label` rules are more specific than a single class, so both are scoped down to their box. */
+.workspace-list row .workspace-status-slot .workspace-unread-badge {
+    background-color: #5b8dd9;
+    color: #ffffff;
+    border-radius: 8px;
+    padding: 0 5px;
+    font-size: 10px;
+    font-weight: 600;
+}
+.workspace-list row .workspace-row-text .workspace-notification {
+    font-size: 12px;
+    color: #999999;
 }
 /* Phase 4: SSH connection state subtitle (SSH-01, SSH-04) */
 .connection-state {
@@ -470,6 +486,7 @@ fn build_ui(
 
     crate::git_metadata::start(&state, &window);
     crate::ports::start(&state, &window);
+    crate::agent_activity::start(&state, &window);
     crate::browser::location::start(&state, &window);
 
     // Attach command receiver to GTK main loop via glib::MainContext::default().spawn_local.

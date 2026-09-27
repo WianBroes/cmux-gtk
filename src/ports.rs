@@ -95,8 +95,7 @@ pub(crate) fn publish(
     state.workspaces[index].ports = value;
     if let Some(container) =
         crate::sidebar::row_for_workspace(&state.sidebar_list, state.workspaces[index].id)
-            .and_then(|row| row.child())
-            .and_then(|row| row.first_child())
+            .and_then(|row| crate::sidebar::row_text(&row))
     {
         let mut child = container.first_child();
         while let Some(widget) = child {
