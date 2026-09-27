@@ -134,6 +134,17 @@ pub enum Commands {
         #[arg(long, conflicts_with = "focus")]
         no_focus: bool,
     },
+    /// Keep terminal processes alive across cmux quit, crash and update with a private tmux server
+    #[command(name = "local-tmux")]
+    LocalTmux {
+        #[command(subcommand)]
+        command: LocalTmuxCommands,
+    },
+    /// Attach-only alias of `local-tmux attach`, for scripts using tmux vocabulary
+    Tmux {
+        #[command(subcommand)]
+        command: TmuxAliasCommands,
+    },
     /// Manage durable diff-review comments keyed by Git repository
     Comments {
         #[command(subcommand)]
@@ -592,6 +603,48 @@ pub enum NotificationCommands {
     Open { id: String },
     /// Focus the most recent unread message's terminal
     JumpToUnread,
+}
+
+/// Persistent local sessions owned by cmux's private tmux server.
+#[derive(Subcommand)]
+pub enum LocalTmuxCommands {
+    /// Create a session and attach this terminal to it
+    Start {
+        name: String,
+        /// Working directory (default: current)
+        #[arg(long)]
+        cwd: Option<std::path::PathBuf>,
+        /// Command to run in the session instead of a shell
+        #[arg(long)]
+        command: Option<String>,
+        /// Create the session without attaching
+        #[arg(long)]
+        detached: bool,
+    },
+    /// Attach this terminal to an existing session
+    Attach {
+        name: String,
+        /// Attach without recording it for cmux restore (outside cmux)
+        #[arg(long)]
+        headless: bool,
+    },
+    /// List live sessions
+    List,
+    /// Detach every client from a session, leaving it running
+    Detach { name: String },
+    /// Terminate a session and its processes
+    Close { name: String },
+}
+
+/// `cmux tmux` accepts only attach; lifecycle stays under `local-tmux`.
+#[derive(Subcommand)]
+pub enum TmuxAliasCommands {
+    /// Attach this terminal to an existing local-tmux session
+    Attach {
+        name: String,
+        #[arg(long)]
+        headless: bool,
+    },
 }
 
 /// Surface operations grouped to match upstream command spelling.
