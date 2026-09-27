@@ -117,6 +117,7 @@ paned > separator:hover { background-color: #5b8dd9; }
 .headerbar-btn { min-width: 28px; min-height: 28px; padding: 4px; margin: 0 2px; border-radius: 4px; background-color: transparent; color: #cccccc; border: none; }
 .headerbar-btn:hover { background-color: rgba(255, 255, 255, 0.08); }
 .headerbar-btn:active { background-color: rgba(255, 255, 255, 0.12); }
+.header-badge { background-color: #3584e4; color: #ffffff; border-radius: 8px; min-width: 14px; padding: 0 3px; font-size: 9px; font-weight: bold; margin: 1px; }
 /* Phase 9: Sidebar add button (D-01) */
 .sidebar-add-btn { min-height: 36px; padding: 8px 16px; background-color: transparent; color: #cccccc; border: none; border-top: 1px solid #3a3a3a; font-size: 16px; }
 .sidebar-add-btn:hover { background-color: #2e2e2e; }
@@ -366,7 +367,9 @@ fn build_ui(
     stack.set_vexpand(true);
 
     // Phase 9: Set HeaderBar as titlebar (D-04)
+    let (bell, bell_badge) = crate::header_bar::notification_bell();
     if let Some(header) = crate::header_bar::build_header_bar(config) {
+        header.pack_start(&bell);
         window.set_titlebar(Some(&header));
     }
 
@@ -388,6 +391,7 @@ fn build_ui(
     {
         let mut s = state.borrow_mut();
         s.session_tx = Some(session_tx);
+        s.notifications_badge = Some(bell_badge);
         s.ssh_event_tx = Some(ssh_event_tx);
         s.runtime_handle = Some(runtime_handle.clone());
         s.browser_shutdown_tasks = browser_shutdown_tasks;

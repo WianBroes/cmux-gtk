@@ -32,6 +32,8 @@ pub struct AppState {
     /// Coalesced change signal and non-owning panel reference; the panel owns its cancellable listener.
     pub inbox_updates: Option<tokio::sync::watch::Sender<()>>,
     pub inbox_window: glib::WeakRef<gtk4::Dialog>,
+    /// Header bell counter of unread notifications.
+    pub notifications_badge: Option<gtk4::Label>,
     /// Validated application-owned authority for automatic local terminal resume.
     pub resume_policy: crate::resume_policy::ResumePolicy,
     /// Sender for session snapshots to the debounce task.
@@ -103,6 +105,7 @@ impl AppState {
             inbox: Default::default(),
             inbox_updates: None,
             inbox_window: Default::default(),
+            notifications_badge: None,
             ssh_event_tx: None,
             runtime_handle: None,
             ssh_task_handles: std::collections::HashMap::new(),
