@@ -12,6 +12,9 @@ pub struct WorkspaceSession {
     pub launch_environment: std::collections::BTreeMap<String, String>,
     pub uuid: String,
     pub name: String,
+    /// Absent in older sessions: derived from the name (see `Workspace::is_default_name`).
+    #[serde(default)]
+    pub custom_name: Option<bool>,
     #[serde(default)]
     pub color: Option<String>,
     #[serde(default)]
@@ -512,6 +515,7 @@ mod tests {
                 metadata: Default::default(),
                 uuid: "test-uuid-1".to_string(),
                 name: name.to_string(),
+                custom_name: None,
                 color: None,
                 group_id: None,
                 startup_script: None,

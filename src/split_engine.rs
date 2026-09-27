@@ -184,11 +184,38 @@ fn request_surface_tab_close(widget: &impl IsA<gtk4::Widget>, uuid: Uuid) {
 }
 
 /// Build a tab label and close affordance with weak widget captures to avoid ownership cycles.
+const TAB_UNREAD_DOT: &str = "tab-unread-dot";
+const TAB_TITLE: &str = "tab-title";
+
+/// The named child of the tab label shown for a terminal page.
+fn tab_part(area: &gtk4::GLArea, name: &str) -> Option<gtk4::Widget> {
+    // GtkNotebook pages sit in an internal stack, so the notebook is an ancestor, not the parent.
+    let notebook = area
+        .ancestor(gtk4::Notebook::static_type())?
+        .downcast::<gtk4::Notebook>()
+        .ok()?;
+    let mut child = notebook.tab_label(area)?.first_child();
+    while let Some(widget) = child {
+        if widget.widget_name() == name {
+            return Some(widget);
+        }
+        child = widget.next_sibling();
+    }
+    None
+}
+
 fn surface_tab_label(surface: &PaneSurface) -> gtk4::Box {
     let uuid = surface.uuid();
     let tab = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
     tab.add_css_class("surface-tab-label");
+    // Upstream shows the same unread state as the pane ring as a dot on the tab.
+    let dot = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+    dot.set_widget_name(TAB_UNREAD_DOT);
+    dot.add_css_class("tab-unread-dot");
+    dot.set_valign(gtk4::Align::Center);
+    dot.set_visible(false);
     let label = gtk4::Label::new(Some(surface.tab_title()));
+    label.set_widget_name(TAB_TITLE);
     let close = gtk4::Button::from_icon_name("window-close-symbolic");
     close.add_css_class("surface-tab-close");
     close.set_tooltip_text(Some("Close Tab"));
@@ -201,6 +228,7 @@ fn surface_tab_label(surface: &PaneSurface) -> gtk4::Box {
             }
         }
     });
+    tab.append(&dot);
     tab.append(&label);
     tab.append(&close);
 
@@ -1700,6 +1728,48 @@ impl SplitEngine {
     /// Clone a terminal widget by stable tab identity without changing notebook selection or focus.
     pub fn gl_area_for_surface(&self, uuid: &str) -> Option<gtk4::GLArea> {
         self.root.find_terminal_by_uuid(uuid)
+    }
+
+    /// Show a terminal's program-set title on its tab; false when the tab is not here.
+    pub fn set_surface_title(&self, uuid: &str, title: &str) -> bool {
+        let label = self
+            .gl_area_for_surface(uuid)
+            .and_then(|area| tab_part(&area, TAB_TITLE))
+            .and_then(|widget| widget.downcast::<gtk4::Label>().ok());
+        label.is_some_and(|label| {
+            // Notebook tabs shrink an ellipsizing label to "…", so bound the text instead.
+            let mut text: String = title.trim().chars().take(32).collect();
+            if title.trim().chars().count() > 32 {
+                text.push('…');
+            }
+            label.set_text(if text.is_empty() { "Terminal" } else { &text });
+            true
+        })
+    }
+
+    /// The title currently shown on a terminal's tab.
+    pub fn surface_title(&self, uuid: &str) -> Option<String> {
+        self.gl_area_for_surface(uuid)
+            .and_then(|area| tab_part(&area, TAB_TITLE))
+            .and_then(|widget| widget.downcast::<gtk4::Label>().ok())
+            .map(|label| label.text().to_string())
+    }
+
+    /// Show the unread dot on exactly the terminal tabs listed.
+    pub fn set_unread_tabs(&self, unread: &std::collections::HashSet<String>) {
+        let mut areas = Vec::new();
+        self.root.collect_terminal_areas(&mut areas);
+        for area in areas {
+            // SAFETY: this private key always stores a UUID (see append_pane_surface).
+            let Some(uuid) = (unsafe { area.data::<Uuid>("cmux-surface-uuid") })
+                .map(|uuid| unsafe { *uuid.as_ref() })
+            else {
+                continue;
+            };
+            if let Some(dot) = tab_part(&area, TAB_UNREAD_DOT) {
+                dot.set_visible(unread.contains(&uuid.to_string()));
+            }
+        }
     }
 
     /// Look up a surface by its UUID string. Returns the ghostty surface handle if found.

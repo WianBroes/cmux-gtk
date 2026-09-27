@@ -310,6 +310,9 @@ impl AppState {
 
         let mut workspace = Workspace::new(id, display_number);
         workspace.name = ws.name.clone();
+        workspace.custom_name = ws
+            .custom_name
+            .unwrap_or_else(|| !Workspace::is_default_name(&ws.name));
         workspace.metadata = ws.metadata.clone().validated();
         workspace.uuid = uuid::Uuid::parse_str(&ws.uuid).unwrap_or_else(|_| uuid::Uuid::new_v4());
         workspace.color = ws
@@ -1020,23 +1023,27 @@ impl AppState {
 
     /// Update the workspace name and sidebar label, then schedule persistence; ignore invalid indices.
     pub fn rename_workspace_at(&mut self, index: usize, new_name: String) {
-        let Some(workspace_id) = self.workspaces.get(index).map(|workspace| workspace.id) else {
+        if let Some(ws) = self.workspaces.get_mut(index) {
+            ws.rename(new_name);
+            self.update_sidebar_name(index);
+            self.trigger_session_save();
+            self.publish_workspace("workspace.renamed", index, serde_json::json!({}));
+        }
+    }
+
+    /// Show the workspace's current name in its sidebar row (row > hbox > vbox > label).
+    fn update_sidebar_name(&self, index: usize) {
+        let Some(workspace) = self.workspaces.get(index) else {
             return;
         };
-        if let Some(ws) = self.workspaces.get_mut(index) {
-            ws.rename(new_name.clone());
-            // Update the sidebar label (Phase 4 nested layout: row > hbox > vbox > label).
-            if let Some(row) = crate::sidebar::row_for_workspace(&self.sidebar_list, workspace_id) {
-                if let Some(hbox) = row.child().and_downcast::<gtk4::Box>() {
-                    if let Some(vbox) = hbox.first_child().and_downcast::<gtk4::Box>() {
-                        if let Some(label) = vbox.first_child().and_downcast::<gtk4::Label>() {
-                            label.set_text(&new_name);
-                        }
+        if let Some(row) = crate::sidebar::row_for_workspace(&self.sidebar_list, workspace.id) {
+            if let Some(hbox) = row.child().and_downcast::<gtk4::Box>() {
+                if let Some(vbox) = hbox.first_child().and_downcast::<gtk4::Box>() {
+                    if let Some(label) = vbox.first_child().and_downcast::<gtk4::Label>() {
+                        label.set_text(&workspace.name);
                     }
                 }
             }
-            self.trigger_session_save();
-            self.publish_workspace("workspace.renamed", index, serde_json::json!({}));
         }
     }
 
@@ -1056,6 +1063,44 @@ impl AppState {
             },
             payload,
         );
+    }
+
+    /// A terminal's program set its title: show it on the tab and, as upstream, let it
+    /// name the workspace when it is the focused tab.
+    pub fn surface_title_changed(&mut self, surface: uuid::Uuid, title: &str) {
+        let id = surface.to_string();
+        let Some(index) = self
+            .split_engines
+            .iter()
+            .position(|engine| engine.set_surface_title(&id, title))
+        else {
+            return;
+        };
+        if self.split_engines[index].active_pane_uuid().as_deref() == Some(id.as_str()) {
+            self.apply_focused_title(index);
+        }
+    }
+
+    /// Upstream `applyFocusedPanelTitle`: a workspace without a user-chosen name shows the
+    /// title of its focused tab (ignoring the placeholder of a tab that never set one).
+    pub fn apply_focused_title(&mut self, index: usize) {
+        let Some(title) = self.split_engines.get(index).and_then(|engine| {
+            engine
+                .active_pane_uuid()
+                .and_then(|id| engine.surface_title(&id))
+        }) else {
+            return;
+        };
+        let Some(workspace) = self.workspaces.get_mut(index) else {
+            return;
+        };
+        if workspace.custom_name || title == "Terminal" || workspace.name == title {
+            return;
+        }
+        workspace.name = title;
+        self.update_sidebar_name(index);
+        self.trigger_session_save();
+        self.publish_workspace("workspace.renamed", index, serde_json::json!({"automatic": true}));
     }
 
     /// Returns the active workspace, if any.
@@ -1406,6 +1451,7 @@ impl AppState {
                             metadata: ws.metadata.clone(),
                             uuid: ws.uuid.to_string(),
                             name: ws.name.clone(),
+                            custom_name: Some(ws.custom_name),
                             color: ws.color.clone(),
                             group_id: ws.group_id,
                             startup_script: ws.startup_script.clone(),

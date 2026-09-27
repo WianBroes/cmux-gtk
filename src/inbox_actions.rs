@@ -248,6 +248,14 @@ pub fn refresh(state: &AppState) {
                     .and_then(|surface| engine.find_pane_id_by_uuid(&surface.to_string()))
             })
             .collect();
+        let unread_tabs: std::collections::HashSet<String> = state
+            .inbox
+            .records
+            .iter()
+            .filter(|record| !record.is_read && record.workspace_id == state.workspaces[index].uuid)
+            .filter_map(|record| record.surface_id.map(|surface| surface.to_string()))
+            .collect();
+        engine.set_unread_tabs(&unread_tabs);
         for (_, pane, _) in engine.all_panes() {
             if let Some(node) = engine.root.find_node(pane) {
                 let unread = unread_panes.contains(&pane);
@@ -344,7 +352,7 @@ pub fn mark_read_where(state: &mut AppState, workspace: Uuid, surface: Option<Uu
     changed
 }
 
-/// Focusing a terminal marks its notifications read, as upstream does.
+/// Focusing a terminal marks its notifications read and lets it name its workspace, as upstream.
 pub fn terminal_focused(state: &crate::app_state::AppStateRef, pane_id: u64) {
     let Ok(mut s) = state.try_borrow_mut() else {
         let state = state.clone();
@@ -362,4 +370,6 @@ pub fn terminal_focused(state: &crate::app_state::AppStateRef, pane_id: u64) {
     };
     let workspace = s.workspaces[index].uuid;
     mark_read_where(&mut s, workspace, Some(surface));
+    // The focused tab also names a workspace that has no user-chosen name.
+    s.apply_focused_title(index);
 }
