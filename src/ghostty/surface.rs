@@ -806,6 +806,10 @@ pub fn create_surface(
             // bit 0: scroll_is_pixel (1 if touchpad, 0 if mouse wheel)
             // bit 1: momentum (1 if momentum scrolling)
             let scroll_mods = if is_pixel { 1 } else { 0 };
+            // Touchpad deltas are small; Ghostty's GTK runtime multiplies them by 10.
+            let factor = if is_pixel { 10.0 } else { 1.0 };
+            let factor = if crate::preferences::invert_scroll() { -factor } else { factor };
+            let (dx, dy) = (dx * factor, dy * factor);
 
             unsafe {
                 ffi::ghostty_surface_mouse_scroll(surface, dx, dy, scroll_mods);
