@@ -122,14 +122,51 @@ pub fn append(content: &gtk4::Box, state: &AppStateRef, dialog: &gtk4::Dialog) {
     status.set_hexpand(true);
     status.set_xalign(0.0);
     let refresh = gtk4::Button::with_label("Refresh");
+    let details = gtk4::LinkButton::with_label(
+        "https://github.com/manaflow-ai/cmux/blob/main/docs/local-tmux.md",
+        "Details",
+    );
     header.append(&status);
     header.append(&refresh);
+    header.append(&details);
     content.append(&header);
-    let rows = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
-    content.append(&rows);
     let error = gtk4::Label::new(None);
     error.set_wrap(true);
     error.set_xalign(0.0);
+
+    // Upstream order: header, Start Persistent Session, status/error, then one row per session.
+    let start_title = gtk4::Label::new(Some("Start Persistent Session"));
+    start_title.set_xalign(0.0);
+    content.append(&start_title);
+    let start_help = gtk4::Label::new(Some("Creates a named local-tmux session in the selected workspace directory and attaches it to cmux."));
+    start_help.set_wrap(true);
+    start_help.set_xalign(0.0);
+    content.append(&start_help);
+    let start_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    let name = gtk4::Entry::builder()
+        .placeholder_text("Session name")
+        .hexpand(true)
+        .build();
+    let start = gtk4::Button::with_label("Start");
+    start.set_sensitive(false);
+    name.connect_changed({
+        let start = start.clone();
+        move |name| start.set_sensitive(!name.text().trim().is_empty())
+    });
+    start.connect_clicked({
+        let (state, dialog, error, name) =
+            (state.clone(), dialog.clone(), error.clone(), name.clone());
+        move |_| match run_in_new_tab(&state, "start", name.text().trim()) {
+            Ok(()) => dialog.close(),
+            Err(message) => error.set_text(message),
+        }
+    });
+    start_row.append(&name);
+    start_row.append(&start);
+    content.append(&start_row);
+    content.append(&error);
+    let rows = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+    content.append(&rows);
 
     let fill = {
         let (state, dialog, rows, status, error) = (
@@ -154,15 +191,24 @@ pub fn append(content: &gtk4::Box, state: &AppStateRef, dialog: &gtk4::Dialog) {
             });
             for session in sessions {
                 let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
-                let label = gtk4::Label::new(Some(&format!(
-                    "{}  —  {}  ({} attached)",
-                    session.session_name,
-                    session.cwd.as_deref().unwrap_or(""),
-                    session.clients.unwrap_or(0)
-                )));
-                label.set_hexpand(true);
+                let text = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+                text.set_hexpand(true);
+                let title = gtk4::Label::new(Some(&session.session_name));
+                title.set_xalign(0.0);
+                // Upstream subtitle: "Unmanaged · Clients: N · cwd" (no registry: always unmanaged).
+                let mut parts = vec!["Unmanaged".to_owned()];
+                if let Some(clients) = session.clients.filter(|clients| *clients > 0) {
+                    parts.push(format!("Clients: {clients}"));
+                }
+                if let Some(cwd) = session.cwd.as_deref().filter(|cwd| !cwd.is_empty()) {
+                    parts.push(cwd.to_owned());
+                }
+                let label = gtk4::Label::new(Some(&parts.join(" · ")));
                 label.set_xalign(0.0);
                 label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+                label.add_css_class("dim-label");
+                text.append(&title);
+                text.append(&label);
                 let attach = gtk4::Button::with_label("Attach");
                 attach.connect_clicked({
                     let (state, dialog, error) = (state.clone(), dialog.clone(), error.clone());
@@ -178,7 +224,7 @@ pub fn append(content: &gtk4::Box, state: &AppStateRef, dialog: &gtk4::Dialog) {
                         }
                     }
                 });
-                row.append(&label);
+                row.append(&text);
                 row.append(&attach);
                 rows.append(&row);
             }
@@ -186,30 +232,4 @@ pub fn append(content: &gtk4::Box, state: &AppStateRef, dialog: &gtk4::Dialog) {
     };
     fill();
     refresh.connect_clicked(move |_| fill());
-
-    let start_title = gtk4::Label::new(Some("Start Persistent Session"));
-    start_title.set_xalign(0.0);
-    content.append(&start_title);
-    let start_help = gtk4::Label::new(Some("Creates a named local-tmux session in the selected workspace directory and attaches it to cmux."));
-    start_help.set_wrap(true);
-    start_help.set_xalign(0.0);
-    content.append(&start_help);
-    let start_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
-    let name = gtk4::Entry::builder()
-        .placeholder_text("Session name")
-        .hexpand(true)
-        .build();
-    let start = gtk4::Button::with_label("Start");
-    start.connect_clicked({
-        let (state, dialog, error, name) =
-            (state.clone(), dialog.clone(), error.clone(), name.clone());
-        move |_| match run_in_new_tab(&state, "start", name.text().trim()) {
-            Ok(()) => dialog.close(),
-            Err(message) => error.set_text(message),
-        }
-    });
-    start_row.append(&name);
-    start_row.append(&start);
-    content.append(&start_row);
-    content.append(&error);
 }
