@@ -105,6 +105,50 @@ fn run_in_new_tab(state: &AppStateRef, action: &str, name: &str) -> Result<(), &
         .ok_or("Local sessions need a local workspace.")
 }
 
+/// First `<base>-N` not taken, `base` reduced to the session-name alphabet.
+fn free_name(base: &str, taken: &[String]) -> String {
+    let base: String = base
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '-' })
+        .take(100)
+        .collect();
+    let base = if base.is_empty() { "session".to_owned() } else { base };
+    (1..)
+        .map(|n| format!("{base}-{n}"))
+        .find(|name| !taken.contains(name))
+        .expect("unbounded")
+}
+
+/// Terminal context menu (a cmux-gtk addition): split right into a new local-tmux session
+/// named after the workspace directory, so the pane survives cmux quitting.
+pub fn split_right_session(state: &AppStateRef) {
+    let Some(cli) = cli() else {
+        return;
+    };
+    let base = {
+        let state = state.borrow();
+        state
+            .workspaces
+            .get(state.active_index)
+            .and_then(|workspace| workspace.working_directory.clone())
+            .and_then(|directory| Some(directory.file_name()?.to_string_lossy().into_owned()))
+            .unwrap_or_default()
+    };
+    let taken: Vec<String> = sessions()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|session| session.session_name)
+        .collect();
+    let command = format!(
+        "{} local-tmux start {}",
+        crate::local_tmux::shell_quote(&cli),
+        crate::local_tmux::shell_quote(&free_name(&base, &taken))
+    );
+    if let Some(engine) = state.borrow_mut().active_split_engine_mut() {
+        engine.split_right_command(&command);
+    }
+}
+
 /// Append the section to Preferences; actions close the dialog so the new tab is visible.
 pub fn append(content: &gtk4::Box, state: &AppStateRef, dialog: &gtk4::Dialog) {
     let title = gtk4::Label::new(None);
@@ -286,14 +330,9 @@ pub fn active_is_bound(state: &AppStateRef) -> bool {
     active_bound(state).is_some()
 }
 
-/// Terminal context menu (a cmux-gtk addition; upstream closes sessions only from the CLI):
-/// after confirmation, kill the bound session on the same server incarnation, then forget the
-/// surface's attach and close its tab, which only existed to show that session.
-pub fn close_active_session(state: &AppStateRef, window: &gtk4::ApplicationWindow) {
-    let Some((uuid, session)) = active_bound(state) else {
-        return;
-    };
-    let name = tmux_command(&session)
+/// The session's current name (it can change in tmux), or its id when tmux cannot say.
+fn session_name(session: &BoundSession) -> String {
+    tmux_command(session)
         .args([
             "display-message",
             "-p",
@@ -305,7 +344,71 @@ pub fn close_active_session(state: &AppStateRef, window: &gtk4::ApplicationWindo
         .ok()
         .filter(|output| output.status.success())
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-        .unwrap_or_else(|| session.session_id.clone());
+        .unwrap_or_else(|| session.session_id.clone())
+}
+
+/// Run a tmux command on the bound session only if its server is the same incarnation.
+fn guarded(session: &BoundSession, words: &[&str]) -> bool {
+    let action = words
+        .iter()
+        .map(|word| crate::local_tmux::shell_quote(word))
+        .collect::<Vec<_>>()
+        .join(" ");
+    tmux_command(session)
+        .args(["if-shell", "-F", &session.condition])
+        .args([action.as_str(), crate::local_tmux::MISMATCH_COMMAND])
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+/// Terminal context menu (a cmux-gtk addition): rename the bound session. The resume binding
+/// targets the immutable session id, so it keeps working under the new name.
+pub fn rename_active_session(state: &AppStateRef, window: &gtk4::ApplicationWindow) {
+    let Some((_, session)) = active_bound(state) else {
+        return;
+    };
+    let current = session_name(&session);
+    let dialog = gtk4::MessageDialog::builder()
+        .text("Rename tmux Session")
+        .secondary_text("Letters, numbers, underscore or dash.")
+        .modal(true)
+        .transient_for(window)
+        .build();
+    let entry = gtk4::Entry::builder().text(current.as_str()).activates_default(true).build();
+    if let Ok(area) = dialog.message_area().downcast::<gtk4::Box>() {
+        area.append(&entry);
+    }
+    dialog.add_button("Cancel", gtk4::ResponseType::Cancel);
+    dialog.add_button("Rename", gtk4::ResponseType::Accept);
+    dialog.set_default_response(gtk4::ResponseType::Accept);
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk4::ResponseType::Accept {
+            let name = entry.text().trim().to_owned();
+            if name != current {
+                let renamed = crate::local_tmux::valid_name(&name)
+                    && guarded(&session, &["rename-session", "-t", &session.session_id, &name]);
+                crate::diagnostics::event(format_args!("local_tmux.rename outcome={renamed}"));
+                if !renamed {
+                    dialog.set_secondary_text(Some(
+                        "Not renamed: use letters, numbers, underscore or dash, and a name no other session has.",
+                    ));
+                    return;
+                }
+            }
+        }
+        dialog.close();
+    });
+    dialog.present();
+}
+
+/// Terminal context menu (a cmux-gtk addition; upstream closes sessions only from the CLI):
+/// after confirmation, kill the bound session on the same server incarnation, then forget the
+/// surface's attach and close its tab, which only existed to show that session.
+pub fn close_active_session(state: &AppStateRef, window: &gtk4::ApplicationWindow) {
+    let Some((uuid, session)) = active_bound(state) else {
+        return;
+    };
+    let name = session_name(&session);
     let dialog = gtk4::MessageDialog::builder()
         .text(format!("Kill tmux Session “{name}”?"))
         .secondary_text("The local-tmux session and every process running in it will be terminated. This cannot be undone.")
@@ -323,15 +426,7 @@ pub fn close_active_session(state: &AppStateRef, window: &gtk4::ApplicationWindo
             if response != gtk4::ResponseType::Accept {
                 return;
             }
-            let action = ["kill-session", "-t", session.session_id.as_str()]
-                .map(crate::local_tmux::shell_quote)
-                .join(" ");
-            let killed = tmux_command(&session)
-                .args(["if-shell", "-F", &session.condition])
-                .args([action.as_str(), crate::local_tmux::MISMATCH_COMMAND])
-                .stdin(std::process::Stdio::null())
-                .output()
-                .is_ok_and(|output| output.status.success());
+            let killed = guarded(&session, &["kill-session", "-t", &session.session_id]);
             crate::diagnostics::event(format_args!("local_tmux.close outcome={killed}"));
             {
                 let state = state.borrow();
@@ -355,6 +450,16 @@ pub fn close_active_session(state: &AppStateRef, window: &gtk4::ApplicationWindo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Automatic names come from the directory, reduced to tmux-safe characters, first free number.
+    #[test]
+    fn free_name_skips_taken_numbers() {
+        let taken = vec!["Continuum-1".to_owned(), "Continuum-3".to_owned()];
+        assert_eq!(free_name("Continuum", &taken), "Continuum-2");
+        assert_eq!(free_name("mon dossier.é", &[]), "mon-dossier---1");
+        assert_eq!(free_name("", &[]), "session-1");
+        assert!(crate::local_tmux::valid_name(&free_name(&"x".repeat(300), &[])));
+    }
 
     /// The context-menu kill reaches the bound session on its own server incarnation only.
     #[test]
@@ -384,15 +489,11 @@ mod tests {
         .unwrap();
         let session = bound_session(&binding).expect("generated attach is bound");
         let kill = |session: &BoundSession| {
-            let action = ["kill-session", "-t", session.session_id.as_str()]
-                .map(crate::local_tmux::shell_quote)
-                .join(" ");
-            tmux_command(session)
-                .args(["if-shell", "-F", &session.condition])
-                .args([action.as_str(), crate::local_tmux::MISMATCH_COMMAND])
-                .output()
-                .unwrap()
+            guarded(session, &["kill-session", "-t", &session.session_id])
         };
+        // Renaming keeps the id the binding targets.
+        assert!(guarded(&session, &["rename-session", "-t", "$0", "r"]));
+        assert_eq!(session_name(&session), "r");
         // A restarted server reusing `$0` has another identity: nothing is killed.
         run(&[
             "set-option",
@@ -400,11 +501,11 @@ mod tests {
             crate::local_tmux::SERVER_OPTION,
             "11111111-1111-1111-1111-111111111111",
         ]);
-        assert!(!kill(&session).status.success());
-        assert!(run(&["has-session", "-t", "k"]).status.success());
+        assert!(!kill(&session));
+        assert!(run(&["has-session", "-t", "r"]).status.success());
         run(&["set-option", "-s", crate::local_tmux::SERVER_OPTION, server]);
-        assert!(kill(&session).status.success());
-        assert!(!run(&["has-session", "-t", "k"]).status.success());
+        assert!(kill(&session));
+        assert!(!run(&["has-session", "-t", "r"]).status.success());
         run(&["kill-server"]);
         let _ = std::fs::remove_dir_all(dir);
     }
