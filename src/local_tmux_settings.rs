@@ -233,3 +233,173 @@ pub fn append(content: &gtk4::Box, state: &AppStateRef, dialog: &gtk4::Dialog) {
     fill();
     refresh.connect_clicked(move |_| fill());
 }
+
+/// Tmux path, socket, server guard and session id of a surface bound by `cmux local-tmux`.
+struct BoundSession {
+    tmux: String,
+    socket: String,
+    condition: String,
+    session_id: String,
+}
+
+fn bound_session(binding: &crate::resume::ResumeBinding) -> Option<BoundSession> {
+    if !crate::resume_policy::local_tmux_attach(binding) {
+        return None;
+    }
+    let words = crate::resume_command::literal_arguments(&binding.command)?;
+    Some(BoundSession {
+        tmux: words.get(3)?.clone(),
+        socket: words.get(5)?.clone(),
+        condition: words.get(8)?.clone(),
+        session_id: binding.checkpoint_id.clone()?,
+    })
+}
+
+/// tmux on the session's socket, without the app's cmux identity or an outer `TMUX`.
+fn tmux_command(session: &BoundSession) -> std::process::Command {
+    let mut command = std::process::Command::new(&session.tmux);
+    command.env_remove("TMUX");
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("CMUX") {
+            command.env_remove(key);
+        }
+    }
+    command
+        .args(["-S", &session.socket])
+        .stdin(std::process::Stdio::null());
+    command
+}
+
+/// The active terminal and its local-tmux session, if it is bound to one.
+fn active_bound(state: &AppStateRef) -> Option<(String, BoundSession)> {
+    let state = state.borrow();
+    let engine = state.split_engines.get(state.active_index)?;
+    let uuid = engine.active_pane_uuid()?;
+    let binding = engine
+        .resume_action(&uuid, &crate::resume::ResumeAction::Show)
+        .ok()??;
+    Some((uuid, bound_session(&binding)?))
+}
+
+/// Whether the terminal context menu should offer to close a local-tmux session.
+pub fn active_is_bound(state: &AppStateRef) -> bool {
+    active_bound(state).is_some()
+}
+
+/// Terminal context menu (a cmux-gtk addition; upstream closes sessions only from the CLI):
+/// after confirmation, kill the bound session on the same server incarnation, then forget the
+/// surface's attach so later launches do not retry a session that no longer exists.
+pub fn close_active_session(state: &AppStateRef, window: &gtk4::ApplicationWindow) {
+    let Some((uuid, session)) = active_bound(state) else {
+        return;
+    };
+    let name = tmux_command(&session)
+        .args([
+            "display-message",
+            "-p",
+            "-t",
+            &session.session_id,
+            "#{session_name}",
+        ])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .unwrap_or_else(|| session.session_id.clone());
+    let dialog = gtk4::MessageDialog::builder()
+        .text(format!("Kill tmux Session “{name}”?"))
+        .secondary_text("The local-tmux session and every process running in it will be terminated. This cannot be undone.")
+        .modal(true)
+        .transient_for(window)
+        .build();
+    dialog.add_button("Keep Session", gtk4::ResponseType::Cancel);
+    dialog.add_button("Kill Session", gtk4::ResponseType::Accept);
+    dialog.set_default_response(gtk4::ResponseType::Cancel);
+    dialog.connect_response({
+        let state = state.clone();
+        move |dialog, response| {
+            dialog.close();
+            if response != gtk4::ResponseType::Accept {
+                return;
+            }
+            let action = ["kill-session", "-t", session.session_id.as_str()]
+                .map(crate::local_tmux::shell_quote)
+                .join(" ");
+            let killed = tmux_command(&session)
+                .args(["if-shell", "-F", &session.condition])
+                .args([action.as_str(), crate::local_tmux::MISMATCH_COMMAND])
+                .stdin(std::process::Stdio::null())
+                .output()
+                .is_ok_and(|output| output.status.success());
+            crate::diagnostics::event(format_args!("local_tmux.close outcome={killed}"));
+            let state = state.borrow();
+            if let Some(engine) = state.split_engines.get(state.active_index) {
+                let clear = crate::resume::ResumeAction::Clear {
+                    checkpoint_id: Some(session.session_id.clone()),
+                };
+                if engine.resume_action(&uuid, &clear).is_ok() {
+                    state.trigger_session_save();
+                }
+            }
+        }
+    });
+    dialog.present();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The context-menu kill reaches the bound session on its own server incarnation only.
+    #[test]
+    fn kill_targets_bound_session_on_same_server() {
+        let Some(tmux) = cmux_platform::paths::find_command_on_path("tmux") else {
+            return;
+        };
+        let tmux = tmux.to_string_lossy().into_owned();
+        let dir = std::path::PathBuf::from(format!("/tmp/cmux-lt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("server.sock").to_string_lossy().into_owned();
+        let run = |args: &[&str]| {
+            std::process::Command::new(&tmux)
+                .env_remove("TMUX")
+                .args(["-f", "/dev/null", "-S", &socket])
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        let server = "0b8f3a52-8c1e-4a3e-9f0e-2d5c6b7a8e91";
+        run(&["new-session", "-d", "-s", "k"]);
+        run(&["set-option", "-s", crate::local_tmux::SERVER_OPTION, server]);
+        let binding: crate::resume::ResumeBinding = serde_json::from_value(serde_json::json!({
+            "kind": "local-tmux", "checkpoint_id": "$0", "cwd": "/tmp",
+            "command": crate::local_tmux::attach_command(&tmux, &socket, server, "$0"),
+        }))
+        .unwrap();
+        let session = bound_session(&binding).expect("generated attach is bound");
+        let kill = |session: &BoundSession| {
+            let action = ["kill-session", "-t", session.session_id.as_str()]
+                .map(crate::local_tmux::shell_quote)
+                .join(" ");
+            tmux_command(session)
+                .args(["if-shell", "-F", &session.condition])
+                .args([action.as_str(), crate::local_tmux::MISMATCH_COMMAND])
+                .output()
+                .unwrap()
+        };
+        // A restarted server reusing `$0` has another identity: nothing is killed.
+        run(&[
+            "set-option",
+            "-s",
+            crate::local_tmux::SERVER_OPTION,
+            "11111111-1111-1111-1111-111111111111",
+        ]);
+        assert!(!kill(&session).status.success());
+        assert!(run(&["has-session", "-t", "k"]).status.success());
+        run(&["set-option", "-s", crate::local_tmux::SERVER_OPTION, server]);
+        assert!(kill(&session).status.success());
+        assert!(!run(&["has-session", "-t", "k"]).status.success());
+        run(&["kill-server"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

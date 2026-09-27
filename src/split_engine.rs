@@ -712,6 +712,7 @@ fn attach_terminal_context_menu(gl_area: &gtk4::GLArea) {
                 return;
             };
             popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            let _ = popover.activate_action("win.context-menu-refresh", None);
             popover.popup();
         }
     });
