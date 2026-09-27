@@ -14,6 +14,46 @@ fn optional_target(params: &serde_json::Value) -> Result<Option<String>, &'stati
     }
 }
 
+/// Publish `agent.hook.<HookEventName>` with operational identifiers only (upstream privacy rules:
+/// no prompt or tool input). `surface_id` is the exact surface the hook ran in.
+fn agent_hook_event(params: &serde_json::Value) -> Result<(), &'static str> {
+    let text = |key: &str| -> Result<Option<String>, &'static str> {
+        match params.get(key) {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(serde_json::Value::String(value))
+                if value.len() <= 1024 && !value.chars().any(char::is_control) =>
+            {
+                Ok(Some(value.clone()))
+            }
+            Some(_) => Err("hook fields must be short strings"),
+        }
+    };
+    let name = text("hook_event_name")?
+        .filter(|name| {
+            name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        })
+        .ok_or("hook_event_name must be an identifier")?;
+    let source = text("source")?.ok_or("source is required")?;
+    let surface = text("surface_id")?
+        .map(|id| uuid::Uuid::parse_str(&id).map(|id| id.to_string()))
+        .transpose()
+        .map_err(|_| "surface_id must be a UUID")?;
+    let payload = serde_json::json!({
+        "session_id": text("session_id")?, "hook_event_name": name, "_source": source,
+        "surface_id": surface, "tool_name": text("tool_name")?, "phase": "received",
+    });
+    crate::events::publish(
+        &format!("agent.hook.{name}"),
+        &source,
+        crate::events::Scope {
+            surface,
+            ..Default::default()
+        },
+        payload,
+    );
+    Ok(())
+}
+
 /// Parse a JSON-RPC line and dispatch to the appropriate SocketCommand.
 /// Consumes raw input and releases unused JSON fields before awaiting execution.
 /// Returns encoded JSON and its validated operation identity for transport diagnostics.
@@ -83,6 +123,17 @@ async fn dispatch_request(
         params = serde_json::json!({});
     } else if !params.is_object() {
         return err(req_id, "invalid_params", "params must be an object or null");
+    }
+
+    // Agent hook bridges report here; the event needs no GTK state, only the process-wide bus.
+    if method == "events.agent_hook" {
+        return match agent_hook_event(&params) {
+            Ok(()) => {
+                operation.finish(true);
+                ok(req_id, serde_json::json!({"published": true}))
+            }
+            Err(message) => err(req_id, "invalid_params", message),
+        };
     }
 
     if method == "system.diagnostics" {

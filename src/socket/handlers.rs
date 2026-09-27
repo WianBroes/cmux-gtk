@@ -340,6 +340,8 @@ fn handle_socket_command_traced(
                 "sidebar.clear_status",
                 "sidebar.set_progress",
                 "sidebar.clear_progress",
+                "events.agent_hook",
+                "events.stream",
                 "system.diagnostics",
                 "workspace.list",
                 "workspace.current",
