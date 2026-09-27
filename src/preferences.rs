@@ -1,5 +1,5 @@
 use gtk4::prelude::*;
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -98,7 +98,7 @@ pub fn attach_sidebar_resize(paned: &gtk4::Paned) {
         sidebar.set_size_request(SIDEBAR_WIDTH_MIN as i32, -1);
     }
     paned.set_position(sidebar_width() as i32);
-    let pending: Rc<RefCell<Option<gtk4::glib::SourceId>>> = Rc::new(RefCell::new(None));
+    let scheduled = Rc::new(Cell::new(false));
     paned.connect_position_notify(move |paned| {
         let position = paned.position() as f64;
         let available = paned.width() as f64;
@@ -113,17 +113,17 @@ pub fn attach_sidebar_resize(paned: &gtk4::Paned) {
             return;
         }
         SIDEBAR_WIDTH.store(clamp_sidebar_width(position).to_bits(), Ordering::Relaxed);
-        // Write once the drag settles, not on every pixel.
-        if let Some(previous) = pending.borrow_mut().take() {
-            previous.remove();
+        // Write once the drag settles, not on every pixel. The flag replaces a previous timer
+        // instead of removing it: `SourceId::remove` panics on a source that already fired.
+        if scheduled.replace(true) {
+            return;
         }
         let paned = paned.clone();
-        *pending.borrow_mut() = Some(gtk4::glib::timeout_add_local_once(
-            std::time::Duration::from_millis(400),
-            move || {
-                let _ = save_sidebar_width(paned.position() as f64);
-            },
-        ));
+        let scheduled = scheduled.clone();
+        gtk4::glib::timeout_add_local_once(std::time::Duration::from_millis(400), move || {
+            scheduled.set(false);
+            let _ = save_sidebar_width(paned.position() as f64);
+        });
     });
 }
 
