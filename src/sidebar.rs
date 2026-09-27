@@ -256,12 +256,14 @@ pub fn rebuild_grouped_sidebar(state: &crate::app_state::AppStateRef) {
 /// so it doesn't scroll away.
 ///
 /// Per UI-SPEC:
-/// - Width: 160px (set_size_request(160, -1))
+/// - Width: dragged on the divider like upstream (240 minimum, 600 or a third of the window at
+///   most), remembered in `preferences.json`; `set_size_request(160, -1)` below is only the
+///   scroll area's own floor
 /// - Background: #242424 (applied via global CssProvider in main.rs)
 /// - Row height: 36px min-height (CSS)
 /// - Row padding: 8px top/bottom, 16px left/right
-/// - Active row: #5b8dd9 background, #ffffff text, font-weight 600
-/// - Inactive row: transparent bg, #cccccc text, font-weight 400
+/// - Active row: darker accent #3a63a8 background, #ffffff name, details in #e3ecfa
+/// - Inactive row: transparent bg, #cccccc name, details in #a0a0a0
 /// - Hover (inactive): #2e2e2e
 pub fn build_sidebar() -> (gtk4::Box, gtk4::ScrolledWindow, gtk4::ListBox) {
     let list_box = gtk4::ListBox::new();

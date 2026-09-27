@@ -1,6 +1,8 @@
 use gtk4::prelude::*;
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::LazyLock;
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -12,10 +14,30 @@ struct Preferences {
     auto_resume_agents: bool,
     #[serde(default = "enabled")]
     desktop_notifications: bool,
+    #[serde(default = "default_sidebar_width")]
+    sidebar_width: f64,
 }
 
 fn enabled() -> bool {
     true
+}
+
+/// Sidebar width bounds, from upstream's `SessionPersistencePolicy`: 240 points by default and as
+/// its own minimum, 600 at most (the divider also stops at a third of the window).
+const SIDEBAR_WIDTH_MIN: f64 = 240.0;
+const SIDEBAR_WIDTH_MAX: f64 = 600.0;
+
+fn default_sidebar_width() -> f64 {
+    SIDEBAR_WIDTH_MIN
+}
+
+/// Clamp a stored or dragged width, falling back to the default for a broken value.
+fn clamp_sidebar_width(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX)
+    } else {
+        SIDEBAR_WIDTH_MIN
+    }
 }
 
 /// Scroll inversion read by every terminal's scroll handler; loaded once, updated on Apply.
@@ -44,6 +66,65 @@ static DESKTOP_NOTIFICATIONS: LazyLock<AtomicBool> = LazyLock::new(|| {
 /// Whether bells and agent messages also raise a desktop notification; in-app attention is unaffected.
 pub fn desktop_notifications() -> bool {
     DESKTOP_NOTIFICATIONS.load(Ordering::Relaxed)
+}
+
+/// Sidebar width in points; dragged on the divider, remembered in `preferences.json`.
+static SIDEBAR_WIDTH: LazyLock<AtomicU64> = LazyLock::new(|| {
+    let stored = read(&path()).map_or(SIDEBAR_WIDTH_MIN, |prefs| prefs.sidebar_width);
+    AtomicU64::new(clamp_sidebar_width(stored).to_bits())
+});
+
+/// Current sidebar width in points, already clamped.
+pub fn sidebar_width() -> f64 {
+    f64::from_bits(SIDEBAR_WIDTH.load(Ordering::Relaxed))
+}
+
+/// Remember a dragged width: live at once, on disk for the next launch.
+pub fn save_sidebar_width(width: f64) -> Result<(), String> {
+    SIDEBAR_WIDTH.store(clamp_sidebar_width(width).to_bits(), Ordering::Relaxed);
+    save(
+        &path(),
+        saved_font_size().unwrap_or(12.0),
+        invert_scroll(),
+        auto_resume_agents(),
+        desktop_notifications(),
+    )
+}
+
+/// Make the sidebar divider behave like upstream's: drag to resize, width remembered, never
+/// narrower than the minimum and never wider than a third of the window (`ContentView.swift`).
+pub fn attach_sidebar_resize(paned: &gtk4::Paned) {
+    if let Some(sidebar) = paned.start_child() {
+        sidebar.set_size_request(SIDEBAR_WIDTH_MIN as i32, -1);
+    }
+    paned.set_position(sidebar_width() as i32);
+    let pending: Rc<RefCell<Option<gtk4::glib::SourceId>>> = Rc::new(RefCell::new(None));
+    paned.connect_position_notify(move |paned| {
+        let position = paned.position() as f64;
+        let available = paned.width() as f64;
+        if available > 1.0 {
+            let cap = (available / 3.0).clamp(SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX);
+            if position > cap {
+                paned.set_position(cap.round() as i32);
+                return;
+            }
+        }
+        if position.to_bits() == SIDEBAR_WIDTH.load(Ordering::Relaxed) {
+            return;
+        }
+        SIDEBAR_WIDTH.store(clamp_sidebar_width(position).to_bits(), Ordering::Relaxed);
+        // Write once the drag settles, not on every pixel.
+        if let Some(previous) = pending.borrow_mut().take() {
+            previous.remove();
+        }
+        let paned = paned.clone();
+        *pending.borrow_mut() = Some(gtk4::glib::timeout_add_local_once(
+            std::time::Duration::from_millis(400),
+            move || {
+                let _ = save_sidebar_width(paned.position() as f64);
+            },
+        ));
+    });
 }
 
 /// Test-only: pin the gate, so a test of the delivery itself never reads the user's preferences file.
@@ -95,6 +176,7 @@ fn save(
         invert_scroll,
         auto_resume_agents,
         desktop_notifications,
+        sidebar_width: sidebar_width(),
     })
     .map_err(|error| error.to_string())?;
     cmux_platform::filesystem::atomic_write(path, &contents).map_err(|error| error.to_string())
@@ -244,6 +326,29 @@ pub fn show(parent: &gtk4::ApplicationWindow, state: &crate::app_state::AppState
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    /// Verify a stored sidebar width is bounded like upstream (240…600) whatever the file holds.
+    fn sidebar_width_is_clamped_on_read() {
+        let dir = std::env::temp_dir().join(format!("cmux-width-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("preferences.json");
+        // `save` is also what creates the preferences directory.
+        save(&path, 14.0, false, true, true).unwrap();
+        for (stored, expected) in [(900.0, 600.0), (10.0, 240.0), (320.0, 320.0)] {
+            std::fs::write(
+                &path,
+                format!(r#"{{"font_size": 14.0, "sidebar_width": {stored}}}"#),
+            )
+            .unwrap();
+            assert_eq!(
+                clamp_sidebar_width(read(&path).unwrap().sidebar_width),
+                expected
+            );
+        }
+        assert_eq!(clamp_sidebar_width(f64::NAN), SIDEBAR_WIDTH_MIN);
+        std::fs::write(&path, r#"{"font_size": 14.0}"#).unwrap();
+        assert_eq!(read(&path).unwrap().sidebar_width, SIDEBAR_WIDTH_MIN);
+    }
 
     #[test]
     /// Verify stored sizes round-trip and unsupported values are rejected.

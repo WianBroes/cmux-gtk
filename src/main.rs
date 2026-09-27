@@ -68,8 +68,14 @@ window { background-color: #1a1a1a; }
 .workspace-list row { min-height: 36px; padding: 8px 16px; }
 .workspace-list row label { color: #cccccc; font-size: 14px; font-weight: 400; }
 .workspace-list row:hover:not(.active-workspace) { background-color: #2e2e2e; }
-.workspace-list row.active-workspace { background-color: #5b8dd9; }
+.workspace-list row.active-workspace { background-color: #3a63a8; }
 .workspace-list row.active-workspace label { color: #ffffff; font-weight: 600; }
+/* Text hierarchy: the workspace name stands out, the detail lines stay quiet (upstream: title
+   `primaryText`, details `secondary(0.8)`). The generic `row label` rule below overrode the
+   theme's `.dim-label`, so every line came out at the same level — and white-bold on the active
+   row, where white on #5b8dd9 is only 3.4:1 and #999999 only 1.2:1. */
+.workspace-list row .dim-label { color: #a0a0a0; }
+.workspace-list row.active-workspace .dim-label { color: #e3ecfa; font-weight: 400; }
 .workspace-list row.workspace-group { min-height: 28px; padding: 2px 6px; background: #202020; }
 .workspace-list row.workspace-group button { padding: 3px 6px; }
 .workspace-list .group-unread { background: #5b8dd9; color: #ffffff; border-radius: 8px; padding: 0 5px; }
@@ -102,7 +108,6 @@ paned > separator:hover { background-color: #5b8dd9; }
 }
 .workspace-list row .workspace-row-text .workspace-notification {
     font-size: 12px;
-    color: #999999;
 }
 /* Phase 4: SSH connection state subtitle (SSH-01, SSH-04) */
 .connection-state {
@@ -381,9 +386,12 @@ fn build_ui(
     let stack = gtk4::Stack::new();
     stack.set_transition_type(gtk4::StackTransitionType::None);
 
-    let hbox = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
-    hbox.append(&sidebar_box);
-    hbox.append(&stack);
+    // Sidebar and content share a draggable divider, like upstream's resizable sidebar.
+    let split = gtk4::Paned::new(gtk4::Orientation::Horizontal);
+    split.set_wide_handle(true);
+    split.set_start_child(Some(&sidebar_box));
+    split.set_end_child(Some(&stack));
+    crate::preferences::attach_sidebar_resize(&split);
     // Make the stack expand to fill remaining width.
     stack.set_hexpand(true);
     stack.set_vexpand(true);
@@ -395,7 +403,7 @@ fn build_ui(
         window.set_titlebar(Some(&header));
     }
 
-    window.set_child(Some(&hbox));
+    window.set_child(Some(&split));
 
     // 4. Create AppState and initial workspace
     let state = crate::app_state::AppState::new(
