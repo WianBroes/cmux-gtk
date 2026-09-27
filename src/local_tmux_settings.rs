@@ -37,6 +37,46 @@ fn sessions() -> Option<Vec<Session>> {
     Some(listing.sessions)
 }
 
+#[derive(serde::Deserialize)]
+struct Status {
+    clients: u32,
+    attach_command: Option<String>,
+}
+
+/// Like upstream attach: when a surface of the active workspace is already bound to this
+/// session's guarded attach and a client is attached, focus it instead of adding another client.
+fn focus_existing(state: &AppStateRef, name: &str) -> bool {
+    let Some(status) = cli()
+        .and_then(|cli| {
+            std::process::Command::new(cli)
+                .args(["local-tmux", "status", name, "--json"])
+                .stdin(std::process::Stdio::null())
+                .output()
+                .ok()
+        })
+        .filter(|output| output.status.success())
+        .and_then(|output| serde_json::from_slice::<Status>(&output.stdout).ok())
+    else {
+        return false;
+    };
+    let Some(expected) = status.attach_command.filter(|_| status.clients > 0) else {
+        return false;
+    };
+    let mut state = state.borrow_mut();
+    let index = state.active_index;
+    let Some(engine) = state.split_engines.get_mut(index) else {
+        return false;
+    };
+    let bound = engine.all_panes().into_iter().find_map(|(uuid, _, _)| {
+        let uuid = uuid.to_string();
+        let binding = engine
+            .resume_action(&uuid, &crate::resume::ResumeAction::Show)
+            .ok()??;
+        (binding.command == expected).then_some(uuid)
+    });
+    bound.is_some_and(|uuid| engine.focus_surface(&uuid))
+}
+
 /// Run `cmux local-tmux <action> <name>` in a new tab of the active workspace, where the CLI
 /// records the guarded attach as that tab's resume binding.
 fn run_in_new_tab(state: &AppStateRef, action: &str, name: &str) -> Result<(), &'static str> {
@@ -127,9 +167,15 @@ pub fn append(content: &gtk4::Box, state: &AppStateRef, dialog: &gtk4::Dialog) {
                 attach.connect_clicked({
                     let (state, dialog, error) = (state.clone(), dialog.clone(), error.clone());
                     let name = session.session_name.clone();
-                    move |_| match run_in_new_tab(&state, "attach", &name) {
-                        Ok(()) => dialog.close(),
-                        Err(message) => error.set_text(message),
+                    move |_| {
+                        if focus_existing(&state, &name) {
+                            dialog.close();
+                            return;
+                        }
+                        match run_in_new_tab(&state, "attach", &name) {
+                            Ok(()) => dialog.close(),
+                            Err(message) => error.set_text(message),
+                        }
                     }
                 });
                 row.append(&label);
