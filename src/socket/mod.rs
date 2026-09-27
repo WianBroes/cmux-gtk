@@ -124,6 +124,10 @@ async fn handle_connection(
                 break;
             }
         };
+        if let Some(request) = events_request(&line) {
+            serve_events(request, &mut writer).await;
+            return;
+        }
         let response = tokio::select! {
             biased;
             // Preserve admission of a complete request even if its sender has already closed.
@@ -144,6 +148,69 @@ async fn handle_connection(
                 }),
             );
             break;
+        }
+    }
+}
+
+/// An `events.stream` request, which takes over its connection instead of being dispatched.
+fn events_request(line: &str) -> Option<serde_json::Value> {
+    // Cheap guard before parsing every ordinary request a second time.
+    if !line.contains("events.stream") {
+        return None;
+    }
+    let request: serde_json::Value = serde_json::from_str(line).ok()?;
+    (request.get("method")?.as_str()? == "events.stream").then_some(request)
+}
+
+/// Upstream `events.stream`: ack, retained replay after the cursor, then live events and
+/// heartbeats until the client disconnects or falls a full queue behind (`slow_consumer`).
+async fn serve_events(request: serde_json::Value, writer: &mut tokio::net::unix::OwnedWriteHalf) {
+    use tokio::sync::broadcast::error::RecvError;
+    let id = request.get("id").cloned().unwrap_or_default();
+    let params = request.get("params").cloned().unwrap_or_default();
+    let (after, filter, heartbeats) = match crate::events::parse_stream(&params) {
+        Ok(parsed) => parsed,
+        Err(message) => {
+            let error = response::err(id, "invalid_params", message).to_string();
+            let _ = framing::write_response(writer, &error).await;
+            return;
+        }
+    };
+    let (ack, replay, mut live) = crate::events::subscribe(after, &filter, heartbeats);
+    let subscription = ack["subscription_id"].clone();
+    if framing::write_response(writer, &ack.to_string()).await.is_err() {
+        return;
+    }
+    let mut last = ack["resume"]["after_seq"].as_u64().unwrap_or(0);
+    for event in replay {
+        last = event.seq;
+        if framing::write_response(writer, &event.line).await.is_err() {
+            return;
+        }
+    }
+    let period = std::time::Duration::from_secs(crate::events::HEARTBEAT_SECONDS);
+    let mut heartbeat = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+    loop {
+        let (line, close) = tokio::select! {
+            received = live.recv() => match received {
+                // Already sent during replay, or filtered out.
+                Ok(event) if event.seq <= last || !filter.matches(&event) => continue,
+                Ok(event) => {
+                    last = event.seq;
+                    heartbeat.reset();
+                    (event.line.clone(), false)
+                }
+                Err(RecvError::Lagged(_)) => {
+                    let error = response::err(id.clone(), "slow_consumer", "event subscriber fell behind");
+                    (error.to_string(), true)
+                }
+                Err(RecvError::Closed) => return,
+            },
+            _ = heartbeat.tick(), if heartbeats => (crate::events::heartbeat(&subscription), false),
+            _ = wait_for_disconnect(writer.as_ref()) => return,
+        };
+        if framing::write_response(writer, &line).await.is_err() || close {
+            return;
         }
     }
 }

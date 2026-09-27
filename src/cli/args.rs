@@ -228,6 +228,33 @@ pub enum Commands {
     Capabilities,
     /// Show process resources and diagnostic logging health
     Diagnostics,
+    /// Stream workspace, notification and agent-hook events as newline-delimited JSON
+    Events {
+        /// Start after this sequence number
+        #[arg(long, alias = "after-seq")]
+        after: Option<u64>,
+        /// Read the starting sequence from this file and update it after each event
+        #[arg(long)]
+        cursor_file: Option<std::path::PathBuf>,
+        /// Only this event name (repeatable)
+        #[arg(long)]
+        name: Vec<String>,
+        /// Only this category, such as workspace, notification or agent (repeatable)
+        #[arg(long)]
+        category: Vec<String>,
+        /// Reconnect forever and resume from the last received event
+        #[arg(long)]
+        reconnect: bool,
+        /// Exit after printing this many event frames
+        #[arg(long)]
+        limit: Option<u64>,
+        /// Hide the initial ack frame
+        #[arg(long)]
+        no_ack: bool,
+        /// Hide heartbeat frames
+        #[arg(long)]
+        no_heartbeat: bool,
+    },
     /// List all workspaces
     ListWorkspaces,
     /// Show the current workspace

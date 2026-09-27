@@ -9,6 +9,20 @@ use uuid::Uuid;
 
 type Error = (&'static str, &'static str);
 
+/// Publish a notification-store event; text fields stay local and only their lengths travel.
+fn publish(name: &str, workspace: Option<Uuid>, surface: Option<Uuid>, payload: Value) {
+    crate::events::publish(
+        name,
+        "notification.store",
+        crate::events::Scope {
+            workspace,
+            surface: surface.map(|id| id.to_string()),
+            ..Default::default()
+        },
+        payload,
+    );
+}
+
 /// Resolve explicit surface identity across workspaces and reject conflicting scope selectors.
 fn target(state: &AppState, scope: &Scope) -> Result<(usize, Uuid), Error> {
     let index = if let Some(surface) = scope.surface_id {
@@ -94,6 +108,12 @@ pub fn handle(state: &mut AppState, action: Action) -> Result<Value, Error> {
                     state.clear_workspace_attention(index);
                 }
             }
+            publish(
+                "notification.cleared",
+                scope.workspace_id,
+                scope.surface_id,
+                json!({}),
+            );
             json!({"cleared": true, "workspace_id": scope.workspace_id, "surface_id": scope.surface_id})
         }
         Action::MarkRead { id, scope, all } => {
@@ -107,16 +127,30 @@ pub fn handle(state: &mut AppState, action: Action) -> Result<Value, Error> {
                 {
                     record.is_read = true;
                     marked += 1;
+                    publish(
+                        "notification.read",
+                        Some(record.workspace_id),
+                        record.surface_id,
+                        json!({"notification_id": record.id}),
+                    );
                 }
             }
             json!({"marked_read": marked})
         }
         Action::Dismiss { id, all_read } => {
             let before = state.inbox.records.len();
-            state
-                .inbox
-                .records
-                .retain(|record| !(id == Some(record.id) || (all_read && record.is_read)));
+            state.inbox.records.retain(|record| {
+                let remove = id == Some(record.id) || (all_read && record.is_read);
+                if remove {
+                    publish(
+                        "notification.removed",
+                        Some(record.workspace_id),
+                        record.surface_id,
+                        json!({"notification_id": record.id}),
+                    );
+                }
+                !remove
+            });
             let dismissed = before - state.inbox.records.len();
             if id.is_some() && dismissed == 0 {
                 return Err(("not_found", "notification not found"));
@@ -248,6 +282,19 @@ fn create(
         .and_then(|date| date.format_iso8601())
         .map(|value| value.to_string())
         .unwrap_or_default();
+    publish(
+        "notification.created",
+        Some(workspace),
+        surface,
+        json!({
+            "notification_id": id, "title": null, "subtitle": null, "body": null,
+            "title_length": content.title.chars().count(),
+            "subtitle_length": content.subtitle.chars().count(),
+            "body_length": content.body.chars().count(),
+            "redacted_fields": ["title", "subtitle", "body"],
+            "delivery": if focused { "store" } else { "desktop" },
+        }),
+    );
     let evicted = state.inbox.push(Record {
         id,
         workspace_id: workspace,

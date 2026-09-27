@@ -198,6 +198,7 @@ impl AppState {
             .add_named(&engine.root_widget(), Some(&page_name));
         workspace.stack_page_name = page_name;
         self.workspaces.push(workspace);
+        self.publish_workspace("workspace.created", self.workspaces.len() - 1, serde_json::json!({}));
         self.split_engines.push(engine);
         self.switch_to_index(self.workspaces.len() - 1);
         self.trigger_session_save();
@@ -285,6 +286,7 @@ impl AppState {
         workspace.stack_page_name = page_name;
 
         self.workspaces.push(workspace);
+        self.publish_workspace("workspace.created", self.workspaces.len() - 1, serde_json::json!({}));
         self.split_engines.push(engine);
 
         let new_index = self.workspaces.len() - 1;
@@ -403,6 +405,7 @@ impl AppState {
         workspace.stack_page_name = page_name;
 
         self.workspaces.push(workspace);
+        self.publish_workspace("workspace.created", self.workspaces.len() - 1, serde_json::json!({}));
         self.split_engines.push(engine);
 
         if let (Some(bridge), Some(target)) = (remote_bridge, ws.remote_target.clone()) {
@@ -534,6 +537,7 @@ impl AppState {
             .add_named(&engine.root_widget(), Some(&page_name));
 
         self.workspaces.push(workspace);
+        self.publish_workspace("workspace.created", self.workspaces.len() - 1, serde_json::json!({}));
         self.split_engines.push(engine);
 
         crate::diagnostics::record(
@@ -611,6 +615,15 @@ impl AppState {
 
         let workspace = self.workspaces.remove(index);
         self.workspace_bridges.remove(&workspace.id);
+        crate::events::publish(
+            "workspace.closed",
+            "workspace.lifecycle",
+            crate::events::Scope {
+                workspace: Some(workspace.uuid),
+                ..Default::default()
+            },
+            serde_json::json!({"index": index}),
+        );
 
         // Remove sidebar row.
         if let Some(row) = crate::sidebar::row_for_workspace(&self.sidebar_list, workspace.id) {
@@ -623,11 +636,20 @@ impl AppState {
         }
 
         // At least one workspace survives the guard above.
+        let was_active = index == self.active_index;
         self.active_index =
             crate::selection::after_removal(self.active_index, index, self.workspaces.len())
                 .expect("workspace close preserves a survivor");
 
         self.switch_to_index(self.active_index);
+        // switch_to_index cannot see the removed workspace as the previous selection.
+        if was_active {
+            self.publish_workspace(
+                "workspace.selected",
+                self.active_index,
+                serde_json::json!({"previous_workspace_id": workspace.uuid}),
+            );
+        }
         self.trigger_session_save();
         true
     }
@@ -640,7 +662,16 @@ impl AppState {
         }
         // Phase 4: clear attention when user switches to a workspace (D-05).
         self.clear_workspace_attention(index);
+        let previous = self.workspaces.get(self.active_index).map(|workspace| workspace.uuid);
         self.active_index = index;
+        if previous != Some(self.workspaces[index].uuid) {
+            let tabs = self.split_engines.get(index).map_or(0, |engine| engine.all_panes().len());
+            self.publish_workspace(
+                "workspace.selected",
+                index,
+                serde_json::json!({"previous_workspace_id": previous, "tab_count": tabs}),
+            );
+        }
         let page_name = self.workspaces[index].stack_page_name.clone();
         self.stack.set_visible_child_name(&page_name);
         if let Some(row) =
@@ -999,7 +1030,26 @@ impl AppState {
                 }
             }
             self.trigger_session_save();
+            self.publish_workspace("workspace.renamed", index, serde_json::json!({}));
         }
+    }
+
+    /// Publish a workspace lifecycle event carrying the workspace's identity, title and index.
+    fn publish_workspace(&self, name: &str, index: usize, mut payload: serde_json::Value) {
+        let Some(workspace) = self.workspaces.get(index) else {
+            return;
+        };
+        payload["index"] = serde_json::json!(index);
+        payload["title"] = serde_json::json!(workspace.name);
+        crate::events::publish(
+            name,
+            "workspace.lifecycle",
+            crate::events::Scope {
+                workspace: Some(workspace.uuid),
+                ..Default::default()
+            },
+            payload,
+        );
     }
 
     /// Returns the active workspace, if any.

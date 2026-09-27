@@ -1672,6 +1672,7 @@ pub fn claude_event(client: &mut SocketClient, event: ClaudeHookEvent) -> Result
         ClaudeHookEvent::Notification => "Notification",
     };
     let (payload, id, surface) = read_hook_payload(expected)?;
+    report_hook(client, "claude", &payload, Some(&id), &surface);
     match event {
         ClaudeHookEvent::SessionStart => {
             set_agent_resume(
@@ -1729,6 +1730,7 @@ pub fn codex_event(client: &mut SocketClient, event: CodexHookEvent) -> Result<(
         CodexHookEvent::Stop => "Stop",
     };
     let (payload, id, surface) = read_hook_payload(expected)?;
+    report_hook(client, "codex", &payload, Some(&id), &surface);
     match event {
         CodexHookEvent::SessionStart => {
             set_agent_resume(
@@ -1782,6 +1784,7 @@ pub fn json_provider_event(
         })?,
     };
     let (payload, id, surface) = read_hook_payload(expected)?;
+    report_hook(client, provider_name, &payload, Some(&id), &surface);
     match event {
         JsonHookEvent::SessionStart => {
             set_agent_resume(
@@ -2012,6 +2015,7 @@ pub fn rovodev_event(client: &mut SocketClient, event: RovoHookEvent) -> Result<
         RovoHookEvent::Stop => &["on_complete", "on_error"],
     };
     let (payload, supplied_id, surface) = read_hook_payload_optional(expected)?;
+    report_hook(client, "rovodev", &payload, supplied_id.as_deref(), &surface);
     let cwd = hook_string(&payload, &["cwd", "working_directory", "workingDirectory"])
         .filter(|cwd| Path::new(cwd).is_absolute());
     let inferred_id = match (supplied_id, cwd) {
@@ -2049,6 +2053,26 @@ pub fn rovodev_event(client: &mut SocketClient, event: RovoHookEvent) -> Result<
         )?;
     }
     Ok(())
+}
+
+/// Best effort: publish `agent.hook.<HookEventName>` to the app's event stream. Only identifiers
+/// travel; an older app without `events.agent_hook` must not break the hook itself.
+fn report_hook(
+    client: &mut SocketClient,
+    source: &str,
+    payload: &Value,
+    session: Option<&str>,
+    surface: &str,
+) {
+    let name = hook_string(
+        payload,
+        &["hook_event_name", "hookEventName", "event_name", "eventName", "event"],
+    );
+    let _ = client.call(
+        "events.agent_hook",
+        json!({"source": source, "hook_event_name": name, "session_id": session,
+            "surface_id": surface, "tool_name": hook_string(payload, &["tool_name", "toolName"])}),
+    );
 }
 
 fn read_hook_payload(expected: &str) -> Result<(Value, String, String), CliError> {

@@ -8,6 +8,7 @@ mod bounded_json;
 #[path = "../browser_address.rs"]
 mod browser_address;
 mod comments;
+mod events;
 use cmux_platform::discovery;
 #[cfg(test)]
 #[path = "../agent_resume.rs"]
@@ -244,6 +245,32 @@ pub fn run(cli: Cli) -> Result<(), CliError> {
         Commands::ProjectRun { .. } => Duration::from_secs(30),
         _ => Duration::from_secs(5),
     };
+
+    if let Commands::Events {
+        after,
+        cursor_file,
+        name,
+        category,
+        reconnect,
+        limit,
+        no_ack,
+        no_heartbeat,
+    } = &cli.command
+    {
+        return events::run(
+            &socket_path,
+            events::Options {
+                after: *after,
+                cursor_file: cursor_file.clone(),
+                names: name.clone(),
+                categories: category.clone(),
+                reconnect: *reconnect,
+                limit: *limit,
+                ack: !*no_ack,
+                heartbeats: !*no_heartbeat,
+            },
+        );
+    }
 
     let mut client = socket_client::SocketClient::connect(&socket_path, timeout)?;
     if let (
@@ -579,6 +606,7 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
         Commands::Identify => ("system.identify", json!({})),
         Commands::Capabilities => ("system.capabilities", json!({})),
         Commands::Diagnostics => ("system.diagnostics", json!({})),
+        Commands::Events { .. } => unreachable!("events stream on their own connection"),
         Commands::ListWorkspaces => ("workspace.list", json!({})),
         Commands::CurrentWorkspace => ("workspace.current", json!({})),
 

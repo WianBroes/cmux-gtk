@@ -10,6 +10,7 @@ mod browser_address;
 mod browser_timeout;
 mod config;
 mod diagnostics;
+mod events;
 mod ghostty;
 mod git_metadata;
 mod header_bar;
