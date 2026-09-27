@@ -629,7 +629,16 @@ pub enum LocalTmuxCommands {
         headless: bool,
     },
     /// List live sessions
-    List,
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one live session
+    Status {
+        name: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Detach every client from a session, leaving it running
     Detach { name: String },
     /// Terminate a session and its processes

@@ -85,6 +85,7 @@ pub fn show(parent: &gtk4::ApplicationWindow, state: &crate::app_state::AppState
     help.set_wrap(true);
     content.append(&help);
     crate::resume_review::append(&content, state);
+    crate::local_tmux_settings::append(&content, state, &dialog);
     let error_label = gtk4::Label::new(None);
     error_label.set_wrap(true);
     content.append(&error_label);

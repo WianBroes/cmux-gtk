@@ -15,6 +15,7 @@ mod header_bar;
 mod inbox;
 #[allow(dead_code)]
 mod local_tmux;
+mod local_tmux_settings;
 mod inbox_actions;
 mod inbox_view;
 mod line_reader;
