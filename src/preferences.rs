@@ -102,13 +102,29 @@ fn surfaces() -> Vec<usize> {
         .unwrap_or_default()
 }
 
+/// Add a scrollable tab to the Preferences notebook and return its content box.
+fn page(notebook: &gtk4::Notebook, title: &str) -> gtk4::Box {
+    let content = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+    content.set_margin_top(16);
+    content.set_margin_bottom(16);
+    content.set_margin_start(16);
+    content.set_margin_end(16);
+    let scrolled = gtk4::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk4::PolicyType::Never)
+        .child(&content)
+        .build();
+    notebook.append_page(&scrolled, Some(&gtk4::Label::new(Some(title))));
+    content
+}
+
 /// Display the font-size editor and apply successful changes to live terminal surfaces.
 pub fn show(parent: &gtk4::ApplicationWindow, state: &crate::app_state::AppStateRef) {
     let dialog = gtk4::Dialog::builder()
         .title("Preferences")
         .transient_for(parent)
         .modal(true)
-        .default_width(380)
+        .default_width(460)
+        .default_height(560)
         .build();
     dialog.add_button("Cancel", gtk4::ResponseType::Cancel);
     dialog.add_button("Apply", gtk4::ResponseType::Apply);
@@ -118,6 +134,12 @@ pub fn show(parent: &gtk4::ApplicationWindow, state: &crate::app_state::AppState
     content.set_margin_bottom(20);
     content.set_margin_start(20);
     content.set_margin_end(20);
+    // Sections follow upstream's settings sidebar: App, then Terminal.
+    let notebook = gtk4::Notebook::new();
+    notebook.set_vexpand(true);
+    let app = page(&notebook, "App");
+    let terminal = page(&notebook, "Terminal");
+    content.append(&notebook);
     let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
     let label = gtk4::Label::new(Some("Terminal font size (pt)"));
     label.set_hexpand(true);
@@ -134,36 +156,36 @@ pub fn show(parent: &gtk4::ApplicationWindow, state: &crate::app_state::AppState
     size.set_value(current as f64);
     row.append(&label);
     row.append(&size);
-    content.append(&row);
+    terminal.append(&row);
     let help = gtk4::Label::new(Some(
         "Applies to all terminal tabs, including new tabs.\nSaved for future launches.",
     ));
     help.set_xalign(0.0);
     help.set_wrap(true);
-    content.append(&help);
+    terminal.append(&help);
     let invert = gtk4::CheckButton::with_label("Invert scrolling (mouse wheel and touchpad)");
     invert.set_active(invert_scroll());
-    content.append(&invert);
+    terminal.append(&invert);
     let auto_resume = gtk4::CheckButton::with_label("Resume agent sessions on reopen");
     auto_resume.set_active(auto_resume_agents());
-    content.append(&auto_resume);
+    terminal.append(&auto_resume);
     let auto_resume_help = gtk4::Label::new(Some(
         "Agents recorded by cmux hooks (Claude, Codex, pi…) restart with their session. Other resume commands still need an approval below.",
     ));
     auto_resume_help.set_xalign(0.0);
     auto_resume_help.set_wrap(true);
-    content.append(&auto_resume_help);
+    terminal.append(&auto_resume_help);
     let desktop = gtk4::CheckButton::with_label("Desktop notifications");
     desktop.set_active(desktop_notifications());
-    content.append(&desktop);
+    app.append(&desktop);
     let desktop_help = gtk4::Label::new(Some(
         "Off: no system popup when an agent finishes or a terminal rings. The bell, unread dot and pane ring stay.",
     ));
     desktop_help.set_xalign(0.0);
     desktop_help.set_wrap(true);
-    content.append(&desktop_help);
-    crate::resume_review::append(&content, state);
-    crate::local_tmux_settings::append(&content, state, &dialog);
+    app.append(&desktop_help);
+    crate::resume_review::append(&terminal, state);
+    crate::local_tmux_settings::append(&terminal, state, &dialog);
     let error_label = gtk4::Label::new(None);
     error_label.set_wrap(true);
     content.append(&error_label);
