@@ -41,3 +41,4 @@ tmp-*/
 .DS_Store
 *.swp
 *.swo
+.claude/session-diffs.log
