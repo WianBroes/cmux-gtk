@@ -288,7 +288,7 @@ pub fn active_is_bound(state: &AppStateRef) -> bool {
 
 /// Terminal context menu (a cmux-gtk addition; upstream closes sessions only from the CLI):
 /// after confirmation, kill the bound session on the same server incarnation, then forget the
-/// surface's attach so later launches do not retry a session that no longer exists.
+/// surface's attach and close its tab, which only existed to show that session.
 pub fn close_active_session(state: &AppStateRef, window: &gtk4::ApplicationWindow) {
     let Some((uuid, session)) = active_bound(state) else {
         return;
@@ -317,6 +317,7 @@ pub fn close_active_session(state: &AppStateRef, window: &gtk4::ApplicationWindo
     dialog.set_default_response(gtk4::ResponseType::Cancel);
     dialog.connect_response({
         let state = state.clone();
+        let app = window.application();
         move |dialog, response| {
             dialog.close();
             if response != gtk4::ResponseType::Accept {
@@ -332,14 +333,19 @@ pub fn close_active_session(state: &AppStateRef, window: &gtk4::ApplicationWindo
                 .output()
                 .is_ok_and(|output| output.status.success());
             crate::diagnostics::event(format_args!("local_tmux.close outcome={killed}"));
-            let state = state.borrow();
-            if let Some(engine) = state.split_engines.get(state.active_index) {
-                let clear = crate::resume::ResumeAction::Clear {
-                    checkpoint_id: Some(session.session_id.clone()),
-                };
-                if engine.resume_action(&uuid, &clear).is_ok() {
-                    state.trigger_session_save();
+            {
+                let state = state.borrow();
+                if let Some(engine) = state.split_engines.get(state.active_index) {
+                    let clear = crate::resume::ResumeAction::Clear {
+                        checkpoint_id: Some(session.session_id.clone()),
+                    };
+                    if engine.resume_action(&uuid, &clear).is_ok() {
+                        state.trigger_session_save();
+                    }
                 }
+            }
+            if let (Some(app), Ok(uuid)) = (app.as_ref(), uuid::Uuid::parse_str(&uuid)) {
+                crate::shortcuts::handle_close_surface_tab(&state, app, uuid);
             }
         }
     });
