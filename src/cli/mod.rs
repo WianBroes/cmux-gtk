@@ -9,6 +9,9 @@ mod bounded_json;
 mod browser_address;
 mod comments;
 use cmux_platform::discovery;
+#[cfg(test)]
+#[path = "../agent_resume.rs"]
+mod agent_resume;
 pub mod format;
 mod hooks;
 mod project;

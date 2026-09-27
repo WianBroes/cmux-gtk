@@ -2238,6 +2238,23 @@ fn notification_text(
 mod tests {
     use super::*;
 
+    /// The automatic-resume trust table matches the command shapes these hooks write.
+    #[test]
+    fn agent_resume_table_matches_providers() {
+        let mut checked = 0;
+        for agent in super::super::agent_resume::AGENTS {
+            let Some(provider) = json_provider(agent.kind) else {
+                continue;
+            };
+            assert_eq!(agent.binary, provider.binary, "{}", agent.kind);
+            assert_eq!(agent.prefix, provider.resume_prefix, "{}", agent.kind);
+            assert_eq!(agent.environment, provider.environment, "{}", agent.kind);
+            checked += 1;
+        }
+        // claude and codex are written directly by their own event handlers.
+        assert_eq!(checked, super::super::agent_resume::AGENTS.len() - 2);
+    }
+
     /// Reinstallation preserves arbitrary user settings and companion handlers without duplicating ours.
     #[test]
     fn merge_preserves_user_hooks() {

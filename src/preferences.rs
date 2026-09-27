@@ -8,6 +8,12 @@ struct Preferences {
     font_size: f32,
     #[serde(default)]
     invert_scroll: bool,
+    #[serde(default = "enabled")]
+    auto_resume_agents: bool,
+}
+
+fn enabled() -> bool {
+    true
 }
 
 /// Scroll inversion read by every terminal's scroll handler; loaded once, updated on Apply.
@@ -17,6 +23,15 @@ static INVERT_SCROLL: LazyLock<AtomicBool> =
 /// Whether mouse-wheel and touchpad scrolling are inverted.
 pub fn invert_scroll() -> bool {
     INVERT_SCROLL.load(Ordering::Relaxed)
+}
+
+/// Automatic resume of hook-written agent sessions, on by default like upstream; updated on Apply.
+static AUTO_RESUME_AGENTS: LazyLock<AtomicBool> =
+    LazyLock::new(|| AtomicBool::new(read(&path()).is_none_or(|prefs| prefs.auto_resume_agents)));
+
+/// Whether agent sessions recorded by the built-in hooks resume without a manual approval.
+pub fn auto_resume_agents() -> bool {
+    AUTO_RESUME_AGENTS.load(Ordering::Relaxed)
 }
 
 /// Locate terminal preferences beside the application configuration.
@@ -36,7 +51,9 @@ fn read(path: &Path) -> Option<Preferences> {
 
 /// Load a valid stored font size, ignoring missing or malformed preferences.
 fn read_size(path: &Path) -> Option<f32> {
-    read(path).map(|prefs| prefs.font_size).filter(|size| valid(*size))
+    read(path)
+        .map(|prefs| prefs.font_size)
+        .filter(|size| valid(*size))
 }
 
 /// Return the optional user-selected terminal size without changing native configuration.
@@ -45,12 +62,21 @@ pub fn saved_font_size() -> Option<f32> {
 }
 
 /// Validate and atomically persist the preferences, returning user-readable errors.
-fn save(path: &Path, size: f32, invert_scroll: bool) -> Result<(), String> {
+fn save(
+    path: &Path,
+    size: f32,
+    invert_scroll: bool,
+    auto_resume_agents: bool,
+) -> Result<(), String> {
     if !valid(size) {
         return Err("Font size must be between 6 and 72 points.".into());
     }
-    let contents = serde_json::to_vec_pretty(&Preferences { font_size: size, invert_scroll })
-        .map_err(|error| error.to_string())?;
+    let contents = serde_json::to_vec_pretty(&Preferences {
+        font_size: size,
+        invert_scroll,
+        auto_resume_agents,
+    })
+    .map_err(|error| error.to_string())?;
     cmux_platform::filesystem::atomic_write(path, &contents).map_err(|error| error.to_string())
 }
 
@@ -104,6 +130,15 @@ pub fn show(parent: &gtk4::ApplicationWindow, state: &crate::app_state::AppState
     let invert = gtk4::CheckButton::with_label("Invert scrolling (mouse wheel and touchpad)");
     invert.set_active(invert_scroll());
     content.append(&invert);
+    let auto_resume = gtk4::CheckButton::with_label("Resume agent sessions on reopen");
+    auto_resume.set_active(auto_resume_agents());
+    content.append(&auto_resume);
+    let auto_resume_help = gtk4::Label::new(Some(
+        "Agents recorded by cmux hooks (Claude, Codex, pi…) restart with their session. Other resume commands still need an approval below.",
+    ));
+    auto_resume_help.set_xalign(0.0);
+    auto_resume_help.set_wrap(true);
+    content.append(&auto_resume_help);
     crate::resume_review::append(&content, state);
     let error_label = gtk4::Label::new(None);
     error_label.set_wrap(true);
@@ -115,11 +150,12 @@ pub fn show(parent: &gtk4::ApplicationWindow, state: &crate::app_state::AppState
         }
         size.update();
         let value = size.value() as f32;
-        if let Err(error) = save(&path(), value, invert.is_active()) {
+        if let Err(error) = save(&path(), value, invert.is_active(), auto_resume.is_active()) {
             error_label.set_text(&format!("Could not save preferences: {error}"));
             return;
         }
         INVERT_SCROLL.store(invert.is_active(), Ordering::Relaxed);
+        AUTO_RESUME_AGENTS.store(auto_resume.is_active(), Ordering::Relaxed);
         let action = format!("set_font_size:{value}");
         let mut failed = false;
         for surface in surfaces() {
@@ -156,14 +192,18 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("cmux-font-{}", uuid::Uuid::new_v4()));
         let path = dir.join("preferences.json");
         assert_eq!(read_size(&path), None);
-        save(&path, 15.5, true).unwrap();
+        save(&path, 15.5, false, false).unwrap();
+        assert!(!read(&path).unwrap().auto_resume_agents);
+        std::fs::write(&path, r#"{"font_size": 14.0}"#).unwrap();
+        assert!(read(&path).unwrap().auto_resume_agents);
+        save(&path, 15.5, true, true).unwrap();
         assert_eq!(read_size(&path), Some(15.5));
         assert!(read(&path).unwrap().invert_scroll);
         std::fs::write(&path, r#"{"font_size": 14.0}"#).unwrap();
         assert!(!read(&path).unwrap().invert_scroll);
-        save(&path, 15.5, false).unwrap();
+        save(&path, 15.5, false, true).unwrap();
         for invalid in [0.0, 73.0, f32::NAN, f32::INFINITY] {
-            assert!(save(&path, invalid, true).is_err());
+            assert!(save(&path, invalid, true, true).is_err());
             assert_eq!(read_size(&path), Some(15.5));
         }
         std::fs::write(&path, "broken json").unwrap();
