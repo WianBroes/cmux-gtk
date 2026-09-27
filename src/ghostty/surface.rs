@@ -678,7 +678,10 @@ pub fn create_surface(
             let button = match gesture.current_button() {
                 1 => ffi::ghostty_input_mouse_button_e_GHOSTTY_MOUSE_LEFT,
                 2 => ffi::ghostty_input_mouse_button_e_GHOSTTY_MOUSE_MIDDLE,
-                3 => ffi::ghostty_input_mouse_button_e_GHOSTTY_MOUSE_RIGHT,
+                // Right-click always opens the cmux terminal menu (split_engine.rs), even when
+                // the program captures the mouse (tmux `mouse on`): never forwarded (Wian's choice;
+                // upstream macOS gives it to the program instead).
+                3 => return,
                 _ => return,
             };
             let mods = crate::ghostty::input::map_mods(gesture.current_event_state());
@@ -702,7 +705,10 @@ pub fn create_surface(
             let button = match gesture.current_button() {
                 1 => ffi::ghostty_input_mouse_button_e_GHOSTTY_MOUSE_LEFT,
                 2 => ffi::ghostty_input_mouse_button_e_GHOSTTY_MOUSE_MIDDLE,
-                3 => ffi::ghostty_input_mouse_button_e_GHOSTTY_MOUSE_RIGHT,
+                // Right-click always opens the cmux terminal menu (split_engine.rs), even when
+                // the program captures the mouse (tmux `mouse on`): never forwarded (Wian's choice;
+                // upstream macOS gives it to the program instead).
+                3 => return,
                 _ => return,
             };
             let mods = crate::ghostty::input::map_mods(gesture.current_event_state());
