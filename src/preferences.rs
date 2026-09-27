@@ -10,6 +10,8 @@ struct Preferences {
     invert_scroll: bool,
     #[serde(default = "enabled")]
     auto_resume_agents: bool,
+    #[serde(default = "enabled")]
+    desktop_notifications: bool,
 }
 
 fn enabled() -> bool {
@@ -32,6 +34,16 @@ static AUTO_RESUME_AGENTS: LazyLock<AtomicBool> =
 /// Whether agent sessions recorded by the built-in hooks resume without a manual approval.
 pub fn auto_resume_agents() -> bool {
     AUTO_RESUME_AGENTS.load(Ordering::Relaxed)
+}
+
+/// Desktop (notify-send) notifications, on by default; updated on Apply.
+static DESKTOP_NOTIFICATIONS: LazyLock<AtomicBool> = LazyLock::new(|| {
+    AtomicBool::new(read(&path()).is_none_or(|prefs| prefs.desktop_notifications))
+});
+
+/// Whether bells and agent messages also raise a desktop notification; in-app attention is unaffected.
+pub fn desktop_notifications() -> bool {
+    DESKTOP_NOTIFICATIONS.load(Ordering::Relaxed)
 }
 
 /// Locate terminal preferences beside the application configuration.
@@ -67,6 +79,7 @@ fn save(
     size: f32,
     invert_scroll: bool,
     auto_resume_agents: bool,
+    desktop_notifications: bool,
 ) -> Result<(), String> {
     if !valid(size) {
         return Err("Font size must be between 6 and 72 points.".into());
@@ -75,6 +88,7 @@ fn save(
         font_size: size,
         invert_scroll,
         auto_resume_agents,
+        desktop_notifications,
     })
     .map_err(|error| error.to_string())?;
     cmux_platform::filesystem::atomic_write(path, &contents).map_err(|error| error.to_string())
@@ -139,6 +153,15 @@ pub fn show(parent: &gtk4::ApplicationWindow, state: &crate::app_state::AppState
     auto_resume_help.set_xalign(0.0);
     auto_resume_help.set_wrap(true);
     content.append(&auto_resume_help);
+    let desktop = gtk4::CheckButton::with_label("Desktop notifications");
+    desktop.set_active(desktop_notifications());
+    content.append(&desktop);
+    let desktop_help = gtk4::Label::new(Some(
+        "Off: no system popup when an agent finishes or a terminal rings. The bell, unread dot and pane ring stay.",
+    ));
+    desktop_help.set_xalign(0.0);
+    desktop_help.set_wrap(true);
+    content.append(&desktop_help);
     crate::resume_review::append(&content, state);
     crate::local_tmux_settings::append(&content, state, &dialog);
     let error_label = gtk4::Label::new(None);
@@ -151,12 +174,19 @@ pub fn show(parent: &gtk4::ApplicationWindow, state: &crate::app_state::AppState
         }
         size.update();
         let value = size.value() as f32;
-        if let Err(error) = save(&path(), value, invert.is_active(), auto_resume.is_active()) {
+        if let Err(error) = save(
+            &path(),
+            value,
+            invert.is_active(),
+            auto_resume.is_active(),
+            desktop.is_active(),
+        ) {
             error_label.set_text(&format!("Could not save preferences: {error}"));
             return;
         }
         INVERT_SCROLL.store(invert.is_active(), Ordering::Relaxed);
         AUTO_RESUME_AGENTS.store(auto_resume.is_active(), Ordering::Relaxed);
+        DESKTOP_NOTIFICATIONS.store(desktop.is_active(), Ordering::Relaxed);
         let action = format!("set_font_size:{value}");
         let mut failed = false;
         for surface in surfaces() {
@@ -193,18 +223,20 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("cmux-font-{}", uuid::Uuid::new_v4()));
         let path = dir.join("preferences.json");
         assert_eq!(read_size(&path), None);
-        save(&path, 15.5, false, false).unwrap();
+        save(&path, 15.5, false, false, false).unwrap();
         assert!(!read(&path).unwrap().auto_resume_agents);
+        assert!(!read(&path).unwrap().desktop_notifications);
         std::fs::write(&path, r#"{"font_size": 14.0}"#).unwrap();
         assert!(read(&path).unwrap().auto_resume_agents);
-        save(&path, 15.5, true, true).unwrap();
+        assert!(read(&path).unwrap().desktop_notifications);
+        save(&path, 15.5, true, true, true).unwrap();
         assert_eq!(read_size(&path), Some(15.5));
         assert!(read(&path).unwrap().invert_scroll);
         std::fs::write(&path, r#"{"font_size": 14.0}"#).unwrap();
         assert!(!read(&path).unwrap().invert_scroll);
-        save(&path, 15.5, false, true).unwrap();
+        save(&path, 15.5, false, true, true).unwrap();
         for invalid in [0.0, 73.0, f32::NAN, f32::INFINITY] {
-            assert!(save(&path, invalid, true, true).is_err());
+            assert!(save(&path, invalid, true, true, true).is_err());
             assert_eq!(read_size(&path), Some(15.5));
         }
         std::fs::write(&path, "broken json").unwrap();

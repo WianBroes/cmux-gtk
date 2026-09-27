@@ -33,6 +33,13 @@ fn send_inner(
     workspace: Uuid,
     notification: Option<Uuid>,
 ) -> Option<tokio::task::JoinHandle<()>> {
+    if !crate::preferences::desktop_notifications() {
+        crate::diagnostics::record(
+            "notification.delivery.rejected",
+            serde_json::json!({"workspace": workspace, "notification": notification, "reason": "disabled"}),
+        );
+        return None;
+    }
     let permit = match DELIVERIES.try_acquire() {
         Ok(permit) => permit,
         Err(_) => {
