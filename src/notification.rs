@@ -145,6 +145,9 @@ mod tests {
     /// Exercise real child admission, overload rejection, cancellation/reaping and execution expiry.
     #[tokio::test]
     async fn desktop_delivery_bounds_and_cleanup() {
+        // The notification gate reads the user's own preferences file; pin it so this test of the
+        // delivery itself gives the same answer on a machine where notifications are switched off.
+        crate::preferences::set_desktop_notifications(true);
         let root = std::env::temp_dir().join(format!("cmux-notify-{}", Uuid::new_v4()));
         std::fs::create_dir(&root).unwrap();
         let runtime = tokio::runtime::Handle::current();

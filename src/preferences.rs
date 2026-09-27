@@ -46,6 +46,12 @@ pub fn desktop_notifications() -> bool {
     DESKTOP_NOTIFICATIONS.load(Ordering::Relaxed)
 }
 
+/// Test-only: pin the gate, so a test of the delivery itself never reads the user's preferences file.
+#[cfg(test)]
+pub(crate) fn set_desktop_notifications(value: bool) {
+    DESKTOP_NOTIFICATIONS.store(value, Ordering::Relaxed);
+}
+
 /// Locate terminal preferences beside the application configuration.
 fn path() -> PathBuf {
     crate::config::config_path().with_file_name("preferences.json")
