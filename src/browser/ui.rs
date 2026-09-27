@@ -467,16 +467,31 @@ pub(crate) fn wire_browser_tab(
         }
     };
 
-    // Apply the initial viewport after allocation without retaining a closed preview.
+    // Follow the preview allocation: the first idle can run before the pane has a size,
+    // and later pane resizes must reach the browser too. Send once a new size has settled.
     {
         let state_for_viewport = Rc::downgrade(state);
-        let picture_for_viewport = picture_ref.downgrade();
-        glib::idle_add_local_once(move || {
-            if let (Some(state), Some(picture)) =
-                (state_for_viewport.upgrade(), picture_for_viewport.upgrade())
-            {
-                resize_browser_preview(&state, surface_uuid, &picture);
+        let sync = Rc::new(ViewportSync::default());
+        picture_ref.add_tick_callback(move |picture, _clock| {
+            let Some(state) = state_for_viewport.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            let size = (picture.width(), picture.height());
+            if size != sync.seen.get() {
+                sync.seen.set(size);
+                sync.frames.set(0);
+            } else {
+                sync.frames.set(sync.frames.get().saturating_add(1));
             }
+            if sync.frames.get() >= VIEWPORT_SETTLE_FRAMES
+                && size != sync.sent.get()
+                && size.0 > 0
+                && size.1 > 0
+            {
+                sync.sent.set(size);
+                resize_browser_preview(&state, surface_uuid, picture, &sync);
+            }
+            glib::ControlFlow::Continue
         });
     }
 
@@ -782,11 +797,34 @@ fn finish_devtools_snapshot(
         label.set_text(&text);
     });
 }
-/// Run initial viewport sizing on Tokio; destruction cancels I/O and GTK never awaits under a model borrow.
+/// Frames a preview size must stay unchanged before it is sent (~130 ms at 60 Hz).
+const VIEWPORT_SETTLE_FRAMES: i32 = 8;
+/// Frames to wait before retrying a viewport the browser did not accept (~1 s at 60 Hz).
+const VIEWPORT_RETRY_FRAMES: i32 = 60;
+
+/// Viewport sizing state shared by the preview tick watcher and its resize completions.
+#[derive(Default)]
+struct ViewportSync {
+    seen: std::cell::Cell<(i32, i32)>,
+    frames: std::cell::Cell<i32>,
+    sent: std::cell::Cell<(i32, i32)>,
+}
+
+impl ViewportSync {
+    /// Forget the sent size and wait before the tick watcher sends it again.
+    fn retry_later(&self) {
+        self.sent.set((0, 0));
+        self.frames
+            .set(VIEWPORT_SETTLE_FRAMES - VIEWPORT_RETRY_FRAMES);
+    }
+}
+
+/// Run viewport sizing on Tokio; destruction cancels I/O and GTK never awaits under a model borrow.
 fn resize_browser_preview(
     state: &Rc<RefCell<AppState>>,
     surface_uuid: uuid::Uuid,
     picture: &gtk4::Picture,
+    sync: &Rc<ViewportSync>,
 ) {
     let (width, height) = (picture.width(), picture.height());
     if width <= 0 || height <= 0 {
@@ -800,21 +838,27 @@ fn resize_browser_preview(
             s.runtime_handle.as_ref(),
         ) else {
             activity.finish("unavailable");
+            sync.retry_later();
             return;
         };
         runtime.spawn(browser.resize_async(width, height, activity.id))
     };
     let completion = widget_task_result(picture, task);
+    let sync = Rc::clone(sync);
     glib::MainContext::default().spawn_local(async move {
         let Some(result) = completion.await else {
             activity.finish("cancelled");
             return;
         };
-        activity.finish(match result {
+        let outcome = match result {
             Ok(Ok(())) => "success",
             Ok(Err(_)) => "error",
             Err(_) => "task_error",
-        });
+        };
+        if outcome != "success" {
+            sync.retry_later();
+        }
+        activity.finish(outcome);
     });
 }
 
