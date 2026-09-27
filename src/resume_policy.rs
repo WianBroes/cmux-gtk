@@ -78,6 +78,15 @@ pub fn initialize() {
     let _ = SIGNING_KEY.set(key.ok());
 }
 
+/// The server-identity-guarded attach written by `cmux local-tmux`, and nothing else.
+pub fn local_tmux_attach(binding: &ResumeBinding) -> bool {
+    binding.validate().is_ok()
+        && binding.kind.as_deref() == Some(crate::local_tmux::RESUME_KIND)
+        && binding.environment.is_empty()
+        && crate::resume_command::literal_arguments(&binding.command)
+            .is_some_and(|words| crate::local_tmux::restorable(&binding.command, &words))
+}
+
 /// Canonical signing input binds the policy mode, reviewed command/prefix, directory and environment.
 fn payload(
     command: &str,
@@ -98,7 +107,7 @@ impl ResumePolicy {
     /// Schedule approved local execution through the owning CLI, which rechecks approval at launch.
     /// Return to an interactive shell after command exit/failure so the restored terminal remains usable.
     pub fn launch_command(&self, binding: &ResumeBinding) -> Option<String> {
-        if !self.allows(binding) {
+        if !self.allows_automatic(binding) {
             return None;
         }
         let cli = std::env::current_exe().ok()?.with_file_name("cmux");
@@ -158,6 +167,11 @@ impl ResumePolicy {
         self.approvals.truncate(MAX_APPROVALS);
         self.approvals.retain(Approval::valid_signature);
         self
+    }
+
+    /// Automatic local resume: a signed approval, or the guarded attach written by `cmux local-tmux`.
+    pub fn allows_automatic(&self, binding: &ResumeBinding) -> bool {
+        self.allows(binding) || local_tmux_attach(binding)
     }
 
     /// Match a signed exact command or literal argument prefix, with exact directory and environment.
@@ -361,5 +375,26 @@ mod tests {
         let mut rejected = binding;
         rejected.command = "other".into();
         assert!(policy.remote_shell_input(&rejected).is_none());
+    }
+
+    /// Only the guarded attach written by `cmux local-tmux`, under its own kind, restarts unapproved.
+    #[test]
+    fn local_tmux_attach_is_trusted_only_in_generated_form() {
+        let command = crate::local_tmux::attach_command(
+            "/usr/bin/tmux",
+            "/home/u/.local/state/cmux/local-tmux/server.sock",
+            "0b8f3a52-8c1e-4a3e-9f0e-2d5c6b7a8e91",
+            "$0",
+        );
+        let mut binding: ResumeBinding = serde_json::from_value(serde_json::json!({
+            "command": command, "kind": "local-tmux", "cwd": "/home/u"
+        }))
+        .unwrap();
+        assert!(local_tmux_attach(&binding));
+        binding.kind = Some("tmux".into());
+        assert!(!local_tmux_attach(&binding));
+        binding.kind = Some("local-tmux".into());
+        binding.command.push_str("; true");
+        assert!(!local_tmux_attach(&binding));
     }
 }

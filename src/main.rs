@@ -13,6 +13,8 @@ mod ghostty;
 mod git_metadata;
 mod header_bar;
 mod inbox;
+#[allow(dead_code)]
+mod local_tmux;
 mod inbox_actions;
 mod inbox_view;
 mod line_reader;
