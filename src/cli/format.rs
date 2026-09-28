@@ -3,6 +3,7 @@
 //! Handles color support (D-07), list formatting with active markers (D-08),
 //! and mutation success messages (D-09).
 
+use super::args::IdFormat;
 use serde_json::Value;
 use std::io::IsTerminal;
 
@@ -141,6 +142,9 @@ pub fn format_window_list(result: &Value, color: bool) -> String {
 }
 
 /// Format identify response.
+///
+/// The focused topology and the caller anchor are appended as short references when the
+/// server returns them; a response without those fields keeps the single-line form.
 fn format_identify(result: &Value) -> String {
     let version = result
         .get("version")
@@ -151,9 +155,107 @@ fn format_identify(result: &Value) -> String {
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
     let pid = result.get("pid").and_then(|v| v.as_u64());
-    match pid {
+    let mut lines = vec![match pid {
         Some(p) => format!("cmux {} ({}) pid {}", version, platform, p),
         None => format!("cmux {} ({})", version, platform),
+    }];
+    for (label, field) in [("focused", "focused"), ("caller", "caller")] {
+        if let Some(context) = identify_context(result, field) {
+            lines.push(format!("{label}: {context}"));
+        }
+    }
+    lines.join("\n")
+}
+
+/// Render one `focused`/`caller` object as its identities, preferring short references.
+///
+/// Returns `None` when the field is absent, empty or not an object, so a server that does
+/// not send topology keeps the previous output.
+fn identify_context(result: &Value, field: &str) -> Option<String> {
+    let record = result.get(field)?;
+    if !record.is_object() {
+        return None;
+    }
+    let identities = [
+        ("window_id", "window_ref"),
+        ("workspace_id", "workspace_ref"),
+        ("pane_id", "pane_ref"),
+        ("surface_id", "surface_ref"),
+    ]
+    .into_iter()
+    .filter_map(|(id_key, ref_key)| {
+        record
+            .get(ref_key)
+            .and_then(Value::as_str)
+            .or_else(|| record.get(id_key).and_then(Value::as_str))
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    })
+    .collect::<Vec<_>>();
+    (!identities.is_empty()).then(|| identities.join(" "))
+}
+
+/// Apply `--id-format` to a JSON response, dropping the redundant half of each identity.
+///
+/// Objects are rewritten after their children so nested records and arrays are covered.
+/// `Refs` keeps `ref`/`*_ref`/`*_refs` and removes `id`/`*_id`/`*_ids` when the matching
+/// reference exists, `uuids` does the reverse, and `both` leaves the response untouched.
+pub fn format_ids(value: &mut Value, mode: IdFormat) {
+    match value {
+        Value::Object(map) => {
+            for child in map.values_mut() {
+                format_ids(child, mode);
+            }
+            match mode {
+                IdFormat::Both => {}
+                IdFormat::Refs => {
+                    if map.contains_key("ref") && map.contains_key("id") {
+                        map.remove("id");
+                    }
+                    let keys = map.keys().cloned().collect::<Vec<_>>();
+                    for key in &keys {
+                        if let Some(prefix) = key.strip_suffix("_id") {
+                            if map.contains_key(&format!("{prefix}_ref")) {
+                                map.remove(key);
+                            }
+                        }
+                    }
+                    for key in &keys {
+                        if let Some(prefix) = key.strip_suffix("_ids") {
+                            if map.contains_key(&format!("{prefix}_refs")) {
+                                map.remove(key);
+                            }
+                        }
+                    }
+                }
+                IdFormat::Uuids => {
+                    if map.contains_key("ref") && map.contains_key("id") {
+                        map.remove("ref");
+                    }
+                    let keys = map.keys().cloned().collect::<Vec<_>>();
+                    for key in &keys {
+                        if let Some(prefix) = key.strip_suffix("_ref") {
+                            if map.contains_key(&format!("{prefix}_id")) {
+                                map.remove(key);
+                            }
+                        }
+                    }
+                    for key in &keys {
+                        if let Some(prefix) = key.strip_suffix("_refs") {
+                            if map.contains_key(&format!("{prefix}_ids")) {
+                                map.remove(key);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                format_ids(item, mode);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -385,5 +487,92 @@ mod tests {
             "No surfaces"
         );
         assert_eq!(format_pane_list(&json!({"panes": []}), false), "No panes");
+    }
+
+    /// `--id-format` drops only identities that have a counterpart, at every depth.
+    #[test]
+    fn id_format_shapes_nested_responses() {
+        let value = json!({
+            "id": "uuid-1",
+            "ref": "workspace:1",
+            "workspace_id": "uuid-2",
+            "workspace_ref": "workspace:2",
+            "workspace_ids": ["uuid-2"],
+            "workspace_refs": ["workspace:2"],
+            "surface_id": "uuid-3",
+            "id_only": "uuid-4",
+            "title": "Keep",
+            "workspaces": [
+                {"id": "uuid-5", "ref": "workspace:5"},
+                {"pane_ids": ["uuid-6"], "pane_refs": ["pane:6"]}
+            ],
+            "focused": {"window_id": "uuid-7", "window_ref": "window:7"}
+        });
+
+        let mut refs = value.clone();
+        format_ids(&mut refs, IdFormat::Refs);
+        assert_eq!(refs["ref"], "workspace:1");
+        assert!(refs.get("id").is_none());
+        assert!(refs.get("workspace_id").is_none());
+        assert!(refs.get("workspace_ids").is_none());
+        assert_eq!(refs["workspace_ref"], "workspace:2");
+        assert_eq!(refs["workspace_refs"][0], "workspace:2");
+        // No `surface_ref` or `id_ref` accompanies these, so they survive.
+        assert_eq!(refs["surface_id"], "uuid-3");
+        assert_eq!(refs["id_only"], "uuid-4");
+        assert_eq!(refs["title"], "Keep");
+        assert!(refs["workspaces"][0].get("id").is_none());
+        assert_eq!(refs["workspaces"][0]["ref"], "workspace:5");
+        assert!(refs["workspaces"][1].get("pane_ids").is_none());
+        assert_eq!(refs["workspaces"][1]["pane_refs"][0], "pane:6");
+        assert!(refs["focused"].get("window_id").is_none());
+        assert_eq!(refs["focused"]["window_ref"], "window:7");
+
+        let mut uuids = value.clone();
+        format_ids(&mut uuids, IdFormat::Uuids);
+        assert_eq!(uuids["id"], "uuid-1");
+        assert!(uuids.get("ref").is_none());
+        assert_eq!(uuids["workspace_id"], "uuid-2");
+        assert!(uuids.get("workspace_ref").is_none());
+        assert!(uuids.get("workspace_refs").is_none());
+        assert_eq!(uuids["workspace_ids"][0], "uuid-2");
+        assert!(uuids["workspaces"][0].get("ref").is_none());
+        assert_eq!(uuids["workspaces"][0]["id"], "uuid-5");
+        assert!(uuids["workspaces"][1].get("pane_refs").is_none());
+        assert_eq!(uuids["focused"]["window_id"], "uuid-7");
+        assert_eq!(uuids["title"], "Keep");
+
+        let mut both = value.clone();
+        format_ids(&mut both, IdFormat::Both);
+        assert_eq!(both, value);
+    }
+
+    /// Identify text output adds focused and caller references only when the server sends them.
+    #[test]
+    fn identify_context_lines_are_optional() {
+        let result = json!({
+            "version": "0.2.1", "platform": "linux", "pid": 42,
+            "focused": {"window_id": "uuid-1", "window_ref": "window:1",
+                "workspace_ref": "workspace:2", "pane_id": "uuid-3"},
+            "caller": {"workspace_id": "uuid-4"}
+        });
+        assert_eq!(
+            format_response("system.identify", &result, false, false),
+            concat!(
+                "cmux 0.2.1 (linux) pid 42\n",
+                "focused: window:1 workspace:2 uuid-3\n",
+                "caller: uuid-4"
+            )
+        );
+        let bare = json!({"version": "0.2.1", "platform": "linux", "pid": 42});
+        assert_eq!(
+            format_response("system.identify", &bare, false, false),
+            "cmux 0.2.1 (linux) pid 42"
+        );
+        let empty = json!({"version": "0.2.1", "pid": 42, "focused": {}, "caller": ""});
+        assert_eq!(
+            format_response("system.identify", &empty, false, false),
+            "cmux 0.2.1 (unknown) pid 42"
+        );
     }
 }
