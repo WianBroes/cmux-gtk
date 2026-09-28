@@ -401,11 +401,26 @@ pub enum Commands {
         /// Workspace UUID, ref (workspace:N) or index; with `--workspace` this slot holds the position
         id: Option<String>,
         /// Target position (0-indexed)
-        #[arg(conflicts_with = "workspace", required_unless_present = "workspace")]
+        #[arg(
+            conflicts_with_all = ["workspace", "index", "before", "after"],
+            required_unless_present_any = ["workspace", "index", "before", "after"]
+        )]
         position: Option<usize>,
         /// Workspace UUID, ref (workspace:N) or index; alternative to the positional handle
         #[arg(long, required_unless_present = "id")]
         workspace: Option<String>,
+        /// Target position (0-indexed), upstream's spelling of the trailing position
+        #[arg(long, conflicts_with_all = ["position", "before", "after"])]
+        index: Option<usize>,
+        /// Place the workspace before this workspace
+        #[arg(long, visible_alias = "before-workspace", conflicts_with = "after")]
+        before: Option<String>,
+        /// Place the workspace after this workspace
+        #[arg(long, visible_alias = "after-workspace")]
+        after: Option<String>,
+        /// Window owning the order; this build has a single window (`window:1`)
+        #[arg(long)]
+        window: Option<String>,
     },
 
     // -- Surface commands --
@@ -603,11 +618,26 @@ pub enum Commands {
         /// Surface UUID, ref (surface:N) or index; with `--surface` this slot holds the position
         id: Option<String>,
         /// Target position (0-indexed)
-        #[arg(conflicts_with = "surface", required_unless_present = "surface")]
+        #[arg(
+            conflicts_with_all = ["surface", "index", "before", "after"],
+            required_unless_present_any = ["surface", "index", "before", "after"]
+        )]
         position: Option<usize>,
         /// Surface UUID, ref (surface:N) or index; alternative to the positional handle
         #[arg(long, required_unless_present = "id")]
         surface: Option<String>,
+        /// Target position (0-indexed), upstream's spelling of the trailing position
+        #[arg(long, conflicts_with_all = ["position", "before", "after"])]
+        index: Option<usize>,
+        /// Place the surface before this surface of the same pane
+        #[arg(long, visible_alias = "before-surface", conflicts_with = "after")]
+        before: Option<String>,
+        /// Place the surface after this surface of the same pane
+        #[arg(long, visible_alias = "after-surface")]
+        after: Option<String>,
+        /// Window owning the pane; this build has a single window (`window:1`)
+        #[arg(long)]
+        window: Option<String>,
     },
     /// Move a surface into a newly split pane next to a target pane
     DragSurfaceToSplit {
@@ -1715,6 +1745,7 @@ mod handle_argument_tests {
                 id,
                 position,
                 surface,
+                ..
             } => {
                 assert_eq!(id.as_deref(), Some(SURFACE));
                 assert_eq!(position, Some(2));
@@ -1980,6 +2011,7 @@ mod handle_argument_tests {
                 id,
                 position,
                 workspace,
+                ..
             } => {
                 assert_eq!(workspace.as_deref(), Some("workspace:2"));
                 assert_eq!(id.as_deref(), Some("4"));
@@ -1992,6 +2024,7 @@ mod handle_argument_tests {
                 id,
                 position,
                 surface,
+                ..
             } => {
                 assert_eq!(surface.as_deref(), Some("surface:1"));
                 assert_eq!(id.as_deref(), Some("3"));
@@ -2170,6 +2203,129 @@ mod handle_argument_tests {
                 "surface:2",
             ],
             vec!["move-surface", SURFACE, "--focus", "true", "--no-focus"],
+        ] {
+            assert!(
+                Cli::try_parse_from(arguments.iter().collect::<Vec<_>>()).is_err(),
+                "{arguments:?} must be refused"
+            );
+        }
+    }
+
+    /// Upstream's relative placement, `--index` and `--window` reach the reorder commands.
+    #[test]
+    fn reorder_relative_placement_forms_parse() {
+        match parse(&["reorder-surface", "surface:3", "--after", "surface:1"]) {
+            Commands::ReorderSurface {
+                id,
+                position,
+                index,
+                before,
+                after,
+                window,
+                ..
+            } => {
+                assert_eq!(id.as_deref(), Some("surface:3"));
+                assert_eq!(after.as_deref(), Some("surface:1"));
+                assert!(position.is_none() && index.is_none());
+                assert!(before.is_none() && window.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&[
+            "reorder-surface",
+            "--surface",
+            "surface:2",
+            "--index",
+            "0",
+            "--window",
+            "window:1",
+        ]) {
+            Commands::ReorderSurface {
+                id,
+                position,
+                index,
+                surface,
+                window,
+                ..
+            } => {
+                assert_eq!(surface.as_deref(), Some("surface:2"));
+                assert_eq!(index, Some(0));
+                assert_eq!(window.as_deref(), Some("window:1"));
+                assert!(id.is_none() && position.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&[
+            "reorder-workspace",
+            "--workspace",
+            "workspace:2",
+            "--before",
+            "workspace:1",
+        ]) {
+            Commands::ReorderWorkspace {
+                id,
+                position,
+                workspace,
+                before,
+                after,
+                ..
+            } => {
+                assert_eq!(workspace.as_deref(), Some("workspace:2"));
+                assert_eq!(before.as_deref(), Some("workspace:1"));
+                assert!(id.is_none() && position.is_none() && after.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&[
+            "reorder-workspace",
+            WORKSPACE,
+            "--after-workspace",
+            "workspace:1",
+        ]) {
+            Commands::ReorderWorkspace {
+                id,
+                after,
+                position,
+                ..
+            } => {
+                assert_eq!(id.as_deref(), Some(WORKSPACE));
+                assert_eq!(after.as_deref(), Some("workspace:1"));
+                assert!(position.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+
+        // A slot is named once: anchors, indexes and trailing positions contradict each other.
+        for arguments in [
+            vec!["reorder-surface", SURFACE, "1", "--before", "surface:2"],
+            vec![
+                "reorder-surface",
+                "--surface",
+                SURFACE,
+                "--before",
+                "surface:2",
+                "--after",
+                "surface:3",
+            ],
+            vec![
+                "reorder-surface",
+                "--surface",
+                SURFACE,
+                "--index",
+                "1",
+                "--after",
+                "surface:3",
+            ],
+            vec!["reorder-workspace", WORKSPACE, "2", "--index", "1"],
+            vec![
+                "reorder-workspace",
+                "--workspace",
+                "workspace:2",
+                "--before",
+                "workspace:1",
+                "--after",
+                "workspace:3",
+            ],
         ] {
             assert!(
                 Cli::try_parse_from(arguments.iter().collect::<Vec<_>>()).is_err(),

@@ -831,24 +831,58 @@ fn handle_socket_command_traced(
             req_id,
             id,
             position,
+            before,
+            after,
             resp_tx,
         } => {
             // SOCK-05: No focus side effects.
             let mut s = state.borrow_mut();
-            let idx = s.workspaces.iter().position(|ws| ws.uuid.to_string() == id);
-            match idx {
-                Some(from) => {
-                    let to = position.min(s.workspaces.len().saturating_sub(1));
-                    s.reorder_workspace(from, to);
-                    drop(s);
-                    crate::sidebar::rebuild_grouped_sidebar(state);
-                    let _ = resp_tx.send(ok(req_id, json!({})));
-                }
+            let Some(from) = s.workspaces.iter().position(|ws| ws.uuid.to_string() == id) else {
+                let _ = resp_tx.send(err(req_id, "not_found", "workspace not found"));
+                return;
+            };
+            let to = match position {
+                Some(position) => position.min(s.workspaces.len().saturating_sub(1)),
+                // Relative placement: the anchor's slot, corrected for the removal itself.
                 None => {
-                    drop(s);
-                    let _ = resp_tx.send(err(req_id, "not_found", "workspace not found"));
+                    let reference = before
+                        .as_deref()
+                        .or(after.as_deref())
+                        .expect("reorder dispatch requires an index or an anchor");
+                    let Ok(anchor) = uuid::Uuid::parse_str(reference) else {
+                        let _ =
+                            resp_tx.send(err(req_id, "invalid_params", "invalid workspace UUID"));
+                        return;
+                    };
+                    if anchor.to_string() == id {
+                        let _ = resp_tx.send(err(
+                            req_id,
+                            "invalid_params",
+                            "before/after cannot name the workspace being reordered",
+                        ));
+                        return;
+                    }
+                    let Some(anchor_index) = s.workspaces.iter().position(|ws| ws.uuid == anchor)
+                    else {
+                        let _ = resp_tx.send(err(
+                            req_id,
+                            "not_found",
+                            "before/after workspace not found",
+                        ));
+                        return;
+                    };
+                    let shifted = anchor_index - usize::from(from < anchor_index);
+                    if before.is_some() {
+                        shifted
+                    } else {
+                        shifted + 1
+                    }
                 }
-            }
+            };
+            s.reorder_workspace(from, to);
+            drop(s);
+            crate::sidebar::rebuild_grouped_sidebar(state);
+            let _ = resp_tx.send(ok(req_id, json!({})));
         }
         SocketCommand::WorkspaceGroupList { req_id, resp_tx } => {
             let state = state.borrow();
@@ -1433,6 +1467,8 @@ fn handle_socket_command_traced(
             req_id,
             id,
             position,
+            before,
+            after,
             resp_tx,
         } => {
             let Some(uuid) = uuid::Uuid::parse_str(&id).ok() else {
@@ -1448,6 +1484,66 @@ fn handle_socket_command_traced(
                 else {
                     let _ = resp_tx.send(err(req_id, "not_found", "surface not found"));
                     return;
+                };
+                // Relative placement stays inside the pane: the anchor's slot, corrected for
+                // the removal of the tab being reordered.
+                let position = match position {
+                    Some(position) => position,
+                    None => {
+                        let reference = before
+                            .as_deref()
+                            .or(after.as_deref())
+                            .expect("reorder dispatch requires an index or an anchor");
+                        let Ok(anchor) = uuid::Uuid::parse_str(reference) else {
+                            let _ =
+                                resp_tx.send(err(req_id, "invalid_params", "invalid surface UUID"));
+                            return;
+                        };
+                        if anchor == uuid {
+                            let _ = resp_tx.send(err(
+                                req_id,
+                                "invalid_params",
+                                "before/after cannot name the surface being reordered",
+                            ));
+                            return;
+                        }
+                        let text = anchor.to_string();
+                        let found = s.split_engines.iter().enumerate().find_map(
+                            |(engine_index, engine)| {
+                                engine
+                                    .surface_location(&text)
+                                    .map(|(pane, slot)| (engine_index, pane, slot))
+                            },
+                        );
+                        let Some((engine_index, anchor_pane, anchor_slot)) = found else {
+                            let _ = resp_tx.send(err(
+                                req_id,
+                                "not_found",
+                                "before/after surface not found",
+                            ));
+                            return;
+                        };
+                        let Some((source_pane, source_slot)) =
+                            s.split_engines[index].surface_location(&id)
+                        else {
+                            let _ = resp_tx.send(err(req_id, "not_found", "surface not found"));
+                            return;
+                        };
+                        if engine_index != index || anchor_pane != source_pane {
+                            let _ = resp_tx.send(err(
+                                req_id,
+                                "invalid_params",
+                                "before/after must name a surface of the same pane",
+                            ));
+                            return;
+                        }
+                        let shifted = anchor_slot - usize::from(source_slot < anchor_slot);
+                        if before.is_some() {
+                            shifted
+                        } else {
+                            shifted + 1
+                        }
+                    }
                 };
                 match s.split_engines[index].reorder_surface(uuid, position) {
                     Ok(result) => {

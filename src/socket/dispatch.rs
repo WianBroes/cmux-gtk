@@ -90,6 +90,52 @@ fn optional_text(
     Ok(None)
 }
 
+/// Refuse a caller-named window: this Linux build owns exactly one GTK window.
+fn only_main_window(params: &serde_json::Value) -> Result<(), String> {
+    match optional_text(params, "window", "window_id")? {
+        Some(window) if window != super::handles::MAIN_WINDOW_ID && window != "window:1" => Err(
+            format!("this build has a single window; pass window:1 (got {window})"),
+        ),
+        _ => Ok(()),
+    }
+}
+
+/// Read the placement shared by `surface.move`, `surface.reorder` and `workspace.reorder`:
+/// at most one of an index or an anchor surface/workspace. Callers decide whether a
+/// placement is mandatory (`reorder`) or optional (`move`).
+fn placement(
+    params: &serde_json::Value,
+    index_keys: (&str, &str),
+    before_alias: &'static str,
+    after_alias: &'static str,
+) -> Result<(Option<usize>, Option<String>, Option<String>), String> {
+    let raw_index = match params.get(index_keys.0).or_else(|| params.get(index_keys.1)) {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => match value.as_u64().and_then(|value| usize::try_from(value).ok()) {
+            Some(value) => Some(value),
+            None => return Err(format!("{} must be a non-negative integer", index_keys.0)),
+        },
+    };
+    let before = optional_text(params, "before", before_alias)?;
+    let after = optional_text(params, "after", after_alias)?;
+    let given = [raw_index.is_some(), before.is_some(), after.is_some()]
+        .into_iter()
+        .filter(|given| *given)
+        .count();
+    if given > 1 {
+        return Err(format!(
+            "only one of {}, before or after may be given",
+            index_keys.0
+        ));
+    }
+    Ok((raw_index, before, after))
+}
+
+/// The error a reorder issues when neither an index nor an anchor names the new slot.
+fn placement_required(index_key: &str) -> String {
+    format!("one of {index_key}, before or after is required")
+}
+
 /// Map a split direction; `horizontal`/`vertical` are this fork's original right/down names.
 fn split_side(value: &str) -> Option<crate::split_engine::FocusDirection> {
     use crate::split_engine::FocusDirection;
@@ -614,25 +660,34 @@ async fn dispatch_request(
             }
         }
         "workspace.reorder" => {
-            let Some(position) = params
-                .get("position")
-                .and_then(|value| value.as_u64())
-                .and_then(|value| usize::try_from(value).ok())
+            let Some(id) = params
+                .get("id")
+                .or_else(|| params.get("workspace_id"))
+                .and_then(|value| value.as_str())
             else {
-                return err(
-                    req_id,
-                    "invalid_params",
-                    "position must be a nonnegative integer within the native index range",
-                );
+                return err(req_id, "invalid_params", "id must be a workspace UUID");
             };
+            let (position, before, after) = match placement(
+                &params,
+                ("position", "index"),
+                "before_workspace_id",
+                "after_workspace_id",
+            ) {
+                Ok(placement) => placement,
+                Err(message) => return err(req_id, "invalid_params", &message),
+            };
+            if position.is_none() && before.is_none() && after.is_none() {
+                return err(req_id, "invalid_params", &placement_required("position"));
+            }
+            if let Err(message) = only_main_window(&params) {
+                return err(req_id, "invalid_params", &message);
+            }
             commands::SocketCommand::WorkspaceReorder {
                 req_id: req_id.clone(),
-                id: params
-                    .get("id")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("")
-                    .to_string(),
+                id: id.to_owned(),
                 position,
+                before,
+                after,
                 resp_tx,
             }
         }
@@ -866,53 +921,14 @@ async fn dispatch_request(
                 Some(_) => return err(req_id, "invalid_params", "workspace must be a UUID"),
             };
             // Upstream names the insertion slot `index`; this fork has always read `position`.
-            let position = match params.get("position").or_else(|| params.get("index")) {
-                None => None,
-                Some(value) => match value.as_u64().and_then(|value| usize::try_from(value).ok()) {
-                    Some(value) => Some(value),
-                    None => {
-                        return err(
-                            req_id,
-                            "invalid_params",
-                            "position must be a non-negative integer",
-                        )
-                    }
-                },
-            };
-            let before = match optional_text(&params, "before", "before_surface_id") {
-                Ok(before) => before,
-                Err(message) => return err(req_id, "invalid_params", &message),
-            };
-            let after = match optional_text(&params, "after", "after_surface_id") {
-                Ok(after) => after,
-                Err(message) => return err(req_id, "invalid_params", &message),
-            };
-            let placements = [position.is_some(), before.is_some(), after.is_some()]
-                .into_iter()
-                .filter(|given| *given)
-                .count();
-            if placements > 1 {
-                return err(
-                    req_id,
-                    "invalid_params",
-                    "only one of position, before or after may be given",
-                );
-            }
-            // Linux builds one GTK window: the ref and the window id name it, nothing else can.
-            match optional_text(&params, "window", "window_id") {
-                Ok(Some(window))
-                    if window != super::handles::MAIN_WINDOW_ID && window != "window:1" =>
+            let (position, before, after) =
+                match placement(&params, ("position", "index"), "before_surface_id", "after_surface_id")
                 {
-                    return err(
-                        req_id,
-                        "invalid_params",
-                        &format!(
-                            "this build has a single window; pass window:1 (got {window})"
-                        ),
-                    )
-                }
-                Ok(_) => {}
-                Err(message) => return err(req_id, "invalid_params", &message),
+                    Ok(placement) => placement,
+                    Err(message) => return err(req_id, "invalid_params", &message),
+                };
+            if let Err(message) = only_main_window(&params) {
+                return err(req_id, "invalid_params", &message);
             }
             commands::SocketCommand::SurfaceMove {
                 req_id: req_id.clone(),
@@ -930,28 +946,38 @@ async fn dispatch_request(
             }
         }
         "surface.reorder" => {
-            let Some(id) = params.get("id").and_then(serde_json::Value::as_str) else {
+            let Some(id) = params
+                .get("id")
+                .or_else(|| params.get("surface_id"))
+                .and_then(|value| value.as_str())
+            else {
                 return err(req_id, "invalid_params", "id must be a surface UUID");
             };
-            let Some(position) = params
-                .get("position")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|value| usize::try_from(value).ok())
-            else {
-                return err(
-                    req_id,
-                    "invalid_params",
-                    "position must be a non-negative integer",
-                );
+            let (position, before, after) = match placement(
+                &params,
+                ("position", "index"),
+                "before_surface_id",
+                "after_surface_id",
+            ) {
+                Ok(placement) => placement,
+                Err(message) => return err(req_id, "invalid_params", &message),
             };
+            if position.is_none() && before.is_none() && after.is_none() {
+                return err(req_id, "invalid_params", &placement_required("position"));
+            }
+            if let Err(message) = only_main_window(&params) {
+                return err(req_id, "invalid_params", &message);
+            }
             commands::SocketCommand::SurfaceReorder {
                 req_id: req_id.clone(),
                 id: id.to_owned(),
                 position,
+                before,
+                after,
                 resp_tx,
             }
         }
-        "surface.drag_to_split" => {
+"surface.drag_to_split" => {
             let Some(id) = params.get("id").and_then(serde_json::Value::as_str) else {
                 return err(req_id, "invalid_params", "id must be a surface UUID");
             };

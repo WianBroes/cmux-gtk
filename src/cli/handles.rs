@@ -312,15 +312,25 @@ pub(super) fn canonicalize(cli: &mut Cli) -> Result<(), CliError> {
             id,
             position,
             workspace,
+            index,
+            before,
+            after,
+            ..
         } => {
-            if let Some(trailing) =
-                shift_trailing(workspace, id, position.is_some(), "reorder-workspace")?
-            {
+            if let Some(trailing) = shift_trailing(workspace, id, position.is_some(), "reorder-workspace")? {
+                if index.is_some() {
+                    return Err(CliError::Command(
+                        "reorder-workspace takes either the trailing position or --index, not both".into(),
+                    ));
+                }
                 *position = Some(parse_position(&trailing)?);
             }
-            if position.is_none() {
+            if let Some(index) = index.take() {
+                *position = Some(index);
+            }
+            if position.is_none() && before.is_none() && after.is_none() {
                 return Err(CliError::Command(
-                    "reorder-workspace requires a position".into(),
+                    "reorder-workspace requires a position or --before/--after".into(),
                 ));
             }
             fold_flag(workspace, id, "reorder-workspace")?;
@@ -329,15 +339,25 @@ pub(super) fn canonicalize(cli: &mut Cli) -> Result<(), CliError> {
             id,
             position,
             surface,
+            index,
+            before,
+            after,
+            ..
         } => {
-            if let Some(trailing) =
-                shift_trailing(surface, id, position.is_some(), "reorder-surface")?
-            {
+            if let Some(trailing) = shift_trailing(surface, id, position.is_some(), "reorder-surface")? {
+                if index.is_some() {
+                    return Err(CliError::Command(
+                        "reorder-surface takes either the trailing position or --index, not both".into(),
+                    ));
+                }
                 *position = Some(parse_position(&trailing)?);
             }
-            if position.is_none() {
+            if let Some(index) = index.take() {
+                *position = Some(index);
+            }
+            if position.is_none() && before.is_none() && after.is_none() {
                 return Err(CliError::Command(
-                    "reorder-surface requires a position".into(),
+                    "reorder-surface requires a position or --before/--after".into(),
                 ));
             }
             fold_flag(surface, id, "reorder-surface")?;
@@ -411,14 +431,38 @@ fn collect_targets<'a>(command: &'a mut Commands, targets: &mut Vec<Target<'a>>)
         | Commands::CloseWorkspace { id, .. }
         | Commands::ClearDescription { id, .. }
         | Commands::RenameWorkspace { id, .. }
-        | Commands::SetDescription { id, .. }
-        | Commands::ReorderWorkspace { id, .. } => {
+        | Commands::SetDescription { id, .. } => {
             targets.push(Target::Optional(HandleKind::Workspace, id))
+        }
+
+        Commands::ReorderWorkspace {
+            id,
+            before,
+            after,
+            window,
+            ..
+        } => {
+            targets.push(Target::Optional(HandleKind::Workspace, id));
+            targets.push(Target::Optional(HandleKind::Workspace, before));
+            targets.push(Target::Optional(HandleKind::Workspace, after));
+            targets.push(Target::Optional(HandleKind::Window, window));
+        }
+
+        Commands::ReorderSurface {
+            id,
+            before,
+            after,
+            window,
+            ..
+        } => {
+            targets.push(Target::Optional(HandleKind::Surface, id));
+            targets.push(Target::Optional(HandleKind::Surface, before));
+            targets.push(Target::Optional(HandleKind::Surface, after));
+            targets.push(Target::Optional(HandleKind::Window, window));
         }
 
         Commands::FocusSurface { id, .. }
         | Commands::CloseSurface { id, .. }
-        | Commands::ReorderSurface { id, .. }
         | Commands::Split { id, .. }
         | Commands::SendText { id, .. }
         | Commands::Send { id, .. }
@@ -739,6 +783,7 @@ mod tests {
             id,
             position,
             workspace,
+            ..
         } = cli.command
         else {
             panic!("wrong command");
@@ -765,7 +810,10 @@ mod tests {
 
         let mut cli = parse(&["reorder-surface", "--surface", "surface:1"]);
         let error = canonicalize(&mut cli).expect_err("a position is required");
-        assert_eq!(error.to_string(), "reorder-surface requires a position");
+        assert_eq!(
+            error.to_string(),
+            "reorder-surface requires a position or --before/--after"
+        );
 
         let mut cli = parse(&["reorder-workspace", "--workspace", "workspace:2", "later"]);
         let error = canonicalize(&mut cli).expect_err("a position must be a number");
@@ -773,6 +821,54 @@ mod tests {
             error.to_string().starts_with("Invalid position: later"),
             "{error}"
         );
+    }
+
+    /// A relative placement stands in for the trailing position the reorder used to require.
+    #[test]
+    fn canonicalize_accepts_relative_reorder_placement() {
+        let mut cli = parse(&[
+            "reorder-surface",
+            "--surface",
+            "surface:1",
+            "--after",
+            "surface:2",
+        ]);
+        canonicalize(&mut cli).expect("anchor reorder should canonicalize");
+        let Commands::ReorderSurface {
+            id,
+            position,
+            surface,
+            after,
+            ..
+        } = cli.command
+        else {
+            panic!("wrong command");
+        };
+        // The flag handle folds into the slot the RPC reads.
+        assert_eq!(id.as_deref(), Some("surface:1"));
+        assert_eq!(after.as_deref(), Some("surface:2"));
+        assert!(surface.is_none() && position.is_none());
+
+        let mut cli = parse(&[
+            "reorder-workspace",
+            "--workspace",
+            "workspace:2",
+            "--index",
+            "3",
+        ]);
+        canonicalize(&mut cli).expect("index flag should canonicalize");
+        let Commands::ReorderWorkspace {
+            id,
+            position,
+            workspace,
+            ..
+        } = cli.command
+        else {
+            panic!("wrong command");
+        };
+        assert_eq!(id.as_deref(), Some("workspace:2"));
+        assert_eq!(position, Some(3));
+        assert!(workspace.is_none());
     }
 
     /// The caller environment fills only the anchors the caller did not name.

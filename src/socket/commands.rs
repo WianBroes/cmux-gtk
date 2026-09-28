@@ -125,7 +125,12 @@ pub enum SocketCommand {
     WorkspaceReorder {
         req_id: Value,
         id: String,
-        position: usize,
+        /// Absolute destination slot; `None` places relative to `before` or `after`.
+        position: Option<usize>,
+        /// Anchor workspace: the moved one lands immediately before this one.
+        before: Option<String>,
+        /// Anchor workspace: the moved one lands immediately after this one.
+        after: Option<String>,
         resp_tx: RespTx,
     },
     WorkspaceReorderMany {
@@ -228,7 +233,12 @@ pub enum SocketCommand {
     SurfaceReorder {
         req_id: Value,
         id: String,
-        position: usize,
+        /// Absolute destination slot; `None` places relative to `before` or `after`.
+        position: Option<usize>,
+        /// Anchor surface of the same pane: the moved one lands immediately before it.
+        before: Option<String>,
+        /// Anchor surface of the same pane: the moved one lands immediately after it.
+        after: Option<String>,
         resp_tx: RespTx,
     },
     SurfaceDragToSplit {

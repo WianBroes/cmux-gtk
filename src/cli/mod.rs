@@ -1028,8 +1028,25 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
         Commands::NextWorkspace => ("workspace.next", json!({})),
         Commands::PrevWorkspace => ("workspace.previous", json!({})),
         Commands::LastWorkspace => ("workspace.last", json!({})),
-        Commands::ReorderWorkspace { id, position, .. } => {
-            ("workspace.reorder", json!({"id": id, "position": position}))
+        Commands::ReorderWorkspace {
+            id,
+            position,
+            before,
+            after,
+            window,
+            ..
+        } => {
+            let mut params = serde_json::Map::new();
+            params.insert("id".into(), json!(id));
+            if let Some(position) = position {
+                params.insert("position".into(), json!(position));
+            }
+            for (key, value) in [("before", before), ("after", after), ("window", window)] {
+                if let Some(value) = value {
+                    params.insert(key.into(), json!(value));
+                }
+            }
+            ("workspace.reorder", Value::Object(params))
         }
         Commands::ReorderWorkspaces { order, dry_run } => (
             "workspace.reorder_many",
@@ -1194,8 +1211,25 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             }
             ("surface.move", Value::Object(params))
         }
-        Commands::ReorderSurface { id, position, .. } => {
-            ("surface.reorder", json!({"id": id, "position": position}))
+        Commands::ReorderSurface {
+            id,
+            position,
+            before,
+            after,
+            window,
+            ..
+        } => {
+            let mut params = serde_json::Map::new();
+            params.insert("id".into(), json!(id));
+            if let Some(position) = position {
+                params.insert("position".into(), json!(position));
+            }
+            for (key, value) in [("before", before), ("after", after), ("window", window)] {
+                if let Some(value) = value {
+                    params.insert(key.into(), json!(value));
+                }
+            }
+            ("surface.reorder", Value::Object(params))
         }
         Commands::DragSurfaceToSplit {
             id,
@@ -1566,6 +1600,39 @@ mod tests {
         assert_eq!(params["window"], "window:1");
         assert_eq!(params["focus"], false);
         assert!(params.get("after").is_none());
+        assert!(params.get("position").is_none());
+    }
+
+    /// Reorders carry their named anchor and drop the position they do not use.
+    #[test]
+    fn reorder_placement_maps_to_parameters() {
+        let mut cli = Cli::try_parse_from(["cmux", "reorder-surface", "surface:3", "--before", "surface:1"])
+            .expect("surface reorder arguments should parse");
+        handles::canonicalize(&mut cli).expect("canonicalize");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "surface.reorder");
+        assert_eq!(params["id"], "surface:3");
+        assert_eq!(params["before"], "surface:1");
+        assert!(params.get("position").is_none());
+        assert!(params.get("after").is_none());
+
+        let mut cli = Cli::try_parse_from([
+            "cmux",
+            "reorder-workspace",
+            "--workspace",
+            "workspace:2",
+            "--after",
+            "workspace:1",
+            "--window",
+            "window:1",
+        ])
+        .expect("workspace reorder arguments should parse");
+        handles::canonicalize(&mut cli).expect("canonicalize");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "workspace.reorder");
+        assert_eq!(params["id"], "workspace:2");
+        assert_eq!(params["after"], "workspace:1");
+        assert_eq!(params["window"], "window:1");
         assert!(params.get("position").is_none());
     }
 
