@@ -33,6 +33,20 @@ struct ResumeCommand<'a> {
     environment: &'a [&'a str],
 }
 
+const CLAUDE_RESUME: ResumeCommand<'static> = ResumeCommand {
+    kind: "claude",
+    executable: "claude",
+    prefix: &["--resume"],
+    environment: &["CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"],
+};
+
+const CODEX_RESUME: ResumeCommand<'static> = ResumeCommand {
+    kind: "codex",
+    executable: "codex",
+    prefix: &["resume"],
+    environment: &["CODEX_HOME"],
+};
+
 fn json_provider(name: &str) -> Option<JsonProvider> {
     Some(match name {
         "grok" => JsonProvider {
@@ -1690,21 +1704,14 @@ pub fn claude_event(client: &mut SocketClient, event: ClaudeHookEvent) -> Result
     report_hook(client, "claude", &payload, Some(&id), &surface);
     match event {
         ClaudeHookEvent::SessionStart => {
-            set_agent_resume(
-                client,
-                &payload,
-                &surface,
-                &id,
-                ResumeCommand {
-                    kind: "claude",
-                    executable: "claude",
-                    prefix: &["--resume"],
-                    environment: &["CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"],
-                },
-            )?;
+            set_agent_resume(client, &payload, &surface, &id, CLAUDE_RESUME)?;
             record_turn_baseline(&payload, &surface, &id);
         }
-        ClaudeHookEvent::PromptSubmit => record_turn_baseline(&payload, &surface, &id),
+        ClaudeHookEvent::PromptSubmit => {
+            // Catch up a binding whose SessionStart was missed (cmux closed at that moment).
+            let _ = set_agent_resume(client, &payload, &surface, &id, CLAUDE_RESUME);
+            record_turn_baseline(&payload, &surface, &id)
+        }
         ClaudeHookEvent::SessionEnd => clear_agent_resume(client, &surface, &id)?,
         ClaudeHookEvent::Stop | ClaudeHookEvent::Notification => {
             let (title_key, title_default, body_key, body_default) =
@@ -1754,21 +1761,14 @@ pub fn codex_event(client: &mut SocketClient, event: CodexHookEvent) -> Result<(
     report_hook(client, "codex", &payload, Some(&id), &surface);
     match event {
         CodexHookEvent::SessionStart => {
-            set_agent_resume(
-                client,
-                &payload,
-                &surface,
-                &id,
-                ResumeCommand {
-                    kind: "codex",
-                    executable: "codex",
-                    prefix: &["resume"],
-                    environment: &["CODEX_HOME"],
-                },
-            )?;
+            set_agent_resume(client, &payload, &surface, &id, CODEX_RESUME)?;
             record_turn_baseline(&payload, &surface, &id);
         }
-        CodexHookEvent::PromptSubmit => record_turn_baseline(&payload, &surface, &id),
+        CodexHookEvent::PromptSubmit => {
+            // Catch up a binding whose SessionStart was missed (cmux closed at that moment).
+            let _ = set_agent_resume(client, &payload, &surface, &id, CODEX_RESUME);
+            record_turn_baseline(&payload, &surface, &id)
+        }
         CodexHookEvent::SessionEnd => clear_agent_resume(client, &surface, &id)?,
         CodexHookEvent::Stop => {
             let title = notification_text(&payload, "title", "Codex response ready", 512)?;
@@ -1829,19 +1829,17 @@ pub fn json_provider_event(
             }
         }
         JsonHookEvent::PromptSubmit => {
+            let resume = ResumeCommand {
+                kind: provider.name,
+                executable: provider.binary,
+                prefix: provider.resume_prefix,
+                environment: provider.environment,
+            };
             if provider.name == "cursor" {
-                set_agent_resume(
-                    client,
-                    &payload,
-                    &surface,
-                    &id,
-                    ResumeCommand {
-                        kind: provider.name,
-                        executable: provider.binary,
-                        prefix: provider.resume_prefix,
-                        environment: provider.environment,
-                    },
-                )?;
+                set_agent_resume(client, &payload, &surface, &id, resume)?;
+            } else {
+                // Catch up a binding whose session start was missed (cmux closed at that moment).
+                let _ = set_agent_resume(client, &payload, &surface, &id, resume);
             }
             record_turn_baseline(&payload, &surface, &id);
         }
