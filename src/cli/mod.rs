@@ -35,6 +35,7 @@ mod updater;
 pub use socket_client::CliError;
 
 mod args;
+pub mod browser_argv;
 mod diff;
 mod handles;
 pub use args::{BrowserCommand, Cli, Commands};
@@ -214,6 +215,11 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
         if send_text(text).is_empty() {
             return Err(CliError::Command("send requires text".into()));
         }
+    }
+
+    // Browser argument combinations the socket cannot express are usage errors too.
+    if let Commands::Browser(command) = &cli.command {
+        validate_browser_command(command)?;
     }
 
     let prepared_diff = match &cli.command {
@@ -435,6 +441,9 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
     } else if let Commands::ListPaneSurfaces { ref pane } = cli.command {
         let result = tree::pane_surfaces(&mut client, pane.as_deref());
         ("pane.surfaces".to_string(), result)
+    } else if let Commands::Browser(BrowserCommand::Identify { surface }) = &cli.command {
+        let result = identify_browser(&mut client, surface.as_deref());
+        ("system.identify".to_string(), result)
     } else {
         let (method, params) = command_to_rpc(&cli.command);
         let result = client.call(method, params);
@@ -494,6 +503,95 @@ fn caller_surface() -> Option<String> {
     std::env::var("CMUX_SURFACE_ID")
         .ok()
         .filter(|value| !value.is_empty())
+}
+
+/// Scroll steps `browser scroll` passes through to the socket as `direction`.
+const SCROLL_DIRECTIONS: [&str; 4] = ["up", "down", "left", "right"];
+
+/// Whether the bare `scroll` positional names one of the stepped directions.
+fn is_scroll_direction(direction: &Option<String>) -> bool {
+    direction
+        .as_deref()
+        .is_some_and(|value| SCROLL_DIRECTIONS.contains(&value))
+}
+
+/// The vertical offset a bare `scroll` positional carries when it is written as an integer.
+fn scroll_offset(direction: &Option<String>) -> Option<i32> {
+    direction.as_deref()?.parse().ok()
+}
+
+/// Resolve a path argument against the current directory before it reaches the socket.
+fn absolute_path(path: &str) -> String {
+    std::path::absolute(path).map_or_else(
+        |_| path.to_string(),
+        |resolved| resolved.to_string_lossy().into_owned(),
+    )
+}
+
+/// Refuse browser argument combinations the socket cannot express, before any connection.
+fn validate_browser_command(command: &BrowserCommand) -> Result<(), CliError> {
+    match command {
+        BrowserCommand::Get {
+            command: args::BrowserGetCommand::Attr { name, attr, .. },
+        } if name.is_none() && attr.is_none() => Err(CliError::Command(
+            "browser get attr requires --attr <name>".into(),
+        )),
+        BrowserCommand::Scroll {
+            direction,
+            selector,
+            dx,
+            dy,
+            ..
+        } if !is_scroll_direction(direction)
+            && scroll_offset(direction).is_none()
+            && selector.is_none()
+            && dx.is_none()
+            && dy.is_none() =>
+        {
+            Err(CliError::Command(
+                "browser scroll requires a direction (up/down/left/right) or --dx/--dy".into(),
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Read one page field (`url` or `title`) from a browser RPC response.
+fn browser_page_field(response: &serde_json::Value, field: &str) -> String {
+    response
+        .pointer(&format!("/data/{field}"))
+        .or_else(|| response.get(field))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// Identify the cmux topology, then the page a named browser surface shows.
+fn identify_browser(
+    client: &mut socket_client::SocketClient,
+    surface: Option<&str>,
+) -> Result<serde_json::Value, CliError> {
+    let mut result = client.call("system.identify", serde_json::json!({}))?;
+    let Some(surface) = surface else {
+        return Ok(result);
+    };
+    let url = client.call(
+        "browser.get.url",
+        serde_json::json!({"surface_ref": surface}),
+    )?;
+    let title = client.call(
+        "browser.get.title",
+        serde_json::json!({"surface_ref": surface}),
+    )?;
+    let browser = serde_json::json!({
+        "surface": surface,
+        "url": browser_page_field(&url, "url"),
+        "title": browser_page_field(&title, "title"),
+    });
+    if let serde_json::Value::Object(fields) = &mut result {
+        fields.insert("browser".to_string(), browser);
+    }
+    Ok(result)
 }
 
 /// Map a BrowserCommand variant to its JSON-RPC method and params.
@@ -576,14 +674,36 @@ fn browser_command_to_rpc(cmd: &BrowserCommand) -> (&'static str, serde_json::Va
             surface,
             direction,
             amount,
-        } => (
-            "browser.scroll",
-            json!({
-                "surface_ref": surface,
-                "direction": direction,
-                "amount": amount
-            }),
-        ),
+            selector,
+            dx,
+            dy,
+        } => {
+            if is_scroll_direction(direction) {
+                (
+                    "browser.scroll",
+                    json!({
+                        "surface_ref": surface,
+                        "direction": direction,
+                        "amount": amount
+                    }),
+                )
+            } else {
+                // A bare integer positional scrolls vertically; an explicit `--dy` wins over it.
+                let offset = (*dy).or_else(|| scroll_offset(direction));
+                if selector.is_none() && dx.is_none() && offset.is_none() {
+                    unreachable!("browser scroll is validated before dispatch");
+                }
+                (
+                    "browser.scroll",
+                    json!({
+                        "surface_ref": surface,
+                        "selector": selector,
+                        "dx": dx,
+                        "dy": offset
+                    }),
+                )
+            }
+        }
         BrowserCommand::Select {
             surface,
             selector,
@@ -640,11 +760,145 @@ fn browser_command_to_rpc(cmd: &BrowserCommand) -> (&'static str, serde_json::Va
             "browser.gethtml",
             json!({"surface_ref": surface, "selector": selector}),
         ),
-        BrowserCommand::Screenshot { surface } => {
-            ("browser.screenshot", json!({"surface_ref": surface}))
-        }
+        BrowserCommand::Screenshot { surface, out } => (
+            "browser.screenshot",
+            json!({"surface_ref": surface, "path": out.as_deref().map(absolute_path)}),
+        ),
         BrowserCommand::StreamEnable => ("browser.stream.enable", json!({})),
         BrowserCommand::StreamDisable => ("browser.stream.disable", json!({})),
+        BrowserCommand::Identify { .. } => {
+            unreachable!("browser identify is assembled in run()")
+        }
+        BrowserCommand::Dblclick { surface, selector } => (
+            "browser.dblclick",
+            json!({"surface_ref": surface, "selector": selector}),
+        ),
+        BrowserCommand::Focus { surface, selector } => (
+            "browser.focus",
+            json!({"surface_ref": surface, "selector": selector}),
+        ),
+        BrowserCommand::Check { surface, selector } => (
+            "browser.check",
+            json!({"surface_ref": surface, "selector": selector}),
+        ),
+        BrowserCommand::Uncheck { surface, selector } => (
+            "browser.uncheck",
+            json!({"surface_ref": surface, "selector": selector}),
+        ),
+        BrowserCommand::Keydown { surface, key } => (
+            "browser.keydown",
+            json!({"surface_ref": surface, "key": key}),
+        ),
+        BrowserCommand::Keyup { surface, key } => {
+            ("browser.keyup", json!({"surface_ref": surface, "key": key}))
+        }
+        BrowserCommand::Highlight { surface, selector } => (
+            "browser.highlight",
+            json!({"surface_ref": surface, "selector": selector}),
+        ),
+        BrowserCommand::Frame { surface, target } => {
+            if target == "main" {
+                ("browser.frame.main", json!({"surface_ref": surface}))
+            } else {
+                (
+                    "browser.frame.select",
+                    json!({"surface_ref": surface, "selector": target}),
+                )
+            }
+        }
+        BrowserCommand::Console { surface, action } => match action.as_str() {
+            "clear" => ("browser.console.clear", json!({"surface_ref": surface})),
+            _ => ("browser.console.list", json!({"surface_ref": surface})),
+        },
+        BrowserCommand::Errors { surface, action } => match action.as_str() {
+            "clear" => ("browser.errors.clear", json!({"surface_ref": surface})),
+            _ => ("browser.errors.list", json!({"surface_ref": surface})),
+        },
+        BrowserCommand::Get { command } => match command {
+            args::BrowserGetCommand::Url { surface } => {
+                ("browser.get.url", json!({"surface_ref": surface}))
+            }
+            args::BrowserGetCommand::Title { surface } => {
+                ("browser.get.title", json!({"surface_ref": surface}))
+            }
+            args::BrowserGetCommand::Text { surface, selector } => (
+                "browser.get.text",
+                json!({"surface_ref": surface, "selector": selector}),
+            ),
+            args::BrowserGetCommand::Html { surface, selector } => (
+                "browser.get.html",
+                json!({"surface_ref": surface, "selector": selector}),
+            ),
+            args::BrowserGetCommand::Value { surface, selector } => (
+                "browser.get.value",
+                json!({"surface_ref": surface, "selector": selector}),
+            ),
+            args::BrowserGetCommand::Attr {
+                surface,
+                selector,
+                name,
+                attr,
+            } => {
+                // `--attr` wins over the positional name; run() refuses an empty one.
+                let attr = attr.as_deref().or(name.as_deref()).unwrap_or_default();
+                (
+                    "browser.get.attr",
+                    json!({"surface_ref": surface, "selector": selector, "attr": attr}),
+                )
+            }
+            args::BrowserGetCommand::Count { surface, selector } => (
+                "browser.get.count",
+                json!({"surface_ref": surface, "selector": selector}),
+            ),
+            args::BrowserGetCommand::Box { surface, selector } => (
+                "browser.get.box",
+                json!({"surface_ref": surface, "selector": selector}),
+            ),
+            args::BrowserGetCommand::Styles {
+                surface,
+                selector,
+                property,
+            } => (
+                "browser.get.styles",
+                json!({"surface_ref": surface, "selector": selector, "property": property}),
+            ),
+        },
+        BrowserCommand::Is { command } => match command {
+            args::BrowserIsCommand::Visible { surface, selector } => (
+                "browser.is.visible",
+                json!({"surface_ref": surface, "selector": selector}),
+            ),
+            args::BrowserIsCommand::Enabled { surface, selector } => (
+                "browser.is.enabled",
+                json!({"surface_ref": surface, "selector": selector}),
+            ),
+            args::BrowserIsCommand::Checked { surface, selector } => (
+                "browser.is.checked",
+                json!({"surface_ref": surface, "selector": selector}),
+            ),
+        },
+        BrowserCommand::Dialog { command } => match command {
+            args::BrowserDialogCommand::Accept { surface, text } => {
+                let text = (!text.is_empty()).then(|| text.join(" "));
+                (
+                    "browser.dialog.accept",
+                    json!({"surface_ref": surface, "text": text}),
+                )
+            }
+            args::BrowserDialogCommand::Dismiss { surface } => {
+                ("browser.dialog.dismiss", json!({"surface_ref": surface}))
+            }
+        },
+        BrowserCommand::State { command } => match command {
+            args::BrowserStateCommand::Save { surface, path } => (
+                "browser.state.save",
+                json!({"surface_ref": surface, "path": absolute_path(path)}),
+            ),
+            args::BrowserStateCommand::Load { surface, path } => (
+                "browser.state.load",
+                json!({"surface_ref": surface, "path": absolute_path(path)}),
+            ),
+        },
     }
 }
 
@@ -1352,5 +1606,306 @@ mod tests {
         let mut empty = serde_json::json!({"id": "surface:3"});
         keep_last_lines(&mut empty, 1);
         assert_eq!(empty, serde_json::json!({"id": "surface:3"}));
+    }
+
+    /// `browser get` reads values through its nested verbs, surface first in the subcommand.
+    #[test]
+    fn browser_get_group_maps_to_read_methods() {
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "browser",
+            "get",
+            "attr",
+            "surface:3",
+            "#link",
+            "href",
+        ])
+        .expect("positional attribute name should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.get.attr");
+        assert_eq!(params["surface_ref"], "surface:3");
+        assert_eq!(params["selector"], "#link");
+        assert_eq!(params["attr"], "href");
+
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "browser",
+            "get",
+            "attr",
+            "surface:3",
+            "#link",
+            "href",
+            "--attr",
+            "id",
+        ])
+        .expect("--attr should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.get.attr");
+        // `--attr` wins over the positional name.
+        assert_eq!(params["attr"], "id");
+
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "browser",
+            "get",
+            "styles",
+            "surface:3",
+            "#box",
+            "--property",
+            "color",
+        ])
+        .expect("get styles should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.get.styles");
+        assert_eq!(params["surface_ref"], "surface:3");
+        assert_eq!(params["selector"], "#box");
+        assert_eq!(params["property"], "color");
+    }
+
+    /// `browser is` probes element state with the surface first.
+    #[test]
+    fn browser_is_group_maps_to_state_probes() {
+        let cli = Cli::try_parse_from(["cmux", "browser", "is", "checked", "surface:3", "#agree"])
+            .expect("is checked should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.is.checked");
+        assert_eq!(params["surface_ref"], "surface:3");
+        assert_eq!(params["selector"], "#agree");
+    }
+
+    /// `frame` selects the main frame or an element by selector.
+    #[test]
+    fn browser_frame_selects_main_or_an_element() {
+        let cli = Cli::try_parse_from(["cmux", "browser", "frame", "surface:3", "main"])
+            .expect("frame main should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.frame.main");
+        assert_eq!(params["surface_ref"], "surface:3");
+        assert!(params.get("selector").is_none());
+
+        let cli = Cli::try_parse_from(["cmux", "browser", "frame", "surface:3", "#f"])
+            .expect("frame selector should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.frame.select");
+        assert_eq!(params["selector"], "#f");
+    }
+
+    /// `dialog accept` joins its words into one response text.
+    #[test]
+    fn browser_dialog_accept_joins_its_words() {
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "browser",
+            "dialog",
+            "accept",
+            "surface:3",
+            "bonjour",
+            "toi",
+        ])
+        .expect("dialog accept should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.dialog.accept");
+        assert_eq!(params["surface_ref"], "surface:3");
+        assert_eq!(params["text"], "bonjour toi");
+    }
+
+    /// `console` and `errors` default to listing and honour an explicit `clear`.
+    #[test]
+    fn browser_console_and_errors_pick_their_action() {
+        let cli = Cli::try_parse_from(["cmux", "browser", "console", "surface:3"])
+            .expect("console should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.console.list");
+        assert_eq!(params["surface_ref"], "surface:3");
+
+        let cli = Cli::try_parse_from(["cmux", "browser", "errors", "surface:3", "clear"])
+            .expect("errors clear should parse");
+        let (method, _) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.errors.clear");
+    }
+
+    /// `scroll` keeps its direction form and adds the upstream offset forms.
+    #[test]
+    fn browser_scroll_keeps_direction_and_adds_offsets() {
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "browser",
+            "scroll",
+            "surface:3",
+            "--selector",
+            "#t",
+            "--dy",
+            "200",
+        ])
+        .expect("selector scroll should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.scroll");
+        assert_eq!(params["surface_ref"], "surface:3");
+        assert_eq!(params["selector"], "#t");
+        assert_eq!(params["dy"], 200);
+        assert!(params.get("direction").is_none());
+
+        let cli = Cli::try_parse_from(["cmux", "browser", "scroll", "surface:3", "-120"])
+            .expect("integer scroll should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.scroll");
+        assert_eq!(params["dy"], -120);
+
+        let cli = Cli::try_parse_from(["cmux", "browser", "scroll", "surface:3", "down"])
+            .expect("directional scroll should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.scroll");
+        assert_eq!(params["direction"], "down");
+        assert_eq!(params["amount"], 300);
+    }
+
+    /// `fill` without text clears the field instead of failing to parse.
+    #[test]
+    fn fill_without_text_defaults_to_empty() {
+        let cli = Cli::try_parse_from(["cmux", "browser", "fill", "surface:3", "#i"])
+            .expect("fill without text should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.fill");
+        assert_eq!(params["text"], "");
+    }
+
+    /// The upstream aliases `key`, `navigate` and `url` reach the same methods.
+    #[test]
+    fn browser_aliases_reach_their_methods() {
+        let cli = Cli::try_parse_from(["cmux", "browser", "key", "surface:3", "Enter"])
+            .expect("key alias should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.press");
+        assert_eq!(params["key"], "Enter");
+
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "browser",
+            "navigate",
+            "surface:3",
+            "https://example.com",
+        ])
+        .expect("navigate alias should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.goto");
+        assert_eq!(params["url"], "https://example.com");
+
+        let cli = Cli::try_parse_from(["cmux", "browser", "url", "surface:3"])
+            .expect("url alias should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.url");
+        assert_eq!(params["surface_ref"], "surface:3");
+    }
+
+    /// `snapshot S -i` is the short form of `--interactive`.
+    #[test]
+    fn snapshot_accepts_the_short_interactive_flag() {
+        let cli = Cli::try_parse_from(["cmux", "browser", "snapshot", "surface:3", "-i"])
+            .expect("snapshot -i should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.snapshot");
+        assert_eq!(params["interactive"], true);
+        assert_eq!(params["surface_ref"], "surface:3");
+    }
+
+    /// The simple action verbs each reach their own socket method.
+    #[test]
+    fn browser_action_verbs_map_to_their_methods() {
+        for (verb, method) in [
+            ("dblclick", "browser.dblclick"),
+            ("focus", "browser.focus"),
+            ("check", "browser.check"),
+            ("uncheck", "browser.uncheck"),
+            ("highlight", "browser.highlight"),
+        ] {
+            let cli = Cli::try_parse_from(["cmux", "browser", verb, "surface:3", "#b"])
+                .expect("verb should parse");
+            let (actual, params) = command_to_rpc(&cli.command);
+            assert_eq!(actual, method, "{verb}");
+            assert_eq!(params["surface_ref"], "surface:3");
+            assert_eq!(params["selector"], "#b");
+        }
+        for (verb, method) in [("keydown", "browser.keydown"), ("keyup", "browser.keyup")] {
+            let cli = Cli::try_parse_from(["cmux", "browser", verb, "surface:3", "Enter"])
+                .expect("verb should parse");
+            let (actual, params) = command_to_rpc(&cli.command);
+            assert_eq!(actual, method, "{verb}");
+            assert_eq!(params["key"], "Enter");
+        }
+    }
+
+    /// `state` and `screenshot --out` deliver absolute paths, `--out` omitted stays null.
+    #[test]
+    fn browser_state_and_screenshot_paths_are_absolute() {
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "browser",
+            "state",
+            "save",
+            "surface:3",
+            "/tmp/state.json",
+        ])
+        .expect("state save should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.state.save");
+        assert_eq!(params["path"], "/tmp/state.json");
+
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "browser",
+            "screenshot",
+            "surface:3",
+            "--out",
+            "/tmp/shot.png",
+        ])
+        .expect("screenshot --out should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.screenshot");
+        assert_eq!(params["path"], "/tmp/shot.png");
+
+        let cli = Cli::try_parse_from(["cmux", "browser", "screenshot", "surface:3"])
+            .expect("screenshot should parse");
+        let (_, params) = command_to_rpc(&cli.command);
+        assert!(params["path"].is_null());
+    }
+
+    /// Browser usage errors are command errors reported before any connection.
+    #[test]
+    fn browser_usage_errors_are_reported_before_connecting() {
+        let cli = Cli::try_parse_from(["cmux", "browser", "get", "attr", "surface:3", "#i"])
+            .expect("get attr should parse");
+        let message = match run(cli) {
+            Err(CliError::Command(message)) => message,
+            _ => panic!("get attr without a name must fail"),
+        };
+        assert_eq!(message, "browser get attr requires --attr <name>");
+
+        let cli = Cli::try_parse_from(["cmux", "browser", "scroll", "surface:3"])
+            .expect("scroll should parse");
+        let message = match run(cli) {
+            Err(CliError::Command(message)) => message,
+            _ => panic!("scroll without a direction must fail"),
+        };
+        assert_eq!(
+            message,
+            "browser scroll requires a direction (up/down/left/right) or --dx/--dy"
+        );
+    }
+
+    /// Browser page fields are read from `data` first, then from the top level.
+    #[test]
+    fn browser_page_fields_fall_back_to_the_top_level() {
+        assert_eq!(
+            browser_page_field(
+                &serde_json::json!({"success": true, "data": {"url": "https://x"}}),
+                "url"
+            ),
+            "https://x"
+        );
+        assert_eq!(
+            browser_page_field(&serde_json::json!({"title": "Page"}), "title"),
+            "Page"
+        );
+        assert_eq!(browser_page_field(&serde_json::json!({}), "url"), "");
     }
 }

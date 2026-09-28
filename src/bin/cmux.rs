@@ -17,7 +17,7 @@ use clap::Parser;
 
 /// Parse arguments and translate command failures into the documented process exit codes.
 fn main() -> std::process::ExitCode {
-    let cli_args = cli::Cli::parse();
+    let cli_args = cli::Cli::parse_from(cli::browser_argv::normalize(std::env::args().collect()));
     match cli::run(cli_args) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(cli::CliError::Connection(msg)) => {
