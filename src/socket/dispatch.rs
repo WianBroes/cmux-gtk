@@ -1005,6 +1005,43 @@ async fn dispatch_request(
                 resp_tx,
             }
         }
+        "surface.split_off" => {
+            let Some(id) = params
+                .get("surface_id")
+                .or_else(|| params.get("id"))
+                .and_then(|value| value.as_str())
+            else {
+                return err(req_id, "invalid_params", "surface_id must be a surface UUID");
+            };
+            let direction = match params.get("direction").and_then(|value| value.as_str()) {
+                Some("left") => crate::split_engine::FocusDirection::Left,
+                Some("right") => crate::split_engine::FocusDirection::Right,
+                Some("up") => crate::split_engine::FocusDirection::Up,
+                Some("down") => crate::split_engine::FocusDirection::Down,
+                _ => {
+                    return err(
+                        req_id,
+                        "invalid_params",
+                        "direction must be left, right, up, or down",
+                    )
+                }
+            };
+            let focus = match params.get("focus") {
+                None | Some(serde_json::Value::Null) => false,
+                Some(serde_json::Value::Bool(focus)) => *focus,
+                Some(_) => return err(req_id, "invalid_params", "focus must be a boolean"),
+            };
+            if let Err(message) = only_main_window(&params) {
+                return err(req_id, "invalid_params", &message);
+            }
+            commands::SocketCommand::SurfaceSplitOff {
+                req_id: req_id.clone(),
+                id: id.to_owned(),
+                direction,
+                focus,
+                resp_tx,
+            }
+        }
         "surface.send_text" | "surface.send_key" | "debug.type" => {
             let field = if method == "surface.send_key" {
                 "key"

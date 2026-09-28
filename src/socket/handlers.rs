@@ -481,6 +481,7 @@ fn handle_socket_command_traced(
                 "surface.move",
                 "surface.reorder",
                 "surface.drag_to_split",
+                "surface.split_off",
                 "surface.send_text",
                 "surface.send_key",
                 "surface.read_text",
@@ -1611,6 +1612,66 @@ fn handle_socket_command_traced(
                                 "id": id,
                                 "workspace_id": s.workspaces[index].uuid,
                                 "pane": format!("pane:{pane_id}"),
+                            }),
+                        )
+                    }
+                    Err(message) => err(
+                        req_id,
+                        if message.contains("not found") {
+                            "not_found"
+                        } else {
+                            "invalid_params"
+                        },
+                        message,
+                    ),
+                }
+            };
+            let _ = resp_tx.send(response);
+        }
+
+        SocketCommand::SurfaceSplitOff {
+            req_id,
+            id,
+            direction,
+            focus,
+            resp_tx,
+        } => {
+            let Some(uuid) = uuid::Uuid::parse_str(&id).ok() else {
+                let _ = resp_tx.send(err(req_id, "invalid_params", "invalid surface UUID"));
+                return;
+            };
+            let response = {
+                let mut s = state.borrow_mut();
+                let Some(index) = s
+                    .split_engines
+                    .iter()
+                    .position(|engine| engine.find_pane_id_by_uuid(&id).is_some())
+                else {
+                    let _ = resp_tx.send(err(req_id, "not_found", "surface not found"));
+                    return;
+                };
+                // The anchor is the surface's own pane: the tab becomes a sibling of it.
+                let Some((own_pane, _)) = s.split_engines[index].surface_location(&id) else {
+                    let _ = resp_tx.send(err(req_id, "not_found", "surface not found"));
+                    return;
+                };
+                let previous_pane = s.split_engines[index].active_pane_id;
+                match s.split_engines[index].drag_surface_to_split(uuid, own_pane, direction) {
+                    Ok(new_pane) => {
+                        if focus {
+                            s.switch_to_index(index);
+                        } else {
+                            // The split focuses its new pane; put focus back where it was.
+                            s.split_engines[index].activate_pane(previous_pane);
+                            s.split_engines[s.active_index].focus_active_surface();
+                        }
+                        s.trigger_session_save();
+                        ok(
+                            req_id,
+                            json!({
+                                "id": id,
+                                "workspace_id": s.workspaces[index].uuid,
+                                "pane": format!("pane:{new_pane}"),
                             }),
                         )
                     }

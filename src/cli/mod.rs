@@ -1240,6 +1240,16 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             "surface.drag_to_split",
             json!({"id": id, "pane": pane, "direction": direction}),
         ),
+        Commands::SplitOff {
+            surface,
+            direction,
+            focus,
+        } => (
+            "surface.split_off",
+            // Upstream keeps focus on the calling terminal unless `--focus true` says otherwise.
+            json!({"surface_id": surface, "direction": direction,
+                "focus": focus.unwrap_or(false)}),
+        ),
         Commands::SendText { text, id } => {
             let mut p = serde_json::Map::new();
             p.insert("text".into(), json!(text));
@@ -1634,6 +1644,31 @@ mod tests {
         assert_eq!(params["after"], "workspace:1");
         assert_eq!(params["window"], "window:1");
         assert!(params.get("position").is_none());
+    }
+
+    /// `split-off` keeps upstream's focus default and names its surface.
+    #[test]
+    fn split_off_maps_to_its_method() {
+        let cli = Cli::try_parse_from(["cmux", "split-off", "--surface", "surface:4", "left"])
+            .expect("split-off arguments should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "surface.split_off");
+        assert_eq!(params["surface_id"], "surface:4");
+        assert_eq!(params["direction"], "left");
+        assert_eq!(params["focus"], false);
+
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "split-off",
+            "--surface",
+            "surface:4",
+            "down",
+            "--focus",
+            "true",
+        ])
+        .expect("split-off arguments should parse");
+        let (_, params) = command_to_rpc(&cli.command);
+        assert_eq!(params["focus"], true);
     }
 
     /// The description commands reach the workspace by uuid, set and clear apart.

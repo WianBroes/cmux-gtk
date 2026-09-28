@@ -495,6 +495,9 @@ fn collect_targets<'a>(command: &'a mut Commands, targets: &mut Vec<Target<'a>>)
             targets.push(Target::Optional(HandleKind::Surface, id));
             targets.push(Target::Required(HandleKind::Pane, pane));
         }
+        Commands::SplitOff { surface, .. } => {
+            targets.push(Target::Required(HandleKind::Surface, surface))
+        }
         Commands::MoveSurface {
             id,
             pane,

@@ -653,6 +653,22 @@ pub enum Commands {
         #[arg(long, value_parser = ["left", "right", "up", "down"])]
         direction: String,
     },
+    /// Split the surface's own pane and move the tab into the new split (upstream `split-off`)
+    SplitOff {
+        /// Surface to split out: UUID, ref (surface:N) or index
+        #[arg(long, visible_alias = "panel")]
+        surface: String,
+        /// Side of the new split: left, right, up or down
+        #[arg(value_parser = ["left", "right", "up", "down"])]
+        direction: String,
+        /// Focus the surface after splitting it out (upstream defaults to keeping focus)
+        #[arg(
+            long,
+            value_name = "true|false",
+            value_parser = clap::builder::BoolishValueParser::new()
+        )]
+        focus: Option<bool>,
+    },
     /// Send text to a surface
     SendText {
         /// Text to send
@@ -2326,6 +2342,46 @@ mod handle_argument_tests {
                 "--after",
                 "workspace:3",
             ],
+        ] {
+            assert!(
+                Cli::try_parse_from(arguments.iter().collect::<Vec<_>>()).is_err(),
+                "{arguments:?} must be refused"
+            );
+        }
+    }
+
+    /// Upstream's `split-off --surface <handle> <direction>` parses with its focus flag.
+    #[test]
+    fn split_off_form_parses() {
+        match parse(&["split-off", "--surface", "surface:2", "right"]) {
+            Commands::SplitOff {
+                surface,
+                direction,
+                focus,
+            } => {
+                assert_eq!(surface, "surface:2");
+                assert_eq!(direction, "right");
+                assert!(focus.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["split-off", "--panel", SURFACE, "up", "--focus", "true"]) {
+            Commands::SplitOff {
+                surface,
+                direction,
+                focus,
+            } => {
+                assert_eq!(surface, SURFACE);
+                assert_eq!(direction, "up");
+                assert_eq!(focus, Some(true));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        // Both halves are required, and the direction is a fixed vocabulary.
+        for arguments in [
+            vec!["split-off", "--surface", SURFACE],
+            vec!["split-off", "right"],
+            vec!["split-off", "--surface", SURFACE, "sideways"],
         ] {
             assert!(
                 Cli::try_parse_from(arguments.iter().collect::<Vec<_>>()).is_err(),

@@ -248,6 +248,15 @@ pub enum SocketCommand {
         direction: crate::split_engine::FocusDirection,
         resp_tx: RespTx,
     },
+    /// Split the surface's own pane and move the tab into the new split (`surface.split_off`).
+    SurfaceSplitOff {
+        req_id: Value,
+        id: String,
+        direction: crate::split_engine::FocusDirection,
+        /// Move focus with the split; upstream's CLI keeps focus when absent.
+        focus: bool,
+        resp_tx: RespTx,
+    },
     SurfaceSendText {
         req_id: Value,
         id: Option<String>,
