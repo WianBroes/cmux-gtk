@@ -130,6 +130,10 @@ fn socket_override(cli: &Cli) -> Option<String> {
 
 /// Run the CLI with the parsed arguments.
 pub fn run(mut cli: Cli) -> Result<(), CliError> {
+    // `workspace <sub>` is sugar for the legacy verb it mirrors: expand it first so
+    // canonicalization, dispatch and formatting keep one code path per command.
+    let namespace = std::mem::replace(&mut cli.command, Commands::Ping);
+    cli.command = expand_workspace_namespace(namespace);
     let explicit_socket = socket_override(&cli);
     if let Commands::ClaudeTeams { args } = &cli.command {
         return teams::launch(args);
@@ -911,6 +915,27 @@ fn browser_command_to_rpc(cmd: &BrowserCommand) -> (&'static str, serde_json::Va
     }
 }
 
+/// Map `cmux workspace create|close|select|rename` onto the legacy verb carrying the same
+/// options; any other command passes through unchanged.
+fn expand_workspace_namespace(command: Commands) -> Commands {
+    use args::WorkspaceCommands;
+    match command {
+        Commands::Workspace(WorkspaceCommands::Create { name, cwd, command }) => {
+            Commands::NewWorkspace { name, cwd, command }
+        }
+        Commands::Workspace(WorkspaceCommands::Close { id, workspace }) => {
+            Commands::CloseWorkspace { id, workspace }
+        }
+        Commands::Workspace(WorkspaceCommands::Select { id, workspace }) => {
+            Commands::SelectWorkspace { id, workspace }
+        }
+        Commands::Workspace(WorkspaceCommands::Rename { id, name, workspace }) => {
+            Commands::RenameWorkspace { id, name, workspace }
+        }
+        other => other,
+    }
+}
+
 /// Convert a CLI command to a JSON-RPC method and params.
 /// Raw is handled separately in run() — panics if called with Raw.
 fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
@@ -931,6 +956,7 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             serde_json::json!({"workspace_id":workspace}),
         ),
         Commands::Update => unreachable!("update is handled before socket discovery"),
+        Commands::Workspace(_) => unreachable!("the workspace namespace expands before dispatch"),
         Commands::Diff { .. } => unreachable!("diff is prepared before socket dispatch"),
         Commands::Project { .. } => unreachable!("project is prepared before socket dispatch"),
         Commands::Comments { .. } => unreachable!("comments run without socket dispatch"),
@@ -1669,6 +1695,62 @@ mod tests {
         .expect("split-off arguments should parse");
         let (_, params) = command_to_rpc(&cli.command);
         assert_eq!(params["focus"], true);
+    }
+
+    /// `workspace <sub>` expands onto the legacy verb and reaches the same socket method.
+    #[test]
+    fn workspace_namespace_expands_to_the_legacy_verbs() {
+        let mut cli = Cli::try_parse_from(["cmux", "workspace", "select", "--workspace", "workspace:2"])
+            .expect("workspace select should parse");
+        cli.command = expand_workspace_namespace(cli.command);
+        handles::canonicalize(&mut cli).expect("canonicalize");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "workspace.select");
+        assert_eq!(params["id"], "workspace:2");
+
+        let mut cli = Cli::try_parse_from([
+            "cmux",
+            "workspace",
+            "create",
+            "--name",
+            "Plan",
+            "--cwd",
+            "/srv",
+            "--command",
+            "ls",
+        ])
+        .expect("workspace create should parse");
+        cli.command = expand_workspace_namespace(cli.command);
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "workspace.create");
+        assert_eq!(params["name"], "Plan");
+        assert_eq!(params["working_directory"], "/srv");
+        assert_eq!(params["initial_input"], "ls");
+
+        let mut cli = Cli::try_parse_from(["cmux", "workspace", "close", "workspace:3"])
+            .expect("workspace close should parse");
+        cli.command = expand_workspace_namespace(cli.command);
+        handles::canonicalize(&mut cli).expect("canonicalize");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "workspace.close");
+        assert_eq!(params["id"], "workspace:3");
+
+        let mut cli = Cli::try_parse_from([
+            "cmux",
+            "workspace",
+            "rename",
+            "--workspace",
+            "workspace:2",
+            "--",
+            "New name",
+        ])
+        .expect("workspace rename should parse");
+        cli.command = expand_workspace_namespace(cli.command);
+        handles::canonicalize(&mut cli).expect("canonicalize");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "workspace.rename");
+        assert_eq!(params["id"], "workspace:2");
+        assert_eq!(params["name"], "New name");
     }
 
     /// The description commands reach the workspace by uuid, set and clear apart.

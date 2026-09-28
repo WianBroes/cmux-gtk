@@ -301,6 +301,9 @@ pub enum Commands {
     },
 
     // -- Workspace management --
+    /// Workspace verbs in their upstream `cmux workspace …` spelling
+    #[command(subcommand)]
+    Workspace(WorkspaceCommands),
     /// Create a new workspace
     NewWorkspace {
         /// Display name (defaults to the selected folder name)
@@ -920,6 +923,56 @@ pub enum Commands {
     /// Browser automation (agent primary interface)
     #[command(subcommand)]
     Browser(BrowserCommand),
+}
+
+/// `cmux workspace <sub>`: upstream spelling of the legacy workspace verbs, same arguments.
+///
+/// The parser mirrors the legacy fields one for one so `run` can expand the namespace onto
+/// `new-workspace`, `close-workspace`, `select-workspace` and `rename-workspace` and keep a
+/// single canonicalization and dispatch path.
+#[derive(Subcommand)]
+pub enum WorkspaceCommands {
+    /// Create a new workspace (same options as `new-workspace`)
+    Create {
+        /// Display name (defaults to the selected folder name)
+        #[arg(long)]
+        name: Option<String>,
+        /// Folder new terminals in this workspace start in
+        #[arg(long, value_name = "PATH")]
+        cwd: Option<String>,
+        /// Text typed into the first terminal's shell, followed by Enter
+        #[arg(long)]
+        command: Option<String>,
+    },
+    /// Close a workspace (same options as `close-workspace`)
+    Close {
+        /// Workspace UUID, ref (workspace:N) or index
+        #[arg(conflicts_with = "workspace")]
+        id: Option<String>,
+        /// Workspace UUID, ref (workspace:N) or index; alternative to the positional handle
+        #[arg(long, conflicts_with = "id", required_unless_present = "id")]
+        workspace: Option<String>,
+    },
+    /// Select a workspace (same options as `select-workspace`)
+    Select {
+        /// Workspace UUID, ref (workspace:N) or index
+        #[arg(conflicts_with = "workspace")]
+        id: Option<String>,
+        /// Workspace UUID, ref (workspace:N) or index; alternative to the positional handle
+        #[arg(long, conflicts_with = "id", required_unless_present = "id")]
+        workspace: Option<String>,
+    },
+    /// Rename a workspace (same options as `rename-workspace`)
+    Rename {
+        /// Workspace UUID, ref (workspace:N) or index; with `--workspace` this slot holds the name
+        id: Option<String>,
+        /// New name
+        #[arg(conflicts_with = "workspace", required_unless_present = "workspace")]
+        name: Option<String>,
+        /// Workspace UUID, ref (workspace:N) or index; alternative to the positional handle
+        #[arg(long, required_unless_present = "id")]
+        workspace: Option<String>,
+    },
 }
 
 /// Inbox operations share the socket's exact notification and target identities.
@@ -2388,6 +2441,74 @@ mod handle_argument_tests {
                 "{arguments:?} must be refused"
             );
         }
+    }
+
+    /// The upstream `workspace <sub>` spelling parses with the legacy verbs' options.
+    #[test]
+    fn workspace_namespace_forms_parse() {
+        match parse(&[
+            "workspace",
+            "create",
+            "--name",
+            "Plan",
+            "--cwd",
+            "/srv",
+            "--command",
+            "ls",
+        ]) {
+            Commands::Workspace(WorkspaceCommands::Create { name, cwd, command }) => {
+                assert_eq!(name.as_deref(), Some("Plan"));
+                assert_eq!(cwd.as_deref(), Some("/srv"));
+                assert_eq!(command.as_deref(), Some("ls"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["workspace", "select", "--workspace", "workspace:2"]) {
+            Commands::Workspace(WorkspaceCommands::Select { id, workspace }) => {
+                assert!(id.is_none());
+                assert_eq!(workspace.as_deref(), Some("workspace:2"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["workspace", "close", WORKSPACE]) {
+            Commands::Workspace(WorkspaceCommands::Close { id, workspace }) => {
+                assert_eq!(id.as_deref(), Some(WORKSPACE));
+                assert!(workspace.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&[
+            "workspace",
+            "rename",
+            "--workspace",
+            "workspace:2",
+            "--",
+            "New name",
+        ]) {
+            Commands::Workspace(WorkspaceCommands::Rename {
+                id,
+                name,
+                workspace,
+            }) => {
+                assert_eq!(workspace.as_deref(), Some("workspace:2"));
+                assert_eq!(id.as_deref(), Some("New name"));
+                assert!(name.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+
+        // The namespace exists only for its four subcommands.
+        assert!(Cli::try_parse_from(["cmux", "workspace"]).is_err());
+        assert!(Cli::try_parse_from(["cmux", "workspace", "list"]).is_err());
+        // The legacy verbs stay available.
+        assert!(matches!(
+            parse(&["new-workspace", "--name", "X"]),
+            Commands::NewWorkspace { .. }
+        ));
+        assert!(matches!(
+            parse(&["select-workspace", WORKSPACE]),
+            Commands::SelectWorkspace { .. }
+        ));
     }
 
     /// `--id-format` is global, validates its value and leaves the default output untouched.
