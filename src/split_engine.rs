@@ -243,6 +243,9 @@ fn surface_tab_label(surface: &PaneSurface) -> gtk4::Box {
     icon.set_visible(false);
     let label = gtk4::Label::new(Some(surface.tab_title()));
     label.set_widget_name(TAB_TITLE);
+    // Truncate like upstream's tabs: a full title would set the pane's minimum width, and a
+    // pane allocated below its minimum overflows onto its neighbour.
+    label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
     let close = gtk4::Button::from_icon_name("window-close-symbolic");
     close.add_css_class("surface-tab-close");
     close.set_tooltip_text(Some("Close Tab"));
@@ -397,7 +400,14 @@ fn create_pane(pane_id: u64, initial_surface: PaneSurface) -> SplitNode {
         });
         actions.append(&button);
     }
-    notebook.set_action_widget(&actions, gtk4::PackType::End);
+    // Full width when there is room; a narrow pane clips the buttons instead of taking their
+    // width as its minimum.
+    let actions_clip = gtk4::ScrolledWindow::new();
+    actions_clip.set_policy(gtk4::PolicyType::External, gtk4::PolicyType::Never);
+    actions_clip.set_propagate_natural_width(true);
+    actions_clip.set_propagate_natural_height(true);
+    actions_clip.set_child(Some(&actions));
+    notebook.set_action_widget(&actions_clip, gtk4::PackType::End);
 
     let surfaces = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     append_pane_surface(&notebook, &surfaces, initial_surface, true);
