@@ -444,8 +444,31 @@ pub enum Commands {
     },
     /// Delete a group while retaining its workspaces
     DeleteWorkspaceGroup { id: String },
-    /// List all surfaces
-    ListSurfaces,
+    /// List surfaces (every workspace, or one with --workspace)
+    #[command(visible_alias = "list-panels")]
+    ListSurfaces {
+        /// Workspace UUID, ref (workspace:N) or index
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+    /// List the surfaces (tabs) of one pane, the focused pane by default
+    ListPaneSurfaces {
+        /// Pane ref (pane:N), UUID or index in the current workspace
+        #[arg(long)]
+        pane: Option<String>,
+    },
+    /// Show windows, workspaces, panes and surfaces as a tree
+    Tree {
+        /// Include every window
+        #[arg(long)]
+        all: bool,
+        /// Only this workspace: UUID, ref (workspace:N) or index
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Only this window: id, ref (window:N) or index
+        #[arg(long)]
+        window: Option<String>,
+    },
     /// Split a surface
     Split {
         /// Split direction: horizontal or vertical
@@ -561,8 +584,12 @@ pub enum Commands {
     },
 
     // -- Pane commands --
-    /// List all panes
-    ListPanes,
+    /// List panes (every workspace, or one with --workspace)
+    ListPanes {
+        /// Workspace UUID, ref (workspace:N) or index
+        #[arg(long)]
+        workspace: Option<String>,
+    },
     /// Focus a pane
     FocusPane {
         /// Pane reference (pane:N), surface UUID or index

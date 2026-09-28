@@ -12,3 +12,8 @@ linker = "scripts/zig-cc.sh"
 
 [target.aarch64-unknown-linux-gnu]
 linker = "scripts/zig-cc.sh"
+
+# The CLI's clap tree is large: in debug builds its error paths overflow the 2 MiB default
+# stack of test threads (the binary's 8 MiB main thread is fine). Give tests the same room.
+[env]
+RUST_MIN_STACK = "8388608"

@@ -353,7 +353,8 @@ pub fn format_response(method: &str, result: &Value, json_mode: bool, color: boo
             let id = result.get("id").and_then(|v| v.as_str()).unwrap_or("");
             format!("{} ({})", title, id)
         }
-        "surface.list" => format_surface_list(result, color),
+        "surface.list" | "pane.surfaces" => format_surface_list(result, color),
+        "tree" => super::tree::render_text(result),
         "pane.list" => format_pane_list(result, color),
         "window.list" => format_window_list(result, color),
         "window.current" => {

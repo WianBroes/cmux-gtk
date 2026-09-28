@@ -173,6 +173,8 @@ pub enum SocketCommand {
     // -- surface.* (implemented in Plan 04) --
     SurfaceList {
         req_id: Value,
+        /// Restrict to one workspace; `None` lists every workspace.
+        workspace: Option<uuid::Uuid>,
         resp_tx: RespTx,
     },
     SurfaceResume {
@@ -251,6 +253,8 @@ pub enum SocketCommand {
     // -- pane.* (implemented in Plan 04) --
     PaneList {
         req_id: Value,
+        /// Restrict to one workspace; `None` lists every workspace.
+        workspace: Option<uuid::Uuid>,
         resp_tx: RespTx,
     },
     PaneFocus {

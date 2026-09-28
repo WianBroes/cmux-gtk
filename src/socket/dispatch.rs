@@ -656,10 +656,23 @@ async fn dispatch_request(
             }
         }
 
-        "surface.list" => commands::SocketCommand::SurfaceList {
-            req_id: req_id.clone(),
-            resp_tx,
-        },
+        "surface.list" => {
+            let workspace = match params.get("workspace_id").filter(|value| !value.is_null()) {
+                None => None,
+                Some(value) => match value
+                    .as_str()
+                    .and_then(|value| uuid::Uuid::parse_str(value).ok())
+                {
+                    Some(id) => Some(id),
+                    None => return err(req_id, "invalid_params", "invalid workspace UUID"),
+                },
+            };
+            commands::SocketCommand::SurfaceList {
+                req_id: req_id.clone(),
+                workspace,
+                resp_tx,
+            }
+        }
         "surface.split" => {
             let direction = match params.get("direction") {
                 None => commands::SplitDirection::Horizontal,
@@ -845,10 +858,23 @@ async fn dispatch_request(
             resp_tx,
         },
 
-        "pane.list" => commands::SocketCommand::PaneList {
-            req_id: req_id.clone(),
-            resp_tx,
-        },
+        "pane.list" => {
+            let workspace = match params.get("workspace_id").filter(|value| !value.is_null()) {
+                None => None,
+                Some(value) => match value
+                    .as_str()
+                    .and_then(|value| uuid::Uuid::parse_str(value).ok())
+                {
+                    Some(id) => Some(id),
+                    None => return err(req_id, "invalid_params", "invalid workspace UUID"),
+                },
+            };
+            commands::SocketCommand::PaneList {
+                req_id: req_id.clone(),
+                workspace,
+                resp_tx,
+            }
+        }
         "pane.focus" => commands::SocketCommand::PaneFocus {
             req_id: req_id.clone(),
             id: target,

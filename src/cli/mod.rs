@@ -27,6 +27,7 @@ mod project_config;
 mod resume;
 pub mod socket_client;
 mod teams;
+mod tree;
 #[path = "../updater.rs"]
 #[allow(dead_code)]
 mod updater;
@@ -416,6 +417,17 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
             .map_err(|e| CliError::Protocol(format!("invalid JSON params: {}", e)))?;
         let result = client.call(method, params_val);
         (method.clone(), result)
+    } else if let Commands::Tree {
+        all,
+        ref workspace,
+        ref window,
+    } = cli.command
+    {
+        let result = tree::build(&mut client, all, workspace.as_deref(), window.as_deref());
+        ("tree".to_string(), result)
+    } else if let Commands::ListPaneSurfaces { ref pane } = cli.command {
+        let result = tree::pane_surfaces(&mut client, pane.as_deref());
+        ("pane.surfaces".to_string(), result)
     } else {
         let (method, params) = command_to_rpc(&cli.command);
         let result = client.call(method, params);
@@ -801,7 +813,12 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
         Commands::LocalTmux { .. } | Commands::Tmux { .. } => {
             unreachable!("local-tmux runs before socket dispatch")
         }
-        Commands::ListSurfaces => ("surface.list", json!({})),
+        Commands::ListSurfaces { workspace } => {
+            ("surface.list", json!({"workspace_id": workspace}))
+        }
+        Commands::ListPaneSurfaces { .. } | Commands::Tree { .. } => {
+            unreachable!("pane surfaces and tree are assembled client-side")
+        }
         Commands::Split { direction, id } => {
             let mut p = serde_json::Map::new();
             p.insert("direction".into(), json!(direction));
@@ -885,7 +902,7 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             ("surface.refresh", Value::Object(p))
         }
 
-        Commands::ListPanes => ("pane.list", json!({})),
+        Commands::ListPanes { workspace } => ("pane.list", json!({"workspace_id": workspace})),
         Commands::FocusPane { id, .. } => {
             let mut p = serde_json::Map::new();
             if let Some(ref id) = id {

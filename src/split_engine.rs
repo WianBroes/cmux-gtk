@@ -13,6 +13,8 @@ pub struct PaneInfo {
     pub id: u64,
     pub surface_ids: Vec<Uuid>,
     pub selected_surface: Option<Uuid>,
+    /// Parallel to `surface_ids`: `Some(url)` for a browser tab, `None` for a terminal.
+    pub browser_urls: Vec<Option<String>>,
 }
 
 /// Realized GTK bounds used for pointer automation and layout triage.
@@ -2127,6 +2129,11 @@ fn collect_pane_snapshots(node: &SplitNode, panes: &mut Vec<PaneInfo>) {
             ..
         } => {
             let surface_ids: Vec<Uuid> = surfaces.borrow().iter().map(PaneSurface::uuid).collect();
+            let browser_urls = surfaces
+                .borrow()
+                .iter()
+                .map(|surface| surface.url_entry().map(|entry| entry.text().to_string()))
+                .collect();
             let selected_surface = notebook
                 .current_page()
                 .and_then(|index| surface_ids.get(index as usize))
@@ -2135,6 +2142,7 @@ fn collect_pane_snapshots(node: &SplitNode, panes: &mut Vec<PaneInfo>) {
                 id: *pane_id,
                 surface_ids,
                 selected_surface,
+                browser_urls,
             });
         }
         SplitNode::Split { start, end, .. } => {

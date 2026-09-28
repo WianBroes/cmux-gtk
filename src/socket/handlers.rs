@@ -1060,27 +1060,51 @@ fn handle_socket_command_traced(
             };
             let _ = resp_tx.send(response);
         }
-        SocketCommand::SurfaceList { req_id, resp_tx } => {
-            // SOCK-05: No focus side effects.
+        SocketCommand::SurfaceList {
+            req_id,
+            workspace,
+            resp_tx,
+        } => {
+            // SOCK-05: No focus side effects. `index` counts within each workspace, as on macOS.
             let s = state.borrow();
-            let mut panes: Vec<Value> = Vec::new();
+            let mut surfaces: Vec<Value> = Vec::new();
             for (ws_idx, (ws, engine)) in
                 s.workspaces.iter().zip(s.split_engines.iter()).enumerate()
             {
-                for (pane_uuid, _pane_id, active) in engine.all_panes() {
-                    let workspace = ws.uuid.to_string();
-                    panes.push(json!({
-                        "uuid": pane_uuid.to_string(),
-                        "id": pane_uuid.to_string(),
-                        "ref": s.handles.ensure_ref(super::handles::HandleKind::Surface, &pane_uuid.to_string()),
-                        "workspace_uuid": workspace,
-                        "workspace_id": workspace,
-                        "workspace_ref": s.handles.ensure_ref(super::handles::HandleKind::Workspace, &workspace),
-                        "active": active && ws_idx == s.active_index,
-                    }));
+                if workspace.is_some_and(|wanted| wanted != ws.uuid) {
+                    continue;
+                }
+                let workspace = ws.uuid.to_string();
+                let mut index = 0;
+                for pane in engine.pane_info() {
+                    let pane_ref = format!("pane:{}", pane.id);
+                    for (index_in_pane, (surface, url)) in
+                        pane.surface_ids.iter().zip(&pane.browser_urls).enumerate()
+                    {
+                        let id = surface.to_string();
+                        let selected = pane.selected_surface == Some(*surface);
+                        surfaces.push(json!({
+                            "uuid": id,
+                            "id": id,
+                            "ref": s.handles.ensure_ref(super::handles::HandleKind::Surface, &id),
+                            "index": index,
+                            "type": if url.is_some() { "browser" } else { "terminal" },
+                            "title": if url.is_some() { None } else { engine.surface_title(&id) },
+                            "url": url,
+                            "pane_id": pane_ref,
+                            "pane_ref": pane_ref,
+                            "index_in_pane": index_in_pane,
+                            "selected_in_pane": selected,
+                            "workspace_uuid": workspace,
+                            "workspace_id": workspace,
+                            "workspace_ref": s.handles.ensure_ref(super::handles::HandleKind::Workspace, &workspace),
+                            "active": selected && pane.id == engine.active_pane_id && ws_idx == s.active_index,
+                        }));
+                        index += 1;
+                    }
                 }
             }
-            let _ = resp_tx.send(ok(req_id, json!({"surfaces": panes})));
+            let _ = resp_tx.send(ok(req_id, json!({"surfaces": surfaces})));
         }
 
         SocketCommand::SurfaceSplit {
@@ -1520,7 +1544,11 @@ fn handle_socket_command_traced(
         }
 
         // ── pane.* ───────────────────────────────────────────────────────────
-        SocketCommand::PaneList { req_id, resp_tx } => {
+        SocketCommand::PaneList {
+            req_id,
+            workspace,
+            resp_tx,
+        } => {
             let s = state.borrow();
             let mut panes = Vec::new();
             let ancestor = s
@@ -1529,11 +1557,14 @@ fn handle_socket_command_traced(
                 .and_then(|root| root.downcast::<gtk4::ApplicationWindow>().ok())
                 .map(|window| window.upcast::<gtk4::Widget>());
             for (ws_idx, (ws, engine)) in s.workspaces.iter().zip(&s.split_engines).enumerate() {
+                if workspace.is_some_and(|wanted| wanted != ws.uuid) {
+                    continue;
+                }
                 let geometry = ancestor
                     .as_ref()
                     .map(|ancestor| engine.pane_geometry(ancestor))
                     .unwrap_or_default();
-                for pane in engine.pane_info() {
+                for (index, pane) in engine.pane_info().into_iter().enumerate() {
                     let realized = geometry.iter().find(|item| item.id == pane.id);
                     let workspace = ws.uuid.to_string();
                     let surface_refs: Vec<String> = pane
@@ -1547,6 +1578,7 @@ fn handle_socket_command_traced(
                     panes.push(json!({
                         "id": format!("pane:{}", pane.id),
                         "ref": format!("pane:{}", pane.id),
+                        "index": index,
                         "uuid": pane.selected_surface,
                         "workspace_uuid": ws.uuid,
                         "workspace_id": workspace,

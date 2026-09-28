@@ -162,7 +162,19 @@ fn resolve_index(
     kind: HandleKind,
     index: i64,
 ) -> Result<String, CliError> {
-    let list = client.call(kind.list_method(), serde_json::json!({}))?;
+    let params = match kind {
+        // Pane and surface indexes count within one workspace: like macOS, a bare index
+        // designates the current (focused) workspace.
+        HandleKind::Pane | HandleKind::Surface => {
+            let identify = client.call("system.identify", serde_json::json!({}))?;
+            match identify.pointer("/focused/workspace_id").and_then(Value::as_str) {
+                Some(workspace) => serde_json::json!({"workspace_id": workspace}),
+                None => serde_json::json!({}),
+            }
+        }
+        HandleKind::Window | HandleKind::Workspace => serde_json::json!({}),
+    };
+    let list = client.call(kind.list_method(), params)?;
     record_at_index(&list, kind.list_field(), index)
         .ok_or_else(|| CliError::Command(format!("{} index not found", kind.label())))
 }
@@ -462,6 +474,21 @@ fn collect_targets<'a>(command: &'a mut Commands, targets: &mut Vec<Target<'a>>)
         } => {
             targets.push(Target::Optional(HandleKind::Workspace, workspace));
             targets.push(Target::Optional(HandleKind::Surface, surface));
+        }
+
+        Commands::ListSurfaces { workspace } | Commands::ListPanes { workspace } => {
+            targets.push(Target::Optional(HandleKind::Workspace, workspace));
+        }
+
+        Commands::ListPaneSurfaces { pane } => {
+            targets.push(Target::Optional(HandleKind::Pane, pane));
+        }
+
+        Commands::Tree {
+            workspace, window, ..
+        } => {
+            targets.push(Target::Optional(HandleKind::Workspace, workspace));
+            targets.push(Target::Optional(HandleKind::Window, window));
         }
 
         Commands::Identify {
