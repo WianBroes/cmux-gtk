@@ -34,6 +34,9 @@ pub struct AppState {
     pub inbox_window: glib::WeakRef<gtk4::Dialog>,
     /// Header bell counter of unread notifications.
     pub notifications_badge: Option<gtk4::Label>,
+    /// Focus Back / Forward positions, and the titlebar arrows' actions kept in step with them.
+    pub focus_history: crate::focus_history::FocusHistory,
+    pub focus_history_actions: Option<(gtk4::gio::SimpleAction, gtk4::gio::SimpleAction)>,
     /// Validated application-owned authority for automatic local terminal resume.
     pub resume_policy: crate::resume_policy::ResumePolicy,
     /// Sender for session snapshots to the debounce task.
@@ -106,6 +109,8 @@ impl AppState {
             inbox_updates: None,
             inbox_window: Default::default(),
             notifications_badge: None,
+            focus_history: Default::default(),
+            focus_history_actions: None,
             ssh_event_tx: None,
             runtime_handle: None,
             ssh_task_handles: std::collections::HashMap::new(),
@@ -1221,6 +1226,138 @@ impl AppState {
             );
         }
         crate::sidebar::update_group_attention(self);
+    }
+
+    /// Where focus is now: the active workspace and its selected terminal.
+    fn current_focus_entry(&self) -> Option<crate::focus_history::Entry> {
+        Some(crate::focus_history::Entry {
+            workspace: self.workspaces.get(self.active_index)?.uuid,
+            surface: self
+                .split_engines
+                .get(self.active_index)?
+                .active_pane_uuid()
+                .and_then(|uuid| uuid::Uuid::parse_str(&uuid).ok()),
+        })
+    }
+
+    /// Where a history position lands today: gone with its workspace; a closed terminal falls
+    /// back to the workspace's selected one (upstream `resolvedFocusHistoryEntry`).
+    fn resolve_focus_entry(
+        &self,
+        entry: crate::focus_history::Entry,
+    ) -> Option<crate::focus_history::Entry> {
+        let index = self
+            .workspaces
+            .iter()
+            .position(|workspace| workspace.uuid == entry.workspace)?;
+        let engine = self.split_engines.get(index)?;
+        let surface = entry
+            .surface
+            .filter(|surface| engine.find_pane_id_by_uuid(&surface.to_string()).is_some())
+            .or_else(|| {
+                engine
+                    .active_pane_uuid()
+                    .and_then(|uuid| uuid::Uuid::parse_str(&uuid).ok())
+            });
+        Some(crate::focus_history::Entry {
+            workspace: entry.workspace,
+            surface,
+        })
+    }
+
+    /// Record the terminal that just took focus in the workspace at `index`.
+    pub fn record_focus(&mut self, index: usize, surface: uuid::Uuid) {
+        let Some(workspace) = self.workspaces.get(index) else {
+            return;
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs() as i64);
+        self.focus_history.record(
+            crate::focus_history::Entry {
+                workspace: workspace.uuid,
+                surface: Some(surface),
+            },
+            now,
+        );
+        self.refresh_focus_history_actions();
+    }
+
+    /// Reachable history positions in `direction`, nearest first.
+    pub fn focus_history_items(
+        &self,
+        direction: crate::focus_history::Direction,
+    ) -> Vec<crate::focus_history::Item> {
+        self.focus_history.items(direction, self.current_focus_entry(), |entry| {
+            self.resolve_focus_entry(entry)
+        })
+    }
+
+    /// Menu label of a history position (upstream `FocusHistoryMenuFormatter`): workspace and
+    /// tab title, then direction and time.
+    pub fn focus_history_label(
+        &self,
+        item: &crate::focus_history::Item,
+        direction: crate::focus_history::Direction,
+    ) -> String {
+        let index = self
+            .workspaces
+            .iter()
+            .position(|workspace| workspace.uuid == item.entry.workspace);
+        let workspace = index
+            .map(|index| self.workspaces[index].name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "Untitled Workspace".into());
+        let tab = index
+            .zip(item.entry.surface)
+            .and_then(|(index, surface)| {
+                self.split_engines[index].surface_title(&surface.to_string())
+            })
+            .map(|title| title.trim().to_string())
+            .filter(|title| !title.is_empty() && *title != workspace);
+        let title = match tab {
+            Some(tab) => format!("{workspace} - {tab}"),
+            None => workspace,
+        };
+        let focused = gtk4::glib::DateTime::from_unix_local(item.focused_at)
+            .and_then(|time| time.format("%H:%M"))
+            .map(|time| time.to_string())
+            .unwrap_or_default();
+        let direction = match direction {
+            crate::focus_history::Direction::Back => "Focus Back",
+            crate::focus_history::Direction::Forward => "Focus Forward",
+        };
+        format!("{title}\n{direction}, Focused {focused}")
+    }
+
+    /// Go to a history position without recording the moves it causes; the caller lifts the
+    /// suppression once GTK has delivered the resulting focus events.
+    pub fn navigate_focus_history(&mut self, item: &crate::focus_history::Item) -> bool {
+        let Some(index) = self
+            .workspaces
+            .iter()
+            .position(|workspace| workspace.uuid == item.entry.workspace)
+        else {
+            return false;
+        };
+        self.focus_history.suppressed = true;
+        self.switch_to_index(index);
+        if let Some(surface) = item.entry.surface {
+            self.split_engines[index].focus_surface(&surface.to_string());
+        }
+        self.focus_history.go(item.index);
+        self.refresh_focus_history_actions();
+        true
+    }
+
+    /// Enable each titlebar arrow only when it leads somewhere (upstream `canNavigateBack`).
+    pub fn refresh_focus_history_actions(&self) {
+        if let Some((back, forward)) = &self.focus_history_actions {
+            back.set_enabled(!self.focus_history_items(crate::focus_history::Direction::Back).is_empty());
+            forward.set_enabled(
+                !self.focus_history_items(crate::focus_history::Direction::Forward).is_empty(),
+            );
+        }
     }
 
     /// Agent hook turn boundaries drive the sidebar spinner (upstream `showAgentActivity`).

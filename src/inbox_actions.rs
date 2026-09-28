@@ -370,6 +370,7 @@ pub fn terminal_focused(state: &crate::app_state::AppStateRef, pane_id: u64) {
     };
     let workspace = s.workspaces[index].uuid;
     mark_read_where(&mut s, workspace, Some(surface));
+    s.record_focus(index, surface);
     // The focused tab also names a workspace that has no user-chosen name.
     s.apply_focused_title(index);
 }

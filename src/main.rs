@@ -13,6 +13,7 @@ mod browser_timeout;
 mod config;
 mod diagnostics;
 mod events;
+mod focus_history;
 mod ghostty;
 mod git_metadata;
 mod header_bar;
@@ -403,10 +404,10 @@ fn build_ui(
 
     // Phase 9: Set HeaderBar as titlebar (D-04)
     let (bell, bell_badge) = crate::header_bar::notification_bell();
-    if let Some(header) = crate::header_bar::build_header_bar(config) {
-        header.pack_start(&bell);
+    let focus_arrows = crate::header_bar::build_header_bar(config, &bell).map(|(header, arrows)| {
         window.set_titlebar(Some(&header));
-    }
+        arrows
+    });
 
     window.set_child(Some(&split));
 
@@ -772,6 +773,9 @@ fn build_ui(
 
     // Phase 9: Register GIO actions for menu/button dispatch
     crate::menus::register_actions(&window, state.clone(), &sidebar_box, app);
+    if let Some(arrows) = &focus_arrows {
+        crate::header_bar::attach_focus_history_menus(&state, arrows);
+    }
     crate::menus::register_accels(app, &shortcut_map);
 
     // 7. Install keyboard shortcuts (config-driven, D-06)

@@ -179,6 +179,14 @@ pub fn install_shortcuts(
                     gtk4::glib::Propagation::Stop
                 }
                 // -- Browser shortcuts --
+                Some(ShortcutAction::FocusBack) => {
+                    let _ = sidebar_clone.activate_action("win.focus-back", None);
+                    gtk4::glib::Propagation::Stop
+                }
+                Some(ShortcutAction::FocusForward) => {
+                    let _ = sidebar_clone.activate_action("win.focus-forward", None);
+                    gtk4::glib::Propagation::Stop
+                }
                 Some(ShortcutAction::BrowserOpen) => {
                     handle_browser_open(&state);
                     gtk4::glib::Propagation::Stop

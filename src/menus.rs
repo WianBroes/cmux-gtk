@@ -454,6 +454,53 @@ pub fn register_actions(
     });
     window.add_action(&action);
 
+    // win.focus-back / win.focus-forward — the titlebar arrows (upstream Focus Back / Forward),
+    // enabled only while their direction leads somewhere.
+    let back = gio::SimpleAction::new("focus-back", None);
+    let forward = gio::SimpleAction::new("focus-forward", None);
+    for (action, direction) in [
+        (&back, crate::focus_history::Direction::Back),
+        (&forward, crate::focus_history::Direction::Forward),
+    ] {
+        action.set_enabled(false);
+        action.connect_activate({
+            let state = state.clone();
+            move |_, _| {
+                let item = state.borrow().focus_history_items(direction).into_iter().next();
+                if let Some(item) = item {
+                    go_focus_history(&state, &item);
+                }
+            }
+        });
+        window.add_action(action);
+    }
+    state.borrow_mut().focus_history_actions = Some((back, forward));
+
+    // win.focus-history-go(u64) — a row of an arrow's right-click menu, by history position.
+    let action = gio::SimpleAction::new("focus-history-go", Some(&u64::static_variant_type()));
+    action.connect_activate({
+        let state = state.clone();
+        move |_, parameter| {
+            let Some(position) = parameter.and_then(|value| value.get::<u64>()) else {
+                return;
+            };
+            let item = {
+                let s = state.borrow();
+                [
+                    crate::focus_history::Direction::Back,
+                    crate::focus_history::Direction::Forward,
+                ]
+                .into_iter()
+                .flat_map(|direction| s.focus_history_items(direction))
+                .find(|item| item.index as u64 == position)
+            };
+            if let Some(item) = item {
+                go_focus_history(&state, &item);
+            }
+        }
+    });
+    window.add_action(&action);
+
     // win.edit-workspace-description — the in-app editor for the sidebar description
     // (upstream's "Edit workspace description").
     let action = gio::SimpleAction::new("edit-workspace-description", None);
@@ -545,6 +592,19 @@ pub fn register_actions(
     window.add_action(&action);
 }
 
+/// Move to a history position, then record again once GTK has delivered the focus changes the
+/// move caused (they arrive deferred while the state is borrowed here).
+fn go_focus_history(state: &crate::app_state::AppStateRef, item: &crate::focus_history::Item) {
+    if state.borrow_mut().navigate_focus_history(item) {
+        let state = state.clone();
+        gtk4::glib::idle_add_local_once(move || {
+            let mut s = state.borrow_mut();
+            s.focus_history.suppressed = false;
+            s.refresh_focus_history_actions();
+        });
+    }
+}
+
 /// Register menu accelerators from the resolved shortcut map plus fixed nonconfigurable actions.
 /// GIO accelerators can activate commands, so they must agree with capture-phase dispatch.
 pub fn register_accels(app: &gtk4::Application, shortcuts: &crate::config::ShortcutMap) {
@@ -559,6 +619,8 @@ pub fn register_accels(app: &gtk4::Application, shortcuts: &crate::config::Short
         (ShortcutAction::SplitRight, "win.split-right"),
         (ShortcutAction::SplitDown, "win.split-down"),
         (ShortcutAction::RenameWorkspace, "win.rename-workspace"),
+        (ShortcutAction::FocusBack, "win.focus-back"),
+        (ShortcutAction::FocusForward, "win.focus-forward"),
     ] {
         let accelerator = shortcuts.accelerator_for(action);
         let accelerators: Vec<&str> = accelerator.as_deref().into_iter().collect();

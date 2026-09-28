@@ -2,59 +2,126 @@
 
 use gtk4::prelude::*;
 
-/// Build workspace and pane controls on the GTK thread, unless the header is hidden.
-pub fn build_header_bar(config: &crate::config::Config) -> Option<gtk4::HeaderBar> {
+/// Build the titlebar controls in upstream's order — sidebar, notifications, new workspace with
+/// its menu, Focus Back / Forward — on the GTK thread, unless the header is hidden. The window
+/// buttons and the ≡ menu stay: Linux has no global menu bar to hold Preferences and Help.
+/// Returns the arrows so their right-click history menus can be attached once state exists.
+pub fn build_header_bar(
+    config: &crate::config::Config,
+    bell: &gtk4::Overlay,
+) -> Option<(gtk4::HeaderBar, [gtk4::Button; 2])> {
     if config.ui.header_bar.style == "none" {
         return None;
     }
     let header = gtk4::HeaderBar::new();
     header.add_css_class("cmux-headerbar");
-    for (icon, tooltip, action) in [
-        (
-            "sidebar-show-symbolic",
-            "Toggle Sidebar (Ctrl+B)",
-            "win.toggle-sidebar",
-        ),
-        (
-            "tab-new-symbolic",
-            "New Workspace (Ctrl+N)",
-            "win.new-workspace",
-        ),
-        (
-            "web-browser-symbolic",
-            "New Tab (Browser) (Ctrl+Shift+L)",
-            "win.new-browser-tab",
-        ),
-        (
-            "system-search-symbolic",
-            "Command Palette (Ctrl+Shift+P)",
-            "win.project-palette",
-        ),
-    ] {
-        header.pack_start(&action_button(icon, tooltip, action));
-    }
+    header.pack_start(&action_button(
+        "sidebar-show-symbolic",
+        "Toggle Sidebar (Ctrl+B)",
+        "win.toggle-sidebar",
+    ));
+    header.pack_start(bell);
+    header.pack_start(&new_workspace_split_button());
+    let back = action_button(
+        "go-previous-symbolic",
+        "Focus Back (Ctrl+Alt+Left)",
+        "win.focus-back",
+    );
+    let forward = action_button(
+        "go-next-symbolic",
+        "Focus Forward (Ctrl+Alt+Right)",
+        "win.focus-forward",
+    );
+    header.pack_start(&back);
+    header.pack_start(&forward);
     let menu = gtk4::MenuButton::new();
     menu.set_icon_name("open-menu-symbolic");
     menu.set_tooltip_text(Some("Menu"));
     menu.set_menu_model(Some(&crate::menus::build_hamburger_menu()));
     menu.add_css_class("headerbar-btn");
-    // GTK packs end children from right to left, starting with the menu.
     header.pack_end(&menu);
-    for (icon, tooltip, action) in [
-        (
-            "object-flip-vertical-symbolic",
-            "Split Down (Ctrl+Shift+D)",
-            "win.split-down",
-        ),
-        (
-            "view-dual-symbolic",
-            "Split Right (Ctrl+D)",
-            "win.split-right",
-        ),
-    ] {
-        header.pack_end(&action_button(icon, tooltip, action));
+    Some((header, [back, forward]))
+}
+
+/// Upstream's "+" split button: the button makes a workspace, the caret (or a right-click on
+/// either part) opens the New Workspace menu — its default rows, less the Cloud ones.
+fn new_workspace_split_button() -> gtk4::Box {
+    let model = gtk4::gio::Menu::new();
+    model.append(Some("New Workspace"), Some("win.new-workspace"));
+    model.append(Some("New Terminal Tab"), Some("win.new-terminal-tab"));
+    model.append(Some("New Browser Tab"), Some("win.new-browser-tab"));
+    let plus = action_button("list-add-symbolic", "New Workspace (Ctrl+N)", "win.new-workspace");
+    let caret = gtk4::MenuButton::new();
+    caret.set_icon_name("pan-down-symbolic");
+    caret.set_tooltip_text(Some("New workspace options"));
+    caret.set_menu_model(Some(&model));
+    caret.add_css_class("headerbar-btn");
+    let group = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+    group.add_css_class("linked");
+    group.append(&plus);
+    group.append(&caret);
+    let right_click = gtk4::GestureClick::new();
+    right_click.set_button(3);
+    right_click.connect_pressed({
+        let caret = caret.downgrade();
+        move |gesture, _, _, _| {
+            gesture.set_state(gtk4::EventSequenceState::Claimed);
+            if let Some(caret) = caret.upgrade() {
+                caret.popup();
+            }
+        }
+    });
+    group.add_controller(right_click);
+    group
+}
+
+/// Right-click on an arrow lists the positions it leads to (upstream shows 12), newest first.
+pub fn attach_focus_history_menus(state: &crate::app_state::AppStateRef, arrows: &[gtk4::Button; 2]) {
+    use crate::focus_history::Direction;
+    for (button, direction) in arrows.iter().zip([Direction::Back, Direction::Forward]) {
+        let right_click = gtk4::GestureClick::new();
+        right_click.set_button(3);
+        right_click.connect_pressed({
+            let state = std::rc::Rc::downgrade(state);
+            let button = button.downgrade();
+            move |gesture, _, _, _| {
+                gesture.set_state(gtk4::EventSequenceState::Claimed);
+                let (Some(state), Some(button)) = (state.upgrade(), button.upgrade()) else {
+                    return;
+                };
+                let model = gtk4::gio::Menu::new();
+                {
+                    let s = state.borrow();
+                    let items = s.focus_history_items(direction);
+                    if items.is_empty() {
+                        let empty = gtk4::gio::MenuItem::new(Some("No Focus History"), None);
+                        empty.set_action_and_target_value(Some("win.focus-history-none"), None);
+                        model.append_item(&empty);
+                    }
+                    for item in items.iter().take(crate::focus_history::MENU_LIMIT) {
+                        let row = gtk4::gio::MenuItem::new(
+                            Some(&s.focus_history_label(item, direction)),
+                            None,
+                        );
+                        row.set_action_and_target_value(
+                            Some("win.focus-history-go"),
+                            Some(&(item.index as u64).to_variant()),
+                        );
+                        model.append_item(&row);
+                    }
+                }
+                let popover = gtk4::PopoverMenu::from_model(Some(&model));
+                popover.set_parent(&button);
+                popover.set_has_arrow(false);
+                popover.connect_closed(|popover| {
+                    let popover = popover.clone();
+                    gtk4::glib::idle_add_local_once(move || popover.unparent());
+                });
+                popover.popup();
+            }
+        });
+        button.add_controller(right_click);
     }
-    Some(header)
 }
 
 /// Upstream's titlebar notification bell: opens the notification list, with an unread badge.
