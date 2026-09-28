@@ -369,6 +369,24 @@ pub fn format_mutation(command_name: &str, result: &Value) -> String {
             parts.join(" ")
         }
         "surface.close" => format!("Closed surface: {}", id),
+        // Upstream's `v2OKSummary`: only the handles the payload carries.
+        "surface.trigger_flash" => {
+            let mut parts = vec!["OK".to_owned()];
+            for (label, ref_key, id_key) in [
+                ("surface", "surface_ref", "surface_id"),
+                ("workspace", "workspace_ref", "workspace_id"),
+                ("window", "window_ref", "window_id"),
+            ] {
+                if let Some(value) = result
+                    .get(ref_key)
+                    .or_else(|| result.get(id_key))
+                    .and_then(Value::as_str)
+                {
+                    parts.push(format!("{label}={value}"));
+                }
+            }
+            parts.join(" ")
+        }
         // Upstream's tab summary: `OK action=… tab=… workspace=… [closed=…] [created=…]`.
         "tab.action" => {
             let action = result
@@ -498,7 +516,8 @@ pub fn format_response(method: &str, result: &Value, json_mode: bool, color: boo
         | "surface.move"
         | "surface.reorder"
         | "surface.drag_to_split"
-        | "surface.split_off" => {
+        | "surface.split_off"
+        | "surface.trigger_flash" => {
             let msg = format_mutation(method, result);
             if msg.is_empty() {
                 format_fallback(result)

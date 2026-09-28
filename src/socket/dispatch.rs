@@ -1121,6 +1121,25 @@ async fn dispatch_request(
                 resp_tx,
             }
         }
+        "surface.trigger_flash" => {
+            let surface = match optional_text(&params, "surface_id", "surface_id") {
+                Ok(surface) => surface,
+                Err(message) => return err(req_id, "invalid_params", &message),
+            };
+            let workspace = match optional_text(&params, "workspace_id", "workspace_id") {
+                Ok(workspace) => workspace,
+                Err(message) => return err(req_id, "invalid_params", &message),
+            };
+            if let Err(message) = only_main_window(&params) {
+                return err(req_id, "invalid_params", &message);
+            }
+            commands::SocketCommand::SurfaceTriggerFlash {
+                req_id: req_id.clone(),
+                surface,
+                workspace,
+                resp_tx,
+            }
+        }
         "surface.send_text" | "surface.send_key" | "debug.type" => {
             let field = if method == "surface.send_key" {
                 "key"

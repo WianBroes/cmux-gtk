@@ -766,6 +766,18 @@ pub enum Commands {
         )]
         focus: Option<bool>,
     },
+    /// Flash the attention markers of a surface (upstream `trigger-flash`)
+    TriggerFlash {
+        /// Target surface: UUID, ref (surface:N) or index; default is the focused tab
+        #[arg(long, visible_alias = "panel")]
+        surface: Option<String>,
+        /// Workspace context; defaults to the tab's workspace, else the active one
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Window context; this build has a single window (`window:1`)
+        #[arg(long)]
+        window: Option<String>,
+    },
     /// Send text to a surface
     SendText {
         /// Text to send
@@ -2860,6 +2872,47 @@ mod handle_argument_tests {
         assert!(
             Cli::try_parse_from(["cmux", "move-tab-to-new-workspace", "--action", "pin"]).is_err()
         );
+    }
+
+    /// `trigger-flash` parses upstream's target flags with the `--panel` alias.
+    #[test]
+    fn trigger_flash_forms_parse() {
+        match parse(&["trigger-flash"]) {
+            Commands::TriggerFlash {
+                surface,
+                workspace,
+                window,
+            } => {
+                assert!(surface.is_none() && workspace.is_none() && window.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&[
+            "trigger-flash",
+            "--surface",
+            "surface:3",
+            "--workspace",
+            "workspace:2",
+            "--window",
+            "window:1",
+        ]) {
+            Commands::TriggerFlash {
+                surface,
+                workspace,
+                window,
+            } => {
+                assert_eq!(surface.as_deref(), Some("surface:3"));
+                assert_eq!(workspace.as_deref(), Some("workspace:2"));
+                assert_eq!(window.as_deref(), Some("window:1"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["trigger-flash", "--panel", "surface:4"]) {
+            Commands::TriggerFlash { surface, .. } => {
+                assert_eq!(surface.as_deref(), Some("surface:4"))
+            }
+            _ => panic!("wrong command variant"),
+        }
     }
 
     /// `--id-format` is global, validates its value and leaves the default output untouched.

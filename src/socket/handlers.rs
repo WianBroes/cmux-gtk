@@ -75,6 +75,70 @@ fn tab_support_note() -> String {
     format!("supported: {}", TAB_ACTIONS.join(", "))
 }
 
+/// The tab a surface-scoped call means: the named surface (and its own workspace), else
+/// the selected tab of the named workspace, else the active workspace's. Errors carry the
+/// code and message the socket replies with; `tab.action` and `surface.trigger_flash`
+/// share this resolution.
+fn resolve_tab_target(
+    state: &crate::app_state::AppState,
+    surface: Option<&str>,
+    workspace: Option<&str>,
+) -> Result<(usize, u64, String), (&'static str, String)> {
+    let requested = match workspace {
+        None => None,
+        Some(text) => Some(
+            uuid::Uuid::parse_str(text)
+                .map_err(|_| ("invalid_params", "invalid workspace UUID".to_owned()))?,
+        ),
+    };
+    let located = surface.and_then(|id| {
+        state
+            .split_engines
+            .iter()
+            .enumerate()
+            .find_map(|(index, engine)| {
+                engine
+                    .find_pane_id_by_uuid(id)
+                    .map(|pane_id| (index, pane_id))
+            })
+    });
+    match located {
+        Some((index, pane_id)) => {
+            if let Some(requested) = requested {
+                if state.workspaces[index].uuid != requested {
+                    return Err((
+                        "invalid_params",
+                        "surface is not in the named workspace".to_owned(),
+                    ));
+                }
+            }
+            let id = surface.expect("a located surface was named").to_owned();
+            Ok((index, pane_id, id))
+        }
+        None => {
+            if surface.is_some() {
+                return Err(("not_found", "surface not found".to_owned()));
+            }
+            let index = match requested {
+                Some(uuid) => state.workspaces.iter().position(|row| row.uuid == uuid),
+                None => Some(state.active_index),
+            }
+            .filter(|index| *index < state.workspaces.len());
+            let Some(index) = index else {
+                return Err(("not_found", "workspace not found".to_owned()));
+            };
+            // No tab named: the selected tab of that workspace's active pane.
+            let Some(focused) = state.split_engines[index].active_pane_uuid() else {
+                return Err(("not_found", "no focused tab".to_owned()));
+            };
+            let Some(pane_id) = state.split_engines[index].find_pane_id_by_uuid(&focused) else {
+                return Err(("not_found", "no focused tab".to_owned()));
+            };
+            Ok((index, pane_id, focused))
+        }
+    }
+}
+
 /// Snapshot one workspace's identity and layout counts without changing focus or retaining widgets.
 /// Return None for an absent index; missing engines produce unknown counts rather than fabricated zeroes.
 fn workspace_record(state: &crate::app_state::AppState, index: usize) -> Option<Value> {
@@ -562,6 +626,7 @@ fn handle_socket_command_traced(
                 "surface.resume.show",
                 "surface.resume.clear",
                 "surface.health",
+                "surface.trigger_flash",
                 "surface.refresh",
                 "pane.list",
                 "pane.create",
@@ -1208,69 +1273,14 @@ fn handle_socket_command_traced(
                 return;
             }
             let mut s = state.borrow_mut();
-            let requested = match workspace.as_deref() {
-                None => None,
-                Some(text) => match uuid::Uuid::parse_str(text) {
-                    Ok(uuid) => Some(uuid),
-                    Err(_) => {
-                        let _ =
-                            resp_tx.send(err(req_id, "invalid_params", "invalid workspace UUID"));
+            let (index, pane_id, surface_uuid) =
+                match resolve_tab_target(&s, surface.as_deref(), workspace.as_deref()) {
+                    Ok(target) => target,
+                    Err((code, message)) => {
+                        let _ = resp_tx.send(err(req_id, code, &message));
                         return;
                     }
-                },
-            };
-            // The surface names its own workspace; without one the caller's, else the active.
-            let located = surface.as_deref().and_then(|id| {
-                s.split_engines
-                    .iter()
-                    .enumerate()
-                    .find_map(|(index, engine)| {
-                        engine
-                            .find_pane_id_by_uuid(id)
-                            .map(|pane_id| (index, pane_id))
-                    })
-            });
-            let (index, pane_id, surface_uuid) = match located {
-                Some((index, pane_id)) => {
-                    if let Some(requested) = requested {
-                        if s.workspaces[index].uuid != requested {
-                            let _ = resp_tx.send(err(
-                                req_id,
-                                "invalid_params",
-                                "surface is not in the named workspace",
-                            ));
-                            return;
-                        }
-                    }
-                    let id = surface.clone().expect("a located surface was named");
-                    (index, pane_id, id)
-                }
-                None => {
-                    if surface.is_some() {
-                        let _ = resp_tx.send(err(req_id, "not_found", "surface not found"));
-                        return;
-                    }
-                    let index = match requested {
-                        Some(uuid) => s.workspaces.iter().position(|row| row.uuid == uuid),
-                        None => Some(s.active_index),
-                    };
-                    let Some(index) = index.filter(|index| *index < s.workspaces.len()) else {
-                        let _ = resp_tx.send(err(req_id, "not_found", "workspace not found"));
-                        return;
-                    };
-                    // No tab named: the selected tab of that workspace's active pane.
-                    let Some(focused) = s.split_engines[index].active_pane_uuid() else {
-                        let _ = resp_tx.send(err(req_id, "not_found", "no focused tab"));
-                        return;
-                    };
-                    let Some(pane_id) = s.split_engines[index].find_pane_id_by_uuid(&focused)
-                    else {
-                        let _ = resp_tx.send(err(req_id, "not_found", "no focused tab"));
-                        return;
-                    };
-                    (index, pane_id, focused)
-                }
-            };
+                };
             let surface_id: uuid::Uuid = match surface_uuid.parse() {
                 Ok(uuid) => uuid,
                 Err(_) => {
@@ -2383,6 +2393,71 @@ fn handle_socket_command_traced(
             let _ = resp_tx.send(response);
         }
 
+        SocketCommand::SurfaceTriggerFlash {
+            req_id,
+            surface,
+            workspace,
+            resp_tx,
+        } => {
+            let flash_state = state.clone();
+            let response = {
+                let mut s = state.borrow_mut();
+                match resolve_tab_target(&s, surface.as_deref(), workspace.as_deref()) {
+                    Err((code, message)) => err(req_id, code, &message),
+                    Ok((index, pane_id, surface_uuid)) => {
+                        // The two visual markers this build has: the pane's attention
+                        // (sidebar dot, cleared with the workspace switch) and the tab's
+                        // unread dot, which the notifications own and which therefore
+                        // goes back to the truth two seconds later.
+                        s.split_engines[index].root.set_attention(pane_id, true);
+                        s.workspaces[index].has_attention =
+                            s.split_engines[index].root.any_attention();
+                        s.update_sidebar_attention(index);
+                        let workspace_uuid = s.workspaces[index].uuid;
+                        let mut unread: std::collections::HashSet<String> = s
+                            .inbox
+                            .records
+                            .iter()
+                            .filter(|record| {
+                                !record.is_read && record.workspace_id == workspace_uuid
+                            })
+                            .filter_map(|record| record.surface_id.map(|id| id.to_string()))
+                            .collect();
+                        unread.insert(surface_uuid.clone());
+                        s.split_engines[index].set_unread_tabs(&unread);
+                        let surface_ref = s
+                            .handles
+                            .ensure_ref(super::handles::HandleKind::Surface, &surface_uuid);
+                        let workspace_ref = s.handles.ensure_ref(
+                            super::handles::HandleKind::Workspace,
+                            &workspace_uuid.to_string(),
+                        );
+                        let window_ref = s.handles.ensure_ref(
+                            super::handles::HandleKind::Window,
+                            super::handles::MAIN_WINDOW_ID,
+                        );
+                        ok(
+                            req_id,
+                            json!({
+                                "surface_id": surface_uuid,
+                                "surface_ref": surface_ref,
+                                "workspace_id": workspace_uuid,
+                                "workspace_ref": workspace_ref,
+                                "window_id": super::handles::MAIN_WINDOW_ID,
+                                "window_ref": window_ref,
+                            }),
+                        )
+                    }
+                }
+            };
+            // Re-derive the tab dots once the flash has had its time.
+            glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || {
+                if let Ok(s) = flash_state.try_borrow() {
+                    crate::inbox_actions::refresh(&s);
+                }
+            });
+            let _ = resp_tx.send(response);
+        }
         SocketCommand::SurfaceHealth {
             req_id,
             id,

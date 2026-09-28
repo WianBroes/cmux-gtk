@@ -275,6 +275,15 @@ pub enum SocketCommand {
         focus: bool,
         resp_tx: RespTx,
     },
+    /// Light the visual attention markers of one tab (upstream `surface.trigger_flash`).
+    SurfaceTriggerFlash {
+        req_id: Value,
+        /// Target surface UUID; None targets the focused tab, as upstream.
+        surface: Option<String>,
+        /// Workspace UUID when the caller names one instead of the surface's own.
+        workspace: Option<String>,
+        resp_tx: RespTx,
+    },
     SurfaceDragToSplit {
         req_id: Value,
         id: String,

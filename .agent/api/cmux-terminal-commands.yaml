@@ -70,6 +70,9 @@ content:
     - method: surface.health
       transport: Unix JSON socket
       description: alive means a registered native terminal exists; it does not prove the shell process is alive. has_attention is the owning pane's attention state. Browser health is not implemented by this endpoint.
+    - method: surface.trigger_flash
+      transport: Unix JSON socket
+      description: Light the visual attention markers of one tab, upstream's `trigger-flash`. Target resolution is tab.action's: the named surface (its own workspace), else the selected tab of workspace_id, else the active workspace's; an unknown surface or workspace and a surface outside the named workspace return not_found / invalid_params, and a caller-named window must be window:1 or main. The reply echoes surface_id/ref, workspace_id/ref and window_id/ref. Two markers light: the pane's attention flag (surface.health reports it as has_attention and the workspace sidebar shows its dot until the next workspace switch) and the tab's unread dot, which is normally owned by unread notifications; the dots are re-derived from the notifications two seconds later, so a flash cannot leave a fake unread state behind. The unread dot is only reachable on terminal tabs, because the re-derivation walks the terminal widgets.
     - method: surface.refresh
       transport: Unix JSON socket
       description: Schedule a redraw of the exact terminal UUID, or selected terminal when id is omitted. Do not focus or select. Missing terminal widgets return not_found.
