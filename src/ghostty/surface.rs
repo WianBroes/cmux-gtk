@@ -269,6 +269,15 @@ fn initialize_surface(
     Some(surface)
 }
 
+/// The terminal's tab identity as a string; unlike the pane id given at creation, it
+/// follows the terminal when its tab is dragged to another pane.
+fn terminal_identity(area: &gtk4::GLArea) -> Option<String> {
+    use gtk4::prelude::*;
+    // SAFETY: this private key always stores a UUID (split_engine::append_pane_surface).
+    unsafe { area.data::<uuid::Uuid>("cmux-surface-uuid") }
+        .map(|identity| unsafe { identity.as_ref() }.to_string())
+}
+
 /// Create a terminal widget on the GTK main thread using an existing Ghostty app.
 /// Native surface creation waits for realization and non-zero allocation. The widget
 /// owns initialization and cleanup callbacks; the returned shared cell exposes the
@@ -678,7 +687,11 @@ pub fn create_surface(
             let Some(area) = area.upgrade() else {
                 return;
             };
-            let _ = area.activate_action("win.focus-pane", Some(&pane_id.to_variant()));
+            // The pane is resolved at click time: a tab dragged to another pane keeps its
+            // identity, not the pane id it was created with.
+            if let Some(identity) = terminal_identity(&area) {
+                let _ = area.activate_action("win.focus-terminal", Some(&identity.to_variant()));
+            }
             area.grab_focus();
             let surface = match *cell.borrow() {
                 Some(s) => s,
@@ -761,7 +774,13 @@ pub fn create_surface(
         let cell = surface_cell.clone();
         let gl_area_for_focus = gl_area.downgrade();
         move |_ctrl| {
-            crate::diagnostics::event(format_args!("terminal focus entered pane={pane_id}"));
+            let identity = gl_area_for_focus
+                .upgrade()
+                .and_then(|area| terminal_identity(&area));
+            crate::diagnostics::event(format_args!(
+                "terminal focus entered surface={}",
+                identity.as_deref().unwrap_or("-")
+            ));
             if let Some(surface) = *cell.borrow() {
                 unsafe {
                     ffi::ghostty_surface_set_focus(surface, true);
@@ -776,8 +795,8 @@ pub fn create_surface(
                     area.queue_render();
                 }
             }
-            if let Some(area) = gl_area_for_focus.upgrade() {
-                let _ = area.activate_action("win.terminal-focused", Some(&pane_id.to_variant()));
+            if let (Some(area), Some(identity)) = (gl_area_for_focus.upgrade(), identity) {
+                let _ = area.activate_action("win.terminal-focused", Some(&identity.to_variant()));
             }
         }
     });

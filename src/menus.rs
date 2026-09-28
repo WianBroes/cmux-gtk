@@ -64,13 +64,25 @@ pub fn register_actions(
     });
     window.add_action(&action);
 
-    // win.terminal-focused — keyboard focus entered a terminal; mark its notifications read.
-    let action = gio::SimpleAction::new("terminal-focused", Some(&u64::static_variant_type()));
+    // win.focus-terminal — a terminal was clicked; activate the pane that holds it now.
+    let action = gio::SimpleAction::new("focus-terminal", Some(&String::static_variant_type()));
     action.connect_activate({
         let state = state.clone();
         move |_, parameter| {
-            if let Some(pane_id) = parameter.and_then(|value| value.get::<u64>()) {
-                crate::inbox_actions::terminal_focused(&state, pane_id);
+            if let Some(surface) = terminal_parameter(parameter) {
+                crate::shortcuts::handle_focus_terminal(&state, surface);
+            }
+        }
+    });
+    window.add_action(&action);
+
+    // win.terminal-focused — keyboard focus entered a terminal; mark its notifications read.
+    let action = gio::SimpleAction::new("terminal-focused", Some(&String::static_variant_type()));
+    action.connect_activate({
+        let state = state.clone();
+        move |_, parameter| {
+            if let Some(surface) = terminal_parameter(parameter) {
+                crate::inbox_actions::terminal_focused(&state, surface);
             }
         }
     });
@@ -608,6 +620,11 @@ pub fn register_actions(
 
 /// Move to a history position, then record again once GTK has delivered the focus changes the
 /// move caused (they arrive deferred while the state is borrowed here).
+/// The terminal identity carried by `win.focus-terminal` and `win.terminal-focused`.
+fn terminal_parameter(parameter: Option<&gtk4::glib::Variant>) -> Option<uuid::Uuid> {
+    uuid::Uuid::parse_str(&parameter?.get::<String>()?).ok()
+}
+
 fn go_focus_history(state: &crate::app_state::AppStateRef, item: &crate::focus_history::Item) {
     if state.borrow_mut().navigate_focus_history(item) {
         let state = state.clone();

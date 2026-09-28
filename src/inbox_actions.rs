@@ -353,21 +353,21 @@ pub fn mark_read_where(state: &mut AppState, workspace: Uuid, surface: Option<Uu
 }
 
 /// Focusing a terminal marks its notifications read and lets it name its workspace, as upstream.
-pub fn terminal_focused(state: &crate::app_state::AppStateRef, pane_id: u64) {
+pub fn terminal_focused(state: &crate::app_state::AppStateRef, surface: Uuid) {
     let Ok(mut s) = state.try_borrow_mut() else {
         let state = state.clone();
-        glib::idle_add_local_once(move || terminal_focused(&state, pane_id));
+        glib::idle_add_local_once(move || terminal_focused(&state, surface));
         return;
     };
     let index = s.active_index;
-    let Some(surface) = s
-        .split_engines
+    // Only a terminal of the selected workspace counts, whichever pane its tab is in now.
+    if s.split_engines
         .get(index)
-        .and_then(|engine| engine.root.find_uuid_for_pane(pane_id))
-        .and_then(|uuid| Uuid::parse_str(&uuid).ok())
-    else {
+        .and_then(|engine| engine.find_pane_id_by_uuid(&surface.to_string()))
+        .is_none()
+    {
         return;
-    };
+    }
     let workspace = s.workspaces[index].uuid;
     mark_read_where(&mut s, workspace, Some(surface));
     s.record_focus(index, surface);

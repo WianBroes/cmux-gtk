@@ -382,6 +382,22 @@ pub fn handle_focus_pane(state: &Rc<RefCell<AppState>>, pane_id: u64) {
     }
 }
 
+/// Activate the pane that holds a clicked terminal now, found by its tab identity.
+pub fn handle_focus_terminal(state: &Rc<RefCell<AppState>>, surface: uuid::Uuid) {
+    let Ok(app_state) = state.try_borrow() else {
+        let state = state.clone();
+        glib::idle_add_local_once(move || handle_focus_terminal(&state, surface));
+        return;
+    };
+    let pane_id = app_state
+        .active_split_engine()
+        .and_then(|engine| engine.find_pane_id_by_uuid(&surface.to_string()));
+    drop(app_state);
+    if let Some(pane_id) = pane_id {
+        handle_focus_pane(state, pane_id);
+    }
+}
+
 /// Create a sibling terminal tab inside the currently focused pane.
 pub fn handle_new_terminal_tab(state: &Rc<RefCell<AppState>>) {
     let created = state
