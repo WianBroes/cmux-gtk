@@ -229,7 +229,7 @@ fn json_provider(name: &str) -> Option<JsonProvider> {
             start_event: "SessionStart",
             prompt_event: Some("UserPromptSubmit"),
             stop_event: "Stop",
-            notification_event: None,
+            notification_event: Some("Notification"),
             end_event: Some("SessionEnd"),
         },
         "omp" => JsonProvider {
@@ -1066,8 +1066,23 @@ fn setup_pi_style_extension(name: &str, explicit: bool) -> Result<(), CliError> 
             "CMUX_PI_HOOKS_DISABLED",
             "",
             "pi.on(\"session_shutdown\", (event, context) => send(\"session-end\", \"SessionEnd\", event, context));",
-            "",
-            "",
+            // A dialog (confirm/select/input, e.g. ask_user_question) waits mid-turn without a
+            // Stop, so announce it like macOS `publishPiQuestion`; the prompt text stays in Pi.
+            r#"let dialogContext;
+  const hookDialogs = (context) => {
+    dialogContext = context;
+    const ui = context?.hasUI ? context.ui : undefined;
+    const key = Symbol.for("cmux.pi.cmux-dialog-hooks");
+    if (!ui || ui[key]) return;
+    const waiting = () => send("notification", "Notification", { message: "Waiting for your answer" }, dialogContext);
+    for (const method of ["confirm", "select", "input"]) {
+      const original = ui[method]?.bind(ui);
+      if (!original) continue;
+      ui[method] = (...args) => { waiting(); return original(...args); };
+    }
+    ui[key] = true;
+  };"#,
+            "hookDialogs(context);",
             "",
             "",
         ),
