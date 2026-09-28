@@ -362,6 +362,82 @@ pub(super) fn canonicalize(cli: &mut Cli) -> Result<(), CliError> {
             }
             fold_flag(surface, id, "reorder-surface")?;
         }
+        Commands::WorkspaceAction {
+            action,
+            title,
+            color,
+            description,
+            action_positional,
+            value_words,
+            ..
+        } => {
+            // Positionals read as upstream's: the action first, then the value; with
+            // `--action` given every positional word belongs to the value instead.
+            let flagged = action.take();
+            let first = action_positional.take();
+            let (name, words): (String, Vec<String>) = match flagged {
+                Some(name) => (
+                    name,
+                    first
+                        .into_iter()
+                        .chain(value_words.drain(..))
+                        .collect::<Vec<_>>(),
+                ),
+                None => {
+                    let Some(name) = first else {
+                        return Err(CliError::Command(
+                            "workspace-action requires --action <name>".into(),
+                        ));
+                    };
+                    (name, value_words.drain(..).collect())
+                }
+            };
+            let value = words.join(" ");
+            let value = value.trim();
+            // The normalized name decides which value flag the trailing words stand in for.
+            let name = name.to_lowercase().replace('-', "_");
+            match name.as_str() {
+                "rename" => {
+                    if title.is_none() && !value.is_empty() {
+                        *title = Some(value.to_owned());
+                    }
+                    if title.as_deref().map(str::trim).is_none_or(str::is_empty) {
+                        return Err(CliError::Command(
+                            "workspace-action rename requires --title <text> (or a trailing title)"
+                                .into(),
+                        ));
+                    }
+                }
+                "set_color" => {
+                    if color.is_none() && !value.is_empty() {
+                        *color = Some(value.to_owned());
+                    }
+                    if color.as_deref().map(str::trim).is_none_or(str::is_empty) {
+                        return Err(CliError::Command(
+                            "workspace-action set-color requires --color <name|#hex> (or a trailing color)"
+                                .into(),
+                        ));
+                    }
+                }
+                "set_description" => {
+                    if description.is_none() && !value.is_empty() {
+                        *description = Some(value.to_owned());
+                    }
+                    if description
+                        .as_deref()
+                        .map(str::trim)
+                        .is_none_or(str::is_empty)
+                    {
+                        return Err(CliError::Command(
+                            "workspace-action set-description requires --description <text> (or trailing text)"
+                                .into(),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+            *action = Some(name);
+        }
         Commands::Identify {
             workspace,
             surface,
@@ -554,6 +630,10 @@ fn collect_targets<'a>(command: &'a mut Commands, targets: &mut Vec<Target<'a>>)
 
         Commands::ListSurfaces { workspace } | Commands::ListPanes { workspace } => {
             targets.push(Target::Optional(HandleKind::Workspace, workspace));
+        }
+
+        Commands::WorkspaceAction { workspace, .. } => {
+            targets.push(Target::Optional(HandleKind::Workspace, workspace))
         }
 
         Commands::ListPaneSurfaces { pane } => {
@@ -872,6 +952,72 @@ mod tests {
         assert_eq!(id.as_deref(), Some("workspace:2"));
         assert_eq!(position, Some(3));
         assert!(workspace.is_none());
+    }
+
+    /// Positional words become the value upstream's CLI infers, and the action normalizes.
+    #[test]
+    fn canonicalize_workspace_action_fills_positional_values() {
+        // `workspace-action rename My title`: action first, remaining words are the title.
+        let mut cli = parse(&["workspace-action", "rename", "My", "title"]);
+        canonicalize(&mut cli).expect("positional rename should canonicalize");
+        let Commands::WorkspaceAction {
+            action, title, ..
+        } = cli.command
+        else {
+            panic!("wrong command");
+        };
+        assert_eq!(action.as_deref(), Some("rename"));
+        assert_eq!(title.as_deref(), Some("My title"));
+
+        // With `--action` present the positional is a value word, not a second action.
+        let mut cli = parse(&["workspace-action", "--action", "rename", "Plan"]);
+        canonicalize(&mut cli).expect("flagged rename should canonicalize");
+        let Commands::WorkspaceAction {
+            action, title, ..
+        } = cli.command
+        else {
+            panic!("wrong command");
+        };
+        assert_eq!(action.as_deref(), Some("rename"));
+        assert_eq!(title.as_deref(), Some("Plan"));
+
+        // Dashes and capitals normalize the way upstream does before dispatch.
+        let mut cli = parse(&["workspace-action", "--action", "Clear-Name"]);
+        canonicalize(&mut cli).expect("clear-name should canonicalize");
+        let Commands::WorkspaceAction { action, .. } = cli.command else {
+            panic!("wrong command");
+        };
+        assert_eq!(action.as_deref(), Some("clear_name"));
+    }
+
+    /// A missing action or a missing value fails before any connection, with upstream's text.
+    #[test]
+    fn canonicalize_reports_workspace_action_value_errors() {
+        let mut cli = parse(&["workspace-action", "--workspace", "workspace:1"]);
+        let error = canonicalize(&mut cli).expect_err("an action is required");
+        assert_eq!(
+            error.to_string(),
+            "workspace-action requires --action <name>"
+        );
+
+        for (arguments, expected) in [
+            (
+                vec!["workspace-action", "rename"],
+                "workspace-action rename requires --title <text> (or a trailing title)",
+            ),
+            (
+                vec!["workspace-action", "--action", "set-color"],
+                "workspace-action set-color requires --color <name|#hex> (or a trailing color)",
+            ),
+            (
+                vec!["workspace-action", "--action", "set-description"],
+                "workspace-action set-description requires --description <text> (or trailing text)",
+            ),
+        ] {
+            let mut cli = parse(&arguments);
+            let error = canonicalize(&mut cli).expect_err("the value is required");
+            assert_eq!(error.to_string(), expected, "{arguments:?}");
+        }
     }
 
     /// The caller environment fills only the anchors the caller did not name.

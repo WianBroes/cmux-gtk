@@ -104,6 +104,9 @@ pub struct Workspace {
     /// Latest attributed local listeners; None means not yet available or scan failure.
     pub ports: Option<Vec<crate::ports::Port>>,
     pub color: Option<String>,
+    /// Pinned workspaces gather at the head of the sidebar and of `workspace list`, and
+    /// survive the close-others family; saved with the session (upstream `isPinned`).
+    pub pinned: bool,
     /// Stable optional group membership, independent of sidebar row position.
     pub group_id: Option<Uuid>,
     pub startup_script: Option<PathBuf>,
@@ -135,6 +138,7 @@ impl Workspace {
             git: None,
             ports: None,
             color: None,
+            pinned: false,
             group_id: None,
             startup_script: None,
             remote_directory: None,
@@ -203,6 +207,12 @@ impl Workspace {
     pub fn rename(&mut self, new_name: String) {
         self.name = new_name;
         self.custom_name = true;
+    }
+
+    /// Drop the user-chosen name so the workspace follows its focused terminal's title
+    /// again (upstream `clear-name`). The current name is kept until a title arrives.
+    pub fn clear_custom_name(&mut self) {
+        self.custom_name = false;
     }
 
     /// Set or clear the sidebar description; blank text clears it, like upstream's

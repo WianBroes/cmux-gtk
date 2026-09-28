@@ -1084,6 +1084,31 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             "workspace.reorder_many",
             json!({"workspace_ids":order,"dry_run":dry_run}),
         ),
+        Commands::WorkspaceAction {
+            action,
+            workspace,
+            window,
+            title,
+            color,
+            description,
+            ..
+        } => {
+            let mut params = serde_json::Map::new();
+            // Canonicalization always fills the action; an empty one is refused upstream.
+            params.insert("action".into(), json!(action.clone().unwrap_or_default()));
+            for (key, value) in [
+                ("workspace_id", workspace),
+                ("window_id", window),
+                ("title", title),
+                ("color", color),
+                ("description", description),
+            ] {
+                if let Some(value) = value {
+                    params.insert(key.into(), json!(value));
+                }
+            }
+            ("workspace.action", Value::Object(params))
+        }
         Commands::ListWorkspaceGroups => ("workspace.group.list", json!({})),
         Commands::CreateWorkspaceGroup { name, color } => {
             ("workspace.group.create", json!({"name":name,"color":color}))
@@ -1712,6 +1737,40 @@ mod tests {
         assert_eq!(params["id"], "workspace:3");
         assert_eq!(params["position"], 0);
         assert_eq!(params["dry_run"], true);
+    }
+
+    /// `workspace-action` sends upstream's parameter names with the normalized action.
+    #[test]
+    fn workspace_action_maps_to_its_method() {
+        let mut cli = Cli::try_parse_from([
+            "cmux",
+            "workspace-action",
+            "--action",
+            "set-color",
+            "--workspace",
+            "workspace:2",
+            "--color",
+            "#336699",
+        ])
+        .expect("workspace-action should parse");
+        handles::canonicalize(&mut cli).expect("canonicalize");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "workspace.action");
+        assert_eq!(params["action"], "set_color");
+        assert_eq!(params["workspace_id"], "workspace:2");
+        assert_eq!(params["color"], "#336699");
+        assert!(params.get("window_id").is_none());
+        assert!(params.get("title").is_none());
+
+        // Actions without a value carry nothing but their name and target.
+        let mut cli =
+            Cli::try_parse_from(["cmux", "workspace-action", "--action", "move-top"])
+                .expect("workspace-action should parse");
+        handles::canonicalize(&mut cli).expect("canonicalize");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "workspace.action");
+        assert_eq!(params["action"], "move_top");
+        assert_eq!(params.as_object().map(serde_json::Map::len), Some(1));
     }
 
     /// `workspace list|current` dispatch onto the two workspace readers they mirror.

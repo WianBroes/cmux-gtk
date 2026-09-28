@@ -352,6 +352,35 @@ pub fn mark_read_where(state: &mut AppState, workspace: Uuid, surface: Option<Uu
     changed
 }
 
+/// Mark every notification of one workspace unread again and show its sidebar dot
+/// (upstream `workspace.action mark_unread`). Returns how many records changed; the
+/// attention flag is set even when the workspace had no notifications.
+pub fn mark_unread_workspace(state: &mut AppState, workspace: Uuid) -> usize {
+    let mut changed = 0;
+    for record in &mut state.inbox.records {
+        if record.workspace_id == workspace && record.is_read {
+            record.is_read = false;
+            changed += 1;
+        }
+    }
+    if let Some(index) = state
+        .workspaces
+        .iter()
+        .position(|row| row.uuid == workspace)
+    {
+        state.workspaces[index].has_attention = true;
+        state.update_sidebar_attention(index);
+    }
+    if changed > 0 {
+        refresh(state);
+        if let Some(sender) = &state.inbox_updates {
+            sender.send_replace(());
+        }
+        state.trigger_session_save();
+    }
+    changed
+}
+
 /// Focusing a terminal marks its notifications read and lets it name its workspace, as upstream.
 pub fn terminal_focused(state: &crate::app_state::AppStateRef, surface: Uuid) {
     let Ok(mut s) = state.try_borrow_mut() else {

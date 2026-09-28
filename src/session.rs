@@ -20,6 +20,9 @@ pub struct WorkspaceSession {
     pub custom_description: Option<String>,
     #[serde(default)]
     pub color: Option<String>,
+    /// Leading-pinned tier membership; absent in older sessions.
+    #[serde(default)]
+    pub pinned: bool,
     #[serde(default)]
     pub group_id: Option<uuid::Uuid>,
     #[serde(default)]
@@ -521,6 +524,7 @@ mod tests {
                 custom_name: None,
                 custom_description: None,
                 color: None,
+                pinned: false,
                 group_id: None,
                 startup_script: None,
                 remote_target: None,

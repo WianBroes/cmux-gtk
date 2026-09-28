@@ -428,6 +428,33 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Apply an action to a workspace (upstream `workspace-action`)
+    WorkspaceAction {
+        /// Action name; may also be given as the first positional argument
+        #[arg(long)]
+        action: Option<String>,
+        /// Workspace UUID, ref (workspace:N) or index; defaults to the active workspace
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Window context; this build has a single window (`window:1`)
+        #[arg(long)]
+        window: Option<String>,
+        /// Title given to `rename` (upstream's spelling; `--name` is an alias)
+        #[arg(long, visible_alias = "name")]
+        title: Option<String>,
+        /// Color given to `set-color` (#RRGGBB)
+        #[arg(long)]
+        color: Option<String>,
+        /// Description given to `set-description`
+        #[arg(long)]
+        description: Option<String>,
+        /// Action, or the first word of a positional value, passed without `--action`
+        #[arg(value_name = "ACTION")]
+        action_positional: Option<String>,
+        /// Remaining words of a positional value (`rename My title`)
+        #[arg(num_args = 0.., value_name = "TEXT")]
+        value_words: Vec<String>,
+    },
 
     // -- Surface commands --
     /// Reorder listed workspaces first, retaining the relative order of all others
@@ -2577,6 +2604,83 @@ mod handle_argument_tests {
             parse(&["select-workspace", WORKSPACE]),
             Commands::SelectWorkspace { .. }
         ));
+    }
+
+    /// `workspace-action` parses upstream's flags, its positional action and trailing value.
+    #[test]
+    fn workspace_action_forms_parse() {
+        match parse(&[
+            "workspace-action",
+            "--action",
+            "pin",
+            "--workspace",
+            "workspace:2",
+        ]) {
+            Commands::WorkspaceAction {
+                action, workspace, ..
+            } => {
+                assert_eq!(action.as_deref(), Some("pin"));
+                assert_eq!(workspace.as_deref(), Some("workspace:2"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        // The action can be positional, with the value's words following it.
+        match parse(&["workspace-action", "rename", "My title"]) {
+            Commands::WorkspaceAction {
+                action,
+                action_positional,
+                value_words,
+                ..
+            } => {
+                assert!(action.is_none());
+                assert_eq!(action_positional.as_deref(), Some("rename"));
+                assert_eq!(value_words, vec!["My title"]);
+            }
+            _ => panic!("wrong command variant"),
+        }
+        // `--name` is the alias of upstream's `--title`, and each value flag parses alone.
+        match parse(&["workspace-action", "--action", "rename", "--name", "Plan"]) {
+            Commands::WorkspaceAction { title, .. } => {
+                assert_eq!(title.as_deref(), Some("Plan"))
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&[
+            "workspace-action",
+            "--action",
+            "set-color",
+            "--color",
+            "#336699",
+        ]) {
+            Commands::WorkspaceAction { color, .. } => {
+                assert_eq!(color.as_deref(), Some("#336699"))
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&[
+            "workspace-action",
+            "--action",
+            "set-description",
+            "--description",
+            "Notes",
+        ]) {
+            Commands::WorkspaceAction { description, .. } => {
+                assert_eq!(description.as_deref(), Some("Notes"))
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&[
+            "workspace-action",
+            "--action",
+            "close-others",
+            "--window",
+            "window:1",
+        ]) {
+            Commands::WorkspaceAction { window, .. } => {
+                assert_eq!(window.as_deref(), Some("window:1"))
+            }
+            _ => panic!("wrong command variant"),
+        }
     }
 
     /// `--id-format` is global, validates its value and leaves the default output untouched.

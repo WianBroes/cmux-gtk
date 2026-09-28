@@ -341,6 +341,7 @@ impl AppState {
             .color
             .clone()
             .filter(|c| crate::workspace::valid_workspace_color(c));
+        workspace.pinned = ws.pinned;
         workspace.group_id = ws.group_id.filter(|group_id| {
             self.workspace_groups
                 .iter()
@@ -734,6 +735,65 @@ impl AppState {
             self.trigger_session_save();
         }
         changed
+    }
+
+    /// The count of workspaces in the leading pinned tier.
+    fn pinned_tier_end(&self) -> usize {
+        self.workspaces.iter().filter(|workspace| workspace.pinned).count()
+    }
+
+    /// Where `move-up` / `move-down` / `move-top` would take a workspace: its pin tier
+    /// bounds the move, so a pinned row never slides into the unpinned tier and the
+    /// reverse. Returns the workspace's current index for an unknown one.
+    pub fn workspace_move_target(&self, index: usize, top: bool, delta: isize) -> usize {
+        let Some(workspace) = self.workspaces.get(index) else {
+            return index;
+        };
+        let tier_end = self.pinned_tier_end();
+        let (first, last) = if workspace.pinned {
+            (0, tier_end.saturating_sub(1))
+        } else {
+            (tier_end, self.workspaces.len().saturating_sub(1))
+        };
+        if top {
+            return first;
+        }
+        let target = (index as isize + delta).clamp(first as isize, last as isize);
+        usize::try_from(target).unwrap_or(index)
+    }
+
+    /// Set a workspace's pin state and reseat it in its tier, as upstream: pinned rows
+    /// gather behind the existing pinned ones, unpinned rows take the first free slot
+    /// after them. Returns the workspace's resulting index.
+    pub fn set_workspace_pinned(&mut self, index: usize, pinned: bool) -> Option<usize> {
+        let workspace = self.workspaces.get(index)?;
+        if workspace.pinned == pinned {
+            return Some(index);
+        }
+        // The pinned count is the tier boundary in both directions: a workspace joining
+        // the pinned tier lands at its end, one leaving it lands at the head of the rest.
+        let target = if pinned {
+            self.pinned_tier_end()
+        } else {
+            self.pinned_tier_end().saturating_sub(1)
+        };
+        self.workspaces[index].pinned = pinned;
+        self.reorder_workspace(index, target);
+        Some(target)
+    }
+
+    /// Forget the user-chosen name so the workspace follows its focused terminal's title
+    /// again (upstream `clear-name`); no title means the current name is kept.
+    pub fn clear_workspace_name(&mut self, index: usize) {
+        if let Some(workspace) = self.workspaces.get_mut(index) {
+            workspace.clear_custom_name();
+        } else {
+            return;
+        }
+        self.apply_focused_title(index);
+        self.update_sidebar_name(index);
+        self.trigger_session_save();
+        self.publish_workspace("workspace.renamed", index, serde_json::json!({"automatic": true}));
     }
 
     /// Find the previous or next model index within the workspace's visible group scope.
@@ -1671,6 +1731,7 @@ impl AppState {
                             custom_name: Some(ws.custom_name),
                             custom_description: ws.custom_description.clone(),
                             color: ws.color.clone(),
+                            pinned: ws.pinned,
                             group_id: ws.group_id,
                             startup_script: ws.startup_script.clone(),
                             remote_target: ws.remote_target.clone(),

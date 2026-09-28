@@ -6,6 +6,27 @@ use serde_json::{json, Value};
 
 use super::response::{err, ok};
 
+/// Actions `workspace.action` accepts, in upstream's snake_case spelling (the handler
+/// also takes the dashed CLI spelling). `mobile_connect` is upstream-only.
+const WORKSPACE_ACTIONS: &[&str] = &[
+    "pin",
+    "unpin",
+    "rename",
+    "clear_name",
+    "set_description",
+    "clear_description",
+    "move_up",
+    "move_down",
+    "move_top",
+    "close_others",
+    "close_above",
+    "close_below",
+    "mark_read",
+    "mark_unread",
+    "set_color",
+    "clear_color",
+];
+
 /// Snapshot one workspace's identity and layout counts without changing focus or retaining widgets.
 /// Return None for an absent index; missing engines produce unknown counts rather than fabricated zeroes.
 fn workspace_record(state: &crate::app_state::AppState, index: usize) -> Option<Value> {
@@ -38,6 +59,7 @@ fn workspace_record(state: &crate::app_state::AppState, index: usize) -> Option<
         "title": workspace.name,
         "name": workspace.name,
         "group_id": workspace.group_id,
+        "pinned": workspace.pinned,
         "working_directory": workspace.working_directory.as_ref().map(|path| path.to_string_lossy()),
         "selected": index == state.active_index,
         "pane_count": counts.map(|(panes, _)| panes),
@@ -468,6 +490,7 @@ fn handle_socket_command_traced(
                 "workspace.last",
                 "workspace.reorder",
                 "workspace.reorder_many",
+                "workspace.action",
                 "workspace.group.list",
                 "workspace.group.create",
                 "workspace.group.update",
@@ -907,6 +930,205 @@ fn handle_socket_command_traced(
             s.reorder_workspace(from, to);
             drop(s);
             crate::sidebar::rebuild_grouped_sidebar(state);
+            let _ = resp_tx.send(ok(req_id, reply));
+        }
+        SocketCommand::WorkspaceAction {
+            req_id,
+            action,
+            workspace,
+            title,
+            color,
+            description,
+            resp_tx,
+        } => {
+            // Upstream lowercases the action and maps dashes onto underscores.
+            let action = action.to_lowercase().replace('-', "_");
+            if !WORKSPACE_ACTIONS.contains(&action.as_str()) {
+                let _ = resp_tx.send(err(
+                    req_id,
+                    "invalid_params",
+                    &format!(
+                        "Unknown workspace action: {action} (valid actions: {})",
+                        WORKSPACE_ACTIONS.join(", ")
+                    ),
+                ));
+                return;
+            }
+            let mut s = state.borrow_mut();
+            // No target means the active workspace, as upstream.
+            let index = match workspace.as_deref() {
+                None => Some(s.active_index),
+                Some(text) => uuid::Uuid::parse_str(text)
+                    .ok()
+                    .and_then(|uuid| s.workspaces.iter().position(|row| row.uuid == uuid)),
+            };
+            let Some(index) = index.filter(|index| *index < s.workspaces.len()) else {
+                let _ = resp_tx.send(err(req_id, "not_found", "workspace not found"));
+                return;
+            };
+            let target = s.workspaces[index].uuid;
+            let mut extras = json!({});
+            let mut order_changed = false;
+            match action.as_str() {
+                "pin" | "unpin" => {
+                    let pinned = action == "pin";
+                    if let Some(moved) = s.set_workspace_pinned(index, pinned) {
+                        extras["index"] = json!(moved);
+                    }
+                    extras["pinned"] = json!(pinned);
+                    order_changed = true;
+                }
+                "rename" => {
+                    let Some(title) = title
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                    else {
+                        let _ =
+                            resp_tx.send(err(req_id, "invalid_params", "Missing or invalid title"));
+                        return;
+                    };
+                    let title = title.to_owned();
+                    s.rename_workspace_at(index, title.clone());
+                    extras["title"] = json!(title);
+                }
+                "clear_name" => {
+                    s.clear_workspace_name(index);
+                    extras["title"] = json!(s.workspaces[index].name);
+                }
+                "set_description" => {
+                    let Some(description) = description
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                    else {
+                        let _ = resp_tx.send(err(
+                            req_id,
+                            "invalid_params",
+                            "Missing or invalid description",
+                        ));
+                        return;
+                    };
+                    s.set_workspace_description(index, Some(description.to_owned()));
+                    extras["description"] = json!(description);
+                }
+                "clear_description" => {
+                    s.set_workspace_description(index, None);
+                    extras["description"] = Value::Null;
+                }
+                "move_up" | "move_down" | "move_top" => {
+                    let delta = match action.as_str() {
+                        "move_up" => -1,
+                        "move_down" => 1,
+                        _ => 0,
+                    };
+                    let destination = s.workspace_move_target(index, action == "move_top", delta);
+                    s.reorder_workspace(index, destination);
+                    let final_index = s
+                        .workspaces
+                        .iter()
+                        .position(|row| row.uuid == target)
+                        .unwrap_or(destination);
+                    extras["index"] = json!(final_index);
+                    order_changed = true;
+                }
+                "close_others" | "close_above" | "close_below" => {
+                    // Pinned workspaces survive every close range, as upstream.
+                    let candidates: Vec<usize> = (0..s.workspaces.len())
+                        .filter(|candidate| {
+                            *candidate != index
+                                && !s.workspaces[*candidate].pinned
+                                && match action.as_str() {
+                                    "close_above" => *candidate < index,
+                                    "close_below" => *candidate > index,
+                                    _ => true,
+                                }
+                        })
+                        .collect();
+                    // Close from the end so the surviving candidates keep their indexes.
+                    let mut closed = 0;
+                    for candidate in candidates.into_iter().rev() {
+                        if s.close_workspace(candidate) {
+                            closed += 1;
+                        }
+                    }
+                    extras["closed"] = json!(closed);
+                }
+                "mark_read" => {
+                    let scope = crate::inbox::Scope {
+                        workspace_id: Some(target),
+                        surface_id: None,
+                    };
+                    let _ = crate::inbox_actions::handle(
+                        &mut s,
+                        crate::inbox::Action::MarkRead {
+                            id: None,
+                            scope,
+                            all: false,
+                        },
+                    );
+                    crate::inbox_actions::refresh(&s);
+                    s.clear_workspace_attention(index);
+                    s.trigger_session_save();
+                }
+                "mark_unread" => {
+                    crate::inbox_actions::mark_unread_workspace(&mut s, target);
+                }
+                "set_color" => {
+                    let Some(hex) = color
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                    else {
+                        let _ =
+                            resp_tx.send(err(req_id, "invalid_params", "Missing or invalid color"));
+                        return;
+                    };
+                    if !crate::workspace::valid_workspace_color(hex) {
+                        let _ = resp_tx.send(err(
+                            req_id,
+                            "invalid_params",
+                            "Invalid color. Use a hex value (#RRGGBB).",
+                        ));
+                        return;
+                    }
+                    let workspace_id = s.workspaces[index].id;
+                    let hex = hex.to_owned();
+                    s.set_workspace_color(workspace_id, Some(hex.clone()));
+                    extras["color"] = json!(hex);
+                }
+                "clear_color" => {
+                    let workspace_id = s.workspaces[index].id;
+                    s.set_workspace_color(workspace_id, None);
+                    extras["color"] = Value::Null;
+                }
+                _ => unreachable!("the action list is validated above"),
+            }
+            drop(s);
+            if order_changed {
+                crate::sidebar::rebuild_grouped_sidebar(state);
+            }
+            let s = state.borrow();
+            let workspace_ref = s
+                .handles
+                .ensure_ref(super::handles::HandleKind::Workspace, &target.to_string());
+            let window_ref = s.handles.ensure_ref(
+                super::handles::HandleKind::Window,
+                super::handles::MAIN_WINDOW_ID,
+            );
+            drop(s);
+            let mut reply = json!({
+                "action": action,
+                "workspace_id": target,
+                "workspace_ref": workspace_ref,
+                "window_id": super::handles::MAIN_WINDOW_ID,
+                "window_ref": window_ref,
+            });
+            if let (Some(reply), Some(extras)) = (reply.as_object_mut(), extras.as_object()) {
+                for (key, value) in extras {
+                    reply.insert(key.clone(), value.clone());
+                }
+            }
             let _ = resp_tx.send(ok(req_id, reply));
         }
         SocketCommand::WorkspaceGroupList { req_id, resp_tx } => {

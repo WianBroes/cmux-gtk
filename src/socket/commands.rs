@@ -141,6 +141,21 @@ pub enum SocketCommand {
         dry_run: bool,
         resp_tx: RespTx,
     },
+    /// One `workspace.action` call: an action name plus the values its arm reads.
+    WorkspaceAction {
+        req_id: Value,
+        /// Action as written by the caller; the handler normalizes and validates it.
+        action: String,
+        /// Target workspace UUID; None targets the active workspace, as upstream.
+        workspace: Option<String>,
+        /// `rename` title.
+        title: Option<String>,
+        /// `set-color` value.
+        color: Option<String>,
+        /// `set-description` text.
+        description: Option<String>,
+        resp_tx: RespTx,
+    },
     WorkspaceGroupList {
         req_id: Value,
         resp_tx: RespTx,

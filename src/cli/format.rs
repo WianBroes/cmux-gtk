@@ -369,6 +369,34 @@ pub fn format_mutation(command_name: &str, result: &Value) -> String {
             parts.join(" ")
         }
         "surface.close" => format!("Closed surface: {}", id),
+        // Upstream's action summary: `OK action=… workspace=… window=… [closed=…] [index=…] [color=…]`.
+        "workspace.action" => {
+            let action = result
+                .get("action")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let workspace = result
+                .get("workspace_ref")
+                .or_else(|| result.get("workspace_id"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let window = result
+                .get("window_ref")
+                .or_else(|| result.get("window_id"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let mut line = format!("OK action={action} workspace={workspace} window={window}");
+            if let Some(closed) = result.get("closed").filter(|value| !value.is_null()) {
+                line.push_str(&format!(" closed={closed}"));
+            }
+            if let Some(index) = result.get("index").filter(|value| !value.is_null()) {
+                line.push_str(&format!(" index={index}"));
+            }
+            if let Some(color) = result.get("color").and_then(Value::as_str) {
+                line.push_str(&format!(" color={color}"));
+            }
+            line
+        }
         "surface.move" => format!("Moved surface: {}", id),
         "surface.reorder" => format!("Reordered surface: {}", id),
         "surface.drag_to_split" => format!("Split moved surface: {}", id),
@@ -425,6 +453,7 @@ pub fn format_response(method: &str, result: &Value, json_mode: bool, color: boo
         | "workspace.close"
         | "workspace.rename"
         | "workspace.reorder"
+        | "workspace.action"
         | "surface.split"
         | "pane.create"
         | "surface.create"
