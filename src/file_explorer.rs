@@ -286,6 +286,7 @@ impl FileExplorer {
             state: state.clone(),
         };
         explorer.connect_signals();
+        explorer.connect_activation();
         explorer
     }
 
@@ -302,7 +303,17 @@ impl FileExplorer {
                     .get()
                     .unwrap_or(false);
                 if !has_dummy {
-                    // Rebuilds re-expand loaded rows here; the model already matches.
+                    // An already-loaded row only flips its flag: rebuilds re-expand it
+                    // from here (a rebuild already holds the nodes borrow — skip then).
+                    let node_path: String = store
+                        .get_value(iter, COL_PATH as i32)
+                        .get()
+                        .unwrap_or_default();
+                    if let Ok(mut nodes) = state.nodes.try_borrow_mut() {
+                        if let Some(node) = find_node_mut(&mut nodes, Path::new(&node_path)) {
+                            node.expanded = true;
+                        }
+                    }
                     return;
                 }
                 while let Some(dummy) = store.iter_children(Some(iter)) {
@@ -390,6 +401,54 @@ impl FileExplorer {
         });
     }
 
+    /// Activation (Enter or double-click), the upstream `openNode` rule: a directory
+    /// toggles its expansion, a file opens with the desktop's default application.
+    fn connect_activation(&self) {
+        let store = self.store.clone();
+        let state = self.state.clone();
+        self.tree.connect_row_activated(move |tree, path, _column| {
+            let Some(iter) = store.iter(path) else {
+                return;
+            };
+            let node_path: String = store
+                .get_value(&iter, COL_PATH as i32)
+                .get()
+                .unwrap_or_default();
+            if node_path == DUMMY_PATH {
+                return;
+            }
+            let is_dir: bool = store
+                .get_value(&iter, COL_IS_DIR as i32)
+                .get()
+                .unwrap_or(false);
+            if is_dir {
+                let expanded = {
+                    let mut nodes = state.nodes.borrow_mut();
+                    find_node_mut(&mut nodes, Path::new(&node_path))
+                        .is_some_and(|node| node.expanded)
+                };
+                if expanded {
+                    tree.collapse_row(path);
+                } else {
+                    // First expansion goes through row-expanded, which loads the children.
+                    tree.expand_row(path, false);
+                }
+                return;
+            }
+            match open_with_default_application(Path::new(&node_path)) {
+                Ok(()) => {
+                    crate::diagnostics::event(format_args!("file_explorer.open_requested"));
+                }
+                Err(error) => {
+                    crate::diagnostics::event(format_args!(
+                        "file_explorer.open_failed os_error={}",
+                        error.raw_os_error().unwrap_or(-1)
+                    ));
+                }
+            }
+        });
+    }
+
     /// The panel widget for the sidebar's content stack.
     pub fn widget(&self) -> &gtk4::Box {
         &self.root
@@ -452,6 +511,16 @@ impl FileExplorer {
             }
         }
     }
+}
+
+/// Open a file with the desktop's default application. Upstream opens its own
+/// preview panel; the Linux v1 hands the path straight to `xdg-open`, never through
+/// a shell. The launch is fire-and-forget, like upstream's background open.
+fn open_with_default_application(path: &Path) -> std::io::Result<()> {
+    std::process::Command::new("xdg-open")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
 }
 
 /// Follow the focused workspace's current directory: a one-second tick resolves the
