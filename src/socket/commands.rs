@@ -321,6 +321,8 @@ pub enum SocketCommand {
     SurfaceHealth {
         req_id: Value,
         id: Option<String>,
+        /// Workspace whose surfaces are listed instead of the single focused/targeted one.
+        workspace: Option<String>,
         resp_tx: RespTx,
     },
     SurfaceRefresh {

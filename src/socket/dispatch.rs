@@ -1182,11 +1182,28 @@ async fn dispatch_request(
                 resp_tx,
             }
         }
-        "surface.health" => commands::SocketCommand::SurfaceHealth {
-            req_id: req_id.clone(),
-            id: target,
-            resp_tx,
-        },
+        "surface.health" => {
+            let workspace = match optional_text(&params, "workspace_id", "workspace_id") {
+                Ok(workspace) => workspace,
+                Err(message) => return err(req_id, "invalid_params", &message),
+            };
+            if target.is_some() && workspace.is_some() {
+                return err(
+                    req_id,
+                    "invalid_params",
+                    "pass either a surface id or a workspace, not both",
+                );
+            }
+            if let Err(message) = only_main_window(&params) {
+                return err(req_id, "invalid_params", &message);
+            }
+            commands::SocketCommand::SurfaceHealth {
+                req_id: req_id.clone(),
+                id: target,
+                workspace,
+                resp_tx,
+            }
+        }
         "surface.refresh" => commands::SocketCommand::SurfaceRefresh {
             req_id: req_id.clone(),
             id: target,

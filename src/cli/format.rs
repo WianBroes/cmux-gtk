@@ -479,6 +479,38 @@ pub fn format_response(method: &str, result: &Value, json_mode: bool, color: boo
             format!("{} ({})", title, id)
         }
         "surface.list" | "pane.surfaces" => format_surface_list(result, color),
+        // Upstream's `surface-health` line: handle, type, then only what this build measures.
+        "surface.health" if result.get("surfaces").is_some() => {
+            let Some(surfaces) = result.get("surfaces").and_then(Value::as_array) else {
+                return format_fallback(result);
+            };
+            if surfaces.is_empty() {
+                return "No surfaces".to_owned();
+            }
+            surfaces
+                .iter()
+                .map(|surface| {
+                    let handle = surface
+                        .get("ref")
+                        .or_else(|| surface.get("id"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown");
+                    let kind = surface.get("type").and_then(Value::as_str).unwrap_or("");
+                    let mut line = format!("{handle}  type={kind}");
+                    if let Some(alive) = surface.get("alive").and_then(Value::as_bool) {
+                        line.push_str(&format!(" alive={alive}"));
+                    }
+                    if let Some(attention) = surface.get("has_attention").and_then(Value::as_bool) {
+                        line.push_str(&format!(" has_attention={attention}"));
+                    }
+                    if let Some(status) = surface.get("browser_status").and_then(Value::as_str) {
+                        line.push_str(&format!(" browser_status={status}"));
+                    }
+                    line
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
         "tree" => super::tree::render_text(result),
         "pane.list" => format_pane_list(result, color),
         "window.list" => format_window_list(result, color),

@@ -832,6 +832,15 @@ pub enum Commands {
         #[arg(long, visible_alias = "surface")]
         id: Option<String>,
     },
+    /// List health details for every surface of a workspace (upstream `surface-health`)
+    SurfaceHealth {
+        /// Workspace whose surfaces are listed; default is the active one
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Window context; this build has a single window (`window:1`)
+        #[arg(long)]
+        window: Option<String>,
+    },
     /// Refresh a surface
     Refresh {
         /// Target surface ID, ref (surface:N) or index (default: focused)
@@ -2911,6 +2920,35 @@ mod handle_argument_tests {
             Commands::TriggerFlash { surface, .. } => {
                 assert_eq!(surface.as_deref(), Some("surface:4"))
             }
+            _ => panic!("wrong command variant"),
+        }
+    }
+
+    /// `surface-health` parses upstream's workspace and window context.
+    #[test]
+    fn surface_health_forms_parse() {
+        match parse(&["surface-health"]) {
+            Commands::SurfaceHealth { workspace, window } => {
+                assert!(workspace.is_none() && window.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&[
+            "surface-health",
+            "--workspace",
+            "workspace:2",
+            "--window",
+            "window:1",
+        ]) {
+            Commands::SurfaceHealth { workspace, window } => {
+                assert_eq!(workspace.as_deref(), Some("workspace:2"));
+                assert_eq!(window.as_deref(), Some("window:1"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        // The single-surface `health` keeps its own `--id` flag.
+        match parse(&["health", "--id", "surface:3"]) {
+            Commands::Health { id } => assert_eq!(id.as_deref(), Some("surface:3")),
             _ => panic!("wrong command variant"),
         }
     }

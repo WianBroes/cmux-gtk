@@ -2461,35 +2461,107 @@ fn handle_socket_command_traced(
         SocketCommand::SurfaceHealth {
             req_id,
             id,
+            workspace,
             resp_tx,
         } => {
             // SOCK-05: health is NOT focus-intent — NO focus change.
-            let (found, has_attention) = {
+            let response = {
                 let s = state.borrow();
-                if let Some(engine) = s.split_engines.get(s.active_index) {
-                    if let Some(ref uuid_str) = id {
-                        let alive = engine.find_surface_by_uuid(uuid_str).is_some();
-                        let attn = engine
-                            .find_pane_id_by_uuid(uuid_str)
-                            .map(|pid| engine.root.pane_has_attention(pid))
-                            .unwrap_or(false);
-                        (alive, attn)
-                    } else {
-                        let alive = engine
-                            .root
-                            .find_surface_for_pane(engine.active_pane_id)
-                            .is_some();
-                        let attn = engine.root.pane_has_attention(engine.active_pane_id);
-                        (alive, attn)
+                match workspace.as_deref() {
+                    // Upstream `surface-health`: one record per surface of one workspace.
+                    Some(workspace) => {
+                        let found = uuid::Uuid::parse_str(workspace)
+                            .ok()
+                            .and_then(|uuid| s.workspaces.iter().position(|row| row.uuid == uuid));
+                        match found {
+                            None => err(req_id, "not_found", "workspace not found"),
+                            Some(index) => {
+                                let workspace_uuid = s.workspaces[index].uuid;
+                                let workspace_ref = s.handles.ensure_ref(
+                                    super::handles::HandleKind::Workspace,
+                                    &workspace_uuid.to_string(),
+                                );
+                                let mut surfaces: Vec<Value> = Vec::new();
+                                if let Some(engine) = s.split_engines.get(index) {
+                                    for pane in engine.pane_info() {
+                                        for (uuid, browser) in
+                                            pane.surface_ids.iter().zip(&pane.browser_urls)
+                                        {
+                                            let id = uuid.to_string();
+                                            let mut record = json!({
+                                                "id": id,
+                                                "ref": s.handles.ensure_ref(
+                                                    super::handles::HandleKind::Surface, &id),
+                                                "type": if browser.is_some() { "browser" } else { "terminal" },
+                                                "pane_id": pane.id,
+                                                "pane_ref": format!("pane:{}", pane.id),
+                                                "has_attention": engine.root.pane_has_attention(pane.id),
+                                            });
+                                            match browser {
+                                                // A terminal is alive when its native surface is registered.
+                                                None => {
+                                                    record["alive"] = json!(engine
+                                                        .find_surface_by_uuid(&id)
+                                                        .is_some())
+                                                }
+                                                // A browser is alive while its daemon session exists.
+                                                Some(_) => {
+                                                    let session = s.browser_sessions.get(&uuid);
+                                                    let status = match session {
+                                                        Some(browser) if matches!(browser.preview_state, crate::browser::PreviewState::Connected | crate::browser::PreviewState::Streaming) => "connected",
+                                                        Some(_) => "starting",
+                                                        None => "suspended",
+                                                    };
+                                                    record["alive"] = json!(session.is_some());
+                                                    record["browser_status"] = json!(status);
+                                                }
+                                            }
+                                            surfaces.push(record);
+                                        }
+                                    }
+                                }
+                                ok(
+                                    req_id,
+                                    json!({
+                                        "workspace_id": workspace_uuid,
+                                        "workspace_ref": workspace_ref,
+                                        "surfaces": surfaces,
+                                    }),
+                                )
+                            }
+                        }
                     }
-                } else {
-                    (false, false)
+                    None => {
+                        let (found, has_attention) = {
+                            if let Some(engine) = s.split_engines.get(s.active_index) {
+                                if let Some(ref uuid_str) = id {
+                                    let alive = engine.find_surface_by_uuid(uuid_str).is_some();
+                                    let attn = engine
+                                        .find_pane_id_by_uuid(uuid_str)
+                                        .map(|pid| engine.root.pane_has_attention(pid))
+                                        .unwrap_or(false);
+                                    (alive, attn)
+                                } else {
+                                    let alive = engine
+                                        .root
+                                        .find_surface_for_pane(engine.active_pane_id)
+                                        .is_some();
+                                    let attn =
+                                        engine.root.pane_has_attention(engine.active_pane_id);
+                                    (alive, attn)
+                                }
+                            } else {
+                                (false, false)
+                            }
+                        };
+                        ok(
+                            req_id,
+                            json!({"alive": found, "has_attention": has_attention}),
+                        )
+                    }
                 }
             };
-            let _ = resp_tx.send(ok(
-                req_id,
-                json!({"alive": found, "has_attention": has_attention}),
-            ));
+            let _ = resp_tx.send(response);
         }
 
         SocketCommand::SurfaceRefresh {

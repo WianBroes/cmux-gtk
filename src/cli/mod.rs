@@ -1456,6 +1456,16 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             }
             ("surface.health", Value::Object(p))
         }
+        Commands::SurfaceHealth { workspace, window } => {
+            let mut p = serde_json::Map::new();
+            if let Some(workspace) = workspace {
+                p.insert("workspace_id".into(), json!(workspace));
+            }
+            if let Some(window) = window {
+                p.insert("window_id".into(), json!(window));
+            }
+            ("surface.health", Value::Object(p))
+        }
         Commands::Refresh { id } => {
             let mut p = serde_json::Map::new();
             if let Some(ref id) = id {
@@ -1892,6 +1902,28 @@ mod tests {
         assert_eq!(method, "tab.action");
         assert_eq!(params["action"], "close_right");
         assert!(params.get("focus").is_none());
+    }
+
+    /// `surface-health` lists a workspace through `surface.health`; `health --id` stays single.
+    #[test]
+    fn surface_health_maps_to_its_method() {
+        let cli = Cli::try_parse_from(["cmux", "surface-health", "--workspace", "workspace:2"])
+            .expect("surface-health should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "surface.health");
+        assert_eq!(params["workspace_id"], "workspace:2");
+        assert!(params.get("id").is_none());
+
+        let cli = Cli::try_parse_from(["cmux", "surface-health"]).expect("bare should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "surface.health");
+        assert_eq!(params.as_object().map(serde_json::Map::len), Some(0));
+
+        let cli = Cli::try_parse_from(["cmux", "health", "--id", "surface:3"])
+            .expect("health should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "surface.health");
+        assert_eq!(params["id"], "surface:3");
     }
 
     /// `trigger-flash` sends `surface.trigger_flash` with only the handles it was given.

@@ -581,6 +581,13 @@ fn collect_targets<'a>(command: &'a mut Commands, targets: &mut Vec<Target<'a>>)
         | Commands::Health { id }
         | Commands::Refresh { id } => targets.push(Target::Optional(HandleKind::Surface, id)),
 
+        Commands::SurfaceHealth {
+            workspace, window, ..
+        } => {
+            targets.push(Target::Optional(HandleKind::Workspace, workspace));
+            targets.push(Target::Optional(HandleKind::Window, window));
+        }
+
         Commands::FocusPane { id, .. } => targets.push(Target::Optional(HandleKind::Pane, id)),
 
         Commands::NewSplit {
@@ -729,6 +736,16 @@ pub(super) fn normalize_command(
     client: &mut SocketClient,
 ) -> Result<Option<CliError>, CliError> {
     canonicalize(cli)?;
+    // `surface-health` without `--workspace` means the active workspace, upstream's default;
+    // `health --id` keeps its own single-surface shape and never enters here.
+    if let Commands::SurfaceHealth { workspace, .. } = &mut cli.command {
+        if workspace.is_none() {
+            let current = client.call("workspace.current", serde_json::json!({}))?;
+            if let Some(id) = current.get("id").and_then(Value::as_str) {
+                *workspace = Some(id.to_owned());
+            }
+        }
+    }
     let mut targets: Vec<Target<'_>> = Vec::new();
     collect_targets(&mut cli.command, &mut targets);
     let mut deferred = None;
@@ -1178,6 +1195,36 @@ mod tests {
             resolve_index(&mut client, HandleKind::Workspace, 0).expect("index resolves"),
             WORKSPACE
         );
+        server.join().expect("fake server thread");
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    /// `surface-health` without `--workspace` resolves the active workspace first.
+    #[test]
+    fn surface_health_resolves_the_active_workspace() {
+        let directory = std::env::temp_dir().join(format!("cmux-handles-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).expect("create test directory");
+        let socket = directory.join("server.sock");
+        let server = list_server(
+            &socket,
+            vec![format!(
+                "{{\"id\":1,\"ok\":true,\"result\":{{\"id\":\"{WORKSPACE}\"}}}}\n"
+            )],
+        );
+        let mut client = SocketClient::connect(
+            socket.to_str().expect("socket path"),
+            Duration::from_secs(2),
+        )
+        .expect("connect to fake server");
+        let mut cli = parse(&["surface-health"]);
+        let deferred = normalize_command(&mut cli, &mut client)
+            .expect("the active workspace should resolve");
+        assert!(deferred.is_none());
+        let Commands::SurfaceHealth { workspace, window } = cli.command else {
+            panic!("wrong command");
+        };
+        assert_eq!(workspace.as_deref(), Some(WORKSPACE));
+        assert!(window.is_none());
         server.join().expect("fake server thread");
         let _ = std::fs::remove_dir_all(directory);
     }
