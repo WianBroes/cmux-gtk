@@ -431,6 +431,22 @@ fn collect_targets<'a>(command: &'a mut Commands, targets: &mut Vec<Target<'a>>)
 
         Commands::FocusPane { id, .. } => targets.push(Target::Optional(HandleKind::Pane, id)),
 
+        Commands::NewSplit {
+            surface, workspace, ..
+        } => {
+            targets.push(Target::Optional(HandleKind::Surface, surface));
+            targets.push(Target::Optional(HandleKind::Workspace, workspace));
+        }
+        Commands::NewPane { workspace, .. } => {
+            targets.push(Target::Optional(HandleKind::Workspace, workspace))
+        }
+        Commands::NewSurface {
+            pane, workspace, ..
+        } => {
+            targets.push(Target::Optional(HandleKind::Pane, pane));
+            targets.push(Target::Optional(HandleKind::Workspace, workspace));
+        }
+
         Commands::DragSurfaceToSplit { id, pane, .. } => {
             targets.push(Target::Optional(HandleKind::Surface, id));
             targets.push(Target::Required(HandleKind::Pane, pane));

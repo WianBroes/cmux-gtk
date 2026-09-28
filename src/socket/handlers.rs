@@ -468,6 +468,7 @@ fn handle_socket_command_traced(
                 "workspace.group.delete",
                 "surface.list",
                 "surface.split",
+                "surface.create",
                 "surface.focus",
                 "surface.close",
                 "surface.move",
@@ -483,6 +484,7 @@ fn handle_socket_command_traced(
                 "surface.health",
                 "surface.refresh",
                 "pane.list",
+                "pane.create",
                 "pane.focus",
                 "pane.last",
                 "window.list",
@@ -604,6 +606,7 @@ fn handle_socket_command_traced(
             terminal_transport,
             terminal_profile,
             terminal_tmux_session,
+            initial_input,
             resp_tx,
         } => {
             if let Some(target) = remote_target {
@@ -650,11 +653,16 @@ fn handle_socket_command_traced(
                 ));
             } else {
                 let id = if let Some(path) = working_directory {
-                    state
-                        .borrow_mut()
-                        .create_workspace_bound(name.unwrap_or_default(), path)
+                    state.borrow_mut().create_workspace_with_input(
+                        Some(name.unwrap_or_default()),
+                        Some(path),
+                        initial_input,
+                    )
                 } else {
-                    let id = state.borrow_mut().create_workspace();
+                    let id =
+                        state
+                            .borrow_mut()
+                            .create_workspace_with_input(None, None, initial_input);
                     if let Some(name) = name.filter(|value| !value.trim().is_empty()) {
                         state.borrow_mut().rename_active(name);
                     }
@@ -1110,59 +1118,77 @@ fn handle_socket_command_traced(
         SocketCommand::SurfaceSplit {
             req_id,
             id,
+            workspace,
+            caller,
+            pane,
             direction,
+            launch,
+            focus,
             resp_tx,
         } => {
-            // Split the requested surface in its owning workspace, or the active pane.
-            // Selecting/splitting is focus intent; invalid targets must not create a pane.
-            let orientation = match direction {
-                super::commands::SplitDirection::Vertical => gtk4::Orientation::Vertical,
-                super::commands::SplitDirection::Horizontal => gtk4::Orientation::Horizontal,
-            };
+            // Split the targeted pane; the window and keyboard focus change only with `focus`.
             let result = {
                 let mut s = state.borrow_mut();
-                let idx = if let Some(target) = id.as_deref() {
-                    let Some(index) = s
-                        .split_engines
-                        .iter()
-                        .position(|engine| engine.find_pane_id_by_uuid(target).is_some())
-                    else {
-                        let _ = resp_tx.send(err(req_id, "not_found", "surface not found"));
-                        return;
-                    };
-                    s.switch_to_index(index);
-                    index
-                } else {
-                    s.active_index
-                };
-                if let Some(engine) = s.split_engines.get_mut(idx) {
-                    if id
-                        .as_deref()
-                        .is_some_and(|target| !engine.focus_surface(target))
-                    {
-                        let _ = resp_tx.send(err(req_id, "not_found", "surface not found"));
-                        return;
+                creation_target(
+                    &s,
+                    id.as_deref(),
+                    pane.as_deref(),
+                    workspace.as_deref(),
+                    caller.as_deref(),
+                )
+                .and_then(|(index, pane_id)| {
+                    if focus && index != s.active_index {
+                        s.switch_to_index(index);
                     }
-                    engine.split_active(orientation).and_then(|new_pane_id| {
-                        // Find the uuid of the newly created pane.
-                        engine
-                            .all_panes()
-                            .into_iter()
-                            .find(|(_, pid, _)| *pid == new_pane_id)
-                            .map(|(uuid, _, _)| uuid.to_string())
-                    })
-                } else {
-                    None
-                }
+                    let engine = s
+                        .split_engines
+                        .get_mut(index)
+                        .ok_or("workspace not found")?;
+                    let (new_pane, surface) =
+                        engine.split_pane_terminal(pane_id, direction, launch, focus)?;
+                    Ok(created_json(&s, index, new_pane, surface))
+                })
             };
-            match result {
-                Some(uuid_str) => {
-                    let _ = resp_tx.send(ok(req_id, json!({"uuid": uuid_str})));
-                }
-                None => {
-                    let _ = resp_tx.send(err(req_id, "split_failed", "could not split pane"));
-                }
-            }
+            let _ = resp_tx.send(match result {
+                Ok(created) => ok(req_id, created),
+                Err(message) => err(req_id, "split_failed", message),
+            });
+        }
+
+        SocketCommand::SurfaceCreate {
+            req_id,
+            workspace,
+            caller,
+            pane,
+            launch,
+            focus,
+            resp_tx,
+        } => {
+            let result = {
+                let mut s = state.borrow_mut();
+                creation_target(
+                    &s,
+                    None,
+                    pane.as_deref(),
+                    workspace.as_deref(),
+                    caller.as_deref(),
+                )
+                .and_then(|(index, pane_id)| {
+                    if focus && index != s.active_index {
+                        s.switch_to_index(index);
+                    }
+                    let engine = s
+                        .split_engines
+                        .get_mut(index)
+                        .ok_or("workspace not found")?;
+                    let surface = engine.new_terminal_surface(pane_id, launch, focus)?;
+                    Ok(created_json(&s, index, pane_id, surface))
+                })
+            };
+            let _ = resp_tx.send(match result {
+                Ok(created) => ok(req_id, created),
+                Err(message) => err(req_id, "create_failed", message),
+            });
         }
 
         SocketCommand::SurfaceFocus {
@@ -2174,6 +2200,75 @@ fn spawn_browser_exchange(
             }),
         );
     });
+}
+
+/// Workspace index and pane a creation request targets: the pane holding `surface`, else the
+/// pane `pane` (`pane:N` or a surface UUID), else the active pane of `workspace`, of the
+/// workspace holding the `caller` surface, or of the window's current workspace.
+fn creation_target(
+    s: &crate::app_state::AppState,
+    surface: Option<&str>,
+    pane: Option<&str>,
+    workspace: Option<&str>,
+    caller: Option<&str>,
+) -> Result<(usize, u64), &'static str> {
+    if let Some(reference) = surface.or(pane) {
+        return s
+            .split_engines
+            .iter()
+            .enumerate()
+            .find_map(|(index, engine)| {
+                let pane_id = if surface.is_some() {
+                    engine.find_pane_id_by_uuid(reference)
+                } else {
+                    engine.pane_for_ref(reference)
+                };
+                pane_id.map(|pane_id| (index, pane_id))
+            })
+            .ok_or(if surface.is_some() {
+                "surface not found"
+            } else {
+                "pane not found"
+            });
+    }
+    let index = match workspace {
+        Some(id) => s
+            .workspaces
+            .iter()
+            .position(|ws| ws.uuid.to_string() == id)
+            .ok_or("workspace not found")?,
+        None => caller
+            .and_then(|caller| {
+                s.split_engines
+                    .iter()
+                    .position(|engine| engine.find_pane_id_by_uuid(caller).is_some())
+            })
+            .unwrap_or(s.active_index),
+    };
+    let engine = s.split_engines.get(index).ok_or("workspace not found")?;
+    Ok((index, engine.active_pane()))
+}
+
+/// Ids of a created surface, with upstream's field names; `uuid` keeps this fork's original reply.
+fn created_json(
+    s: &crate::app_state::AppState,
+    index: usize,
+    pane_id: u64,
+    surface: uuid::Uuid,
+) -> serde_json::Value {
+    use super::handles::HandleKind;
+    let workspace = s.workspaces.get(index).map(|ws| ws.uuid.to_string());
+    json!({
+        "uuid": surface.to_string(),
+        "surface_id": surface.to_string(),
+        "surface_ref": s.handles.ensure_ref(HandleKind::Surface, &surface.to_string()),
+        "pane_id": format!("pane:{pane_id}"),
+        "pane_ref": format!("pane:{pane_id}"),
+        "workspace_ref": workspace
+            .as_deref()
+            .map(|id| s.handles.ensure_ref(HandleKind::Workspace, id)),
+        "workspace_id": workspace,
+    })
 }
 
 #[cfg(test)]

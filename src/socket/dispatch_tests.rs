@@ -425,3 +425,90 @@ async fn unknown_method_rejected_on_worker() {
         "unknown.method is not implemented"
     );
 }
+
+/// Creation requests reach GTK with upstream's defaults: `surface.split` keeps focus as it
+/// always did, `pane.create`/`surface.create` leave it, and input loses the Enter the CLI appends.
+#[tokio::test]
+async fn creation_requests_carry_side_focus_and_input() {
+    use crate::split_engine::FocusDirection;
+    let (tx, mut rx) = tokio::sync::mpsc::channel(COMMAND_CAPACITY);
+    for (method, params, side, focus, input) in [
+        (
+            "surface.split",
+            serde_json::json!({"direction": "left"}),
+            Some(FocusDirection::Left),
+            true,
+            None,
+        ),
+        (
+            "surface.split",
+            serde_json::json!({"direction": "vertical", "focus": false}),
+            Some(FocusDirection::Down),
+            false,
+            None,
+        ),
+        (
+            "pane.create",
+            serde_json::json!({"direction": "up", "initial_input": "make test\r"}),
+            Some(FocusDirection::Up),
+            false,
+            Some("make test"),
+        ),
+        (
+            "surface.create",
+            serde_json::json!({"initial_input": "ls", "focus": true}),
+            None,
+            true,
+            Some("ls"),
+        ),
+    ] {
+        let request = serde_json::json!({"id": 5, "method": method, "params": params});
+        let dispatch = dispatch_line(request.to_string(), &tx);
+        let consume = async {
+            let commands::SocketCommand::Observed { command, .. } = rx.recv().await.unwrap() else {
+                panic!("missing observed request");
+            };
+            let (got_side, got_focus, launch, resp_tx) = match *command {
+                commands::SocketCommand::SurfaceSplit {
+                    direction,
+                    focus,
+                    launch,
+                    resp_tx,
+                    ..
+                } => (Some(direction), focus, launch, resp_tx),
+                commands::SocketCommand::SurfaceCreate {
+                    focus,
+                    launch,
+                    resp_tx,
+                    ..
+                } => (None, focus, launch, resp_tx),
+                _ => panic!("{method}: wrong command"),
+            };
+            assert_eq!(got_side, side, "{method}");
+            assert_eq!(got_focus, focus, "{method}");
+            assert_eq!(launch.initial_input.as_deref(), input, "{method}");
+            resp_tx
+                .send(serde_json::json!({"id": 5, "ok": true, "result": {}}))
+                .unwrap();
+        };
+        tokio::join!(dispatch, consume);
+    }
+}
+
+/// Browser creation, relative directories and non-boolean focus fail before GTK.
+#[tokio::test]
+async fn invalid_creation_params_never_reach_gtk() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(COMMAND_CAPACITY);
+    for (method, params) in [
+        ("pane.create", serde_json::json!({"type": "browser"})),
+        ("surface.create", serde_json::json!({"working_directory": "src"})),
+        ("surface.split", serde_json::json!({"focus": "yes"})),
+        ("surface.create", serde_json::json!({"initial_input": 3})),
+    ] {
+        let request = serde_json::json!({"id": 6, "method": method, "params": params});
+        let response = dispatch_line(request.to_string(), &tx).await;
+        let response: serde_json::Value = serde_json::from_str(&response.body).unwrap();
+        assert_eq!(response["error"]["code"], "invalid_params", "{method} {params}");
+        assert!(rx.try_recv().is_err());
+    }
+}

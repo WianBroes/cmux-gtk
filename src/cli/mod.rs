@@ -489,6 +489,13 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
     Ok(())
 }
 
+/// The surface this CLI runs in, if any: creation commands default to its workspace.
+fn caller_surface() -> Option<String> {
+    std::env::var("CMUX_SURFACE_ID")
+        .ok()
+        .filter(|value| !value.is_empty())
+}
+
 /// Map a BrowserCommand variant to its JSON-RPC method and params.
 fn browser_command_to_rpc(cmd: &BrowserCommand) -> (&'static str, serde_json::Value) {
     use serde_json::json;
@@ -700,13 +707,16 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
 
         Commands::Raw { .. } => unreachable!("Raw handled separately"),
 
-        Commands::NewWorkspace { name, cwd } => {
+        Commands::NewWorkspace { name, cwd, command } => {
             let mut params = serde_json::Map::new();
             if let Some(name) = name {
                 params.insert("name".into(), json!(name));
             }
             if let Some(cwd) = cwd {
                 params.insert("working_directory".into(), json!(cwd));
+            }
+            if let Some(command) = command {
+                params.insert("initial_input".into(), json!(command));
             }
             ("workspace.create", Value::Object(params))
         }
@@ -834,6 +844,47 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
         Commands::ListPaneSurfaces { .. } | Commands::Tree { .. } => {
             unreachable!("pane surfaces and tree are assembled client-side")
         }
+        Commands::NewSplit {
+            direction,
+            surface,
+            workspace,
+            command,
+            focus,
+        } => (
+            "surface.split",
+            // Upstream splits the caller's own surface unless a target is named.
+            json!({"direction": direction, "workspace_id": workspace,
+                "surface_id": surface.clone().or_else(|| workspace.is_none().then(caller_surface).flatten()),
+                "initial_input": command, "focus": focus.unwrap_or(false)}),
+        ),
+        Commands::NewPane {
+            r#type,
+            direction,
+            workspace,
+            command,
+            focus,
+        } => (
+            "pane.create",
+            json!({"type": r#type, "direction": direction, "workspace_id": workspace,
+                "caller_surface_id": caller_surface(),
+                "initial_input": command, "focus": focus.unwrap_or(false)}),
+        ),
+        Commands::NewSurface {
+            r#type,
+            pane,
+            workspace,
+            working_directory,
+            command,
+            focus,
+        } => (
+            "surface.create",
+            json!({"type": r#type, "pane_id": pane, "workspace_id": workspace,
+                "caller_surface_id": caller_surface(),
+                "working_directory": working_directory.as_deref().map(|path| {
+                    std::env::current_dir().map_or_else(|_| path.into(), |cwd| cwd.join(path))
+                }),
+                "initial_input": command, "focus": focus.unwrap_or(false)}),
+        ),
         Commands::Split { direction, id } => {
             let mut p = serde_json::Map::new();
             p.insert("direction".into(), json!(direction));

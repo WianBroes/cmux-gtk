@@ -249,7 +249,14 @@ fn initialize_surface(
             serde_json::json!({"outcome":if delivered.is_ok(){"submitted"}else{"error"},"pane_id":init.pane_id}),
         );
     }
-    area.grab_focus();
+    // A terminal created with `--focus false` leaves keyboard focus where it is.
+    if area.has_css_class(crate::split_engine::NO_INITIAL_FOCUS) {
+        // SAFETY: the freshly registered surface is live on GTK.
+        unsafe { ffi::ghostty_surface_set_focus(surface, false) };
+    } else {
+        area.grab_focus();
+    }
+    area.remove_css_class(crate::split_engine::NO_INITIAL_FOCUS);
     if let Ok(mut registry) = crate::ghostty::callbacks::GL_TO_SURFACE.lock() {
         registry.insert(area.as_ptr() as usize, surface as usize);
     }

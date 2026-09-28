@@ -358,6 +358,16 @@ fn pane_drop_direction(x: f64, y: f64, width: f64, height: f64, tab_bar_bottom: 
         .unwrap_or("center")
 }
 
+/// Launch overrides for a terminal created on request (CLI `--command`, `--working-directory`).
+#[derive(Default)]
+pub(crate) struct TerminalLaunch {
+    pub(crate) initial_input: Option<String>,
+    pub(crate) working_directory: Option<std::path::PathBuf>,
+}
+
+/// CSS class keeping a new terminal from taking keyboard focus when its native surface starts.
+pub(crate) const NO_INITIAL_FOCUS: &str = "cmux-no-initial-focus";
+
 /// Upstream's tab width cap (Bonsplit `tabMaxWidth`).
 const TAB_MAX_WIDTH: i32 = 220;
 
@@ -1140,6 +1150,178 @@ impl SplitEngine {
         result
     }
 
+    /// Build a terminal for a socket creation request: `initial_input` is typed into the
+    /// interactive shell followed by Enter, like upstream's `initial_input`. Without `focus`
+    /// the terminal does not take keyboard focus when its native surface starts.
+    fn create_requested_terminal(
+        &self,
+        pane_id: u64,
+        inherited: Option<crate::ghostty::inherited::InheritedConfig>,
+        launch: TerminalLaunch,
+        focus: bool,
+    ) -> Result<gtk4::GLArea, &'static str> {
+        let io_mode = match (self.remote_launch.clone(), launch.initial_input) {
+            (Some(mut remote), input) => {
+                if let crate::ghostty::surface::SurfaceIoMode::Remote { initial_input, .. } =
+                    &mut remote
+                {
+                    *initial_input = input.map(|text| format!("{text}\r").into_bytes());
+                }
+                remote
+            }
+            // Ghostty drops the launch command when input is given (Mosh, startup scripts).
+            (None, Some(_)) if self.launch_command.is_some() => {
+                return Err("--command is not supported in a workspace with a launch command");
+            }
+            (None, initial_input) => crate::ghostty::surface::SurfaceIoMode::Configured {
+                initial_input,
+                command: self.launch_command.clone(),
+                environment: self.launch_environment.clone(),
+            },
+        };
+        let (gl_area, _) = crate::ghostty::surface::create_surface(
+            self.ghostty_app,
+            inherited,
+            launch
+                .working_directory
+                .or_else(|| self.working_directory.clone()),
+            pane_id,
+            io_mode,
+        );
+        if !focus {
+            gl_area.add_css_class(NO_INITIAL_FOCUS);
+        }
+        attach_terminal_context_menu(&gl_area);
+        Ok(gl_area)
+    }
+
+    /// Split `target_pane` with a new terminal on `direction`'s side of it. Keyboard focus and
+    /// the active pane move to the new terminal only with `focus`.
+    pub(crate) fn split_pane_terminal(
+        &mut self,
+        target_pane: u64,
+        direction: FocusDirection,
+        launch: TerminalLaunch,
+        focus: bool,
+    ) -> Result<(u64, Uuid), &'static str> {
+        if self.root.find_node(target_pane).is_none() {
+            return Err("pane not found");
+        }
+        let orientation = match direction {
+            FocusDirection::Left | FocusDirection::Right => gtk4::Orientation::Horizontal,
+            FocusDirection::Up | FocusDirection::Down => gtk4::Orientation::Vertical,
+        };
+        let before = matches!(direction, FocusDirection::Left | FocusDirection::Up);
+        // SAFETY: the pane lookup returns a live GTK-owned native surface. The
+        // non-copying result owns its directory independently of that source.
+        let inherited = find_any_terminal_surface(&self.root, target_pane).map(|surface| unsafe {
+            crate::ghostty::inherited::InheritedConfig::from_surface(
+                surface,
+                ffi::ghostty_surface_context_e_GHOSTTY_SURFACE_CONTEXT_SPLIT,
+            )
+        });
+        let new_pane_id = self.next_pane_id;
+        let gl_area = self.create_requested_terminal(new_pane_id, inherited, launch, focus)?;
+        self.next_pane_id += 1;
+        let uuid = Uuid::new_v4();
+        let new_leaf = create_pane(
+            new_pane_id,
+            PaneSurface::Terminal {
+                gl_area: gl_area.clone(),
+                uuid,
+                resume: None,
+            },
+        );
+        let stack_slot = if matches!(self.root, SplitNode::Leaf { .. }) {
+            self.root
+                .widget()
+                .parent()
+                .and_then(|parent| parent.downcast::<gtk4::Stack>().ok())
+                .and_then(|stack| {
+                    let name = stack.page(&self.root.widget()).name()?.to_string();
+                    Some((stack, name))
+                })
+        } else {
+            None
+        };
+        self.replace_leaf_with_split_position(target_pane, new_leaf, orientation, before)
+            .ok_or("pane not found")?;
+        if let Some((stack, name)) = stack_slot {
+            let root = self.root.widget();
+            stack.add_named(&root, Some(&name));
+            stack.set_visible_child_name(&name);
+        }
+        if focus {
+            if let Some(surface) = self.find_surface(self.active_pane_id) {
+                // SAFETY: the active pane's native surface is live on GTK.
+                unsafe { ffi::ghostty_surface_set_focus(surface, false) };
+            }
+            self.active_pane_id = new_pane_id;
+            self.root.update_focus_css(new_pane_id);
+            gl_area.grab_focus();
+        }
+        Ok((new_pane_id, uuid))
+    }
+
+    /// Add a terminal tab to `pane_id`; keyboard focus and the active pane move to it only with
+    /// `focus`. Without it the tab is still selected in another pane, so its shell starts; in the
+    /// active pane selecting would take focus, so it waits there until the tab is opened.
+    pub(crate) fn new_terminal_surface(
+        &mut self,
+        pane_id: u64,
+        launch: TerminalLaunch,
+        focus: bool,
+    ) -> Result<Uuid, &'static str> {
+        let (notebook, surfaces) = find_pane_tabs(&self.root, pane_id).ok_or("pane not found")?;
+        // SAFETY: as in `new_terminal_tab`.
+        let inherited = find_any_terminal_surface(&self.root, pane_id).map(|surface| unsafe {
+            crate::ghostty::inherited::InheritedConfig::from_surface(
+                surface,
+                ffi::ghostty_surface_context_e_GHOSTTY_SURFACE_CONTEXT_TAB,
+            )
+        });
+        let gl_area = self.create_requested_terminal(pane_id, inherited, launch, focus)?;
+        if focus {
+            if let Some(surface) = self.find_surface(self.active_pane_id) {
+                // SAFETY: the active pane's native surface is live on GTK.
+                unsafe { ffi::ghostty_surface_set_focus(surface, false) };
+            }
+        }
+        let uuid = Uuid::new_v4();
+        append_pane_surface(
+            &notebook,
+            &surfaces,
+            PaneSurface::Terminal {
+                gl_area: gl_area.clone(),
+                uuid,
+                resume: None,
+            },
+            focus || pane_id != self.active_pane_id,
+        );
+        if focus {
+            self.active_pane_id = pane_id;
+            self.root.update_focus_css(pane_id);
+            gl_area.grab_focus();
+        }
+        Ok(uuid)
+    }
+
+    /// Pane named by `pane:N` or by the UUID of one of its surfaces, if it is in this workspace.
+    pub(crate) fn pane_for_ref(&self, reference: &str) -> Option<u64> {
+        match reference.strip_prefix("pane:") {
+            Some(number) => number
+                .parse::<u64>()
+                .ok()
+                .filter(|pane_id| self.contains_pane(*pane_id)),
+            None => self.find_pane_id_by_uuid(reference),
+        }
+    }
+
+    /// Pane currently shown as active in this workspace.
+    pub(crate) fn active_pane(&self) -> u64 {
+        self.active_pane_id
+    }
+
     /// Create and select a terminal surface tab in the focused pane.
     pub fn new_terminal_tab(&mut self) -> Option<Uuid> {
         let pane_id = self.active_pane_id;
@@ -1822,12 +2004,7 @@ impl SplitEngine {
 
     /// Focus a session-local pane reference or a legacy surface UUID without switching its tab.
     pub fn focus_pane_ref(&mut self, reference: &str) -> bool {
-        let pane_id = if let Some(number) = reference.strip_prefix("pane:") {
-            number.parse::<u64>().ok()
-        } else {
-            self.find_pane_id_by_uuid(reference)
-        };
-        let Some(pane_id) = pane_id else {
+        let Some(pane_id) = self.pane_for_ref(reference) else {
             return false;
         };
         if !self.activate_pane(pane_id) {

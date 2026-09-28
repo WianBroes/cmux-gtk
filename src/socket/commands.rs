@@ -2,13 +2,6 @@ use serde_json::Value;
 
 pub type RespTx = tokio::sync::oneshot::Sender<Value>;
 
-/// Validated split direction, independent of GTK and invalid wire values.
-#[derive(Clone, Copy)]
-pub enum SplitDirection {
-    Horizontal,
-    Vertical,
-}
-
 /// Commands dispatched from tokio accept loop to GTK main thread.
 /// All variants carry `req_id` (echoed in response) and `resp_tx` (result channel).
 /// GTK/AppState reads and mutations happen ONLY in handlers.rs on the main thread.
@@ -89,6 +82,8 @@ pub enum SocketCommand {
         terminal_transport: crate::remote_transport::TerminalTransport,
         terminal_profile: crate::remote_transport::TerminalProfile,
         terminal_tmux_session: Option<String>,
+        /// Typed into the first terminal's shell, followed by Enter (upstream `initial_input`).
+        initial_input: Option<String>,
         resp_tx: RespTx,
     },
     /// `id` is the workspace UUID string from the client.
@@ -183,10 +178,28 @@ pub enum SocketCommand {
         action: crate::resume::ResumeAction,
         resp_tx: RespTx,
     },
+    /// Split a pane with a new terminal (`surface.split`, `pane.create`). The target is the
+    /// surface `id`, else the pane `pane`, else the active pane of `workspace`, of the `caller`
+    /// surface's workspace, or of the window.
     SurfaceSplit {
         req_id: Value,
         id: Option<String>,
-        direction: SplitDirection,
+        workspace: Option<String>,
+        caller: Option<String>,
+        pane: Option<String>,
+        direction: crate::split_engine::FocusDirection,
+        launch: crate::split_engine::TerminalLaunch,
+        focus: bool,
+        resp_tx: RespTx,
+    },
+    /// Add a terminal tab to a pane (`surface.create`), with the same target rules.
+    SurfaceCreate {
+        req_id: Value,
+        workspace: Option<String>,
+        caller: Option<String>,
+        pane: Option<String>,
+        launch: crate::split_engine::TerminalLaunch,
+        focus: bool,
         resp_tx: RespTx,
     },
     SurfaceFocus {

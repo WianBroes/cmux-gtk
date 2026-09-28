@@ -325,7 +325,21 @@ pub fn format_mutation(command_name: &str, result: &Value) -> String {
         }
         "workspace.set_description" => format!("Set workspace description: {}", id),
         "workspace.clear_description" => format!("Cleared workspace description: {}", id),
-        "surface.split" => format!("Split created: {}", id),
+        // Upstream's creation summary: `OK surface:N pane:N workspace:N`.
+        "surface.split" | "pane.create" | "surface.create" => {
+            let field = |ref_key: &str, id_key: &str| {
+                result
+                    .get(ref_key)
+                    .or_else(|| result.get(id_key))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            };
+            let mut parts = vec!["OK".to_owned()];
+            parts.extend(field("surface_ref", "surface_id"));
+            parts.extend(field("pane_ref", "pane_id"));
+            parts.extend(field("workspace_ref", "workspace_id"));
+            parts.join(" ")
+        }
         "surface.close" => format!("Closed surface: {}", id),
         "surface.move" => format!("Moved surface: {}", id),
         "surface.reorder" => format!("Reordered surface: {}", id),
@@ -379,6 +393,8 @@ pub fn format_response(method: &str, result: &Value, json_mode: bool, color: boo
         | "workspace.close"
         | "workspace.rename"
         | "surface.split"
+        | "pane.create"
+        | "surface.create"
         | "surface.close"
         | "surface.move"
         | "surface.reorder"

@@ -309,6 +309,9 @@ pub enum Commands {
         /// Folder new terminals in this workspace start in
         #[arg(long, value_name = "PATH")]
         cwd: Option<String>,
+        /// Text typed into the first terminal's shell, followed by Enter
+        #[arg(long)]
+        command: Option<String>,
     },
     /// Create a first-class remote workspace with SSH management
     Ssh {
@@ -477,6 +480,64 @@ pub enum Commands {
         /// Target surface ID, ref (surface:N) or index (default: focused)
         #[arg(long, visible_alias = "surface")]
         id: Option<String>,
+    },
+    /// Split a pane with a new terminal on one side (upstream `new-split`); focus stays put
+    /// unless `--focus true`
+    NewSplit {
+        /// Side of the new pane: left, right, up or down
+        #[arg(value_parser = ["left", "right", "up", "down", "l", "r", "u", "d"])]
+        direction: String,
+        /// Surface whose pane is split: UUID, ref (surface:N) or index (default: focused)
+        #[arg(long, visible_alias = "panel")]
+        surface: Option<String>,
+        /// Workspace whose focused pane is split: UUID, ref (workspace:N) or index
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Text typed into the new shell, followed by Enter
+        #[arg(long)]
+        command: Option<String>,
+        /// Move focus to the new pane
+        #[arg(long, value_name = "true|false", value_parser = clap::builder::BoolishValueParser::new())]
+        focus: Option<bool>,
+    },
+    /// Create a pane beside the focused pane of a workspace (upstream `new-pane`)
+    NewPane {
+        /// Surface type; only terminal is created here (browser: `cmux browser open`)
+        #[arg(long, value_parser = ["terminal", "browser"])]
+        r#type: Option<String>,
+        /// Side of the new pane: left, right, up or down
+        #[arg(long, default_value = "right", value_parser = ["left", "right", "up", "down", "l", "r", "u", "d"])]
+        direction: String,
+        /// Workspace: UUID, ref (workspace:N) or index (default: current)
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Text typed into the new shell, followed by Enter
+        #[arg(long)]
+        command: Option<String>,
+        /// Move focus to the new pane
+        #[arg(long, value_name = "true|false", value_parser = clap::builder::BoolishValueParser::new())]
+        focus: Option<bool>,
+    },
+    /// Add a terminal tab to a pane (upstream `new-surface`)
+    NewSurface {
+        /// Surface type; only terminal is created here (browser: `cmux browser open`)
+        #[arg(long, value_parser = ["terminal", "browser"])]
+        r#type: Option<String>,
+        /// Pane: ref (pane:N), surface UUID or index (default: focused pane)
+        #[arg(long)]
+        pane: Option<String>,
+        /// Workspace: UUID, ref (workspace:N) or index (default: current)
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Folder the new terminal starts in
+        #[arg(long, visible_alias = "cwd", value_name = "PATH")]
+        working_directory: Option<String>,
+        /// Text typed into the new shell, followed by Enter
+        #[arg(long)]
+        command: Option<String>,
+        /// Move focus to the new tab
+        #[arg(long, value_name = "true|false", value_parser = clap::builder::BoolishValueParser::new())]
+        focus: Option<bool>,
     },
     /// Focus a surface by ID
     FocusSurface {

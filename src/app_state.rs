@@ -154,6 +154,22 @@ impl AppState {
         )
     }
 
+    /// Create a local workspace whose first terminal gets `initial_input` typed into its shell.
+    pub(crate) fn create_workspace_with_input(
+        &mut self,
+        name: Option<String>,
+        working_directory: Option<PathBuf>,
+        initial_input: Option<String>,
+    ) -> u64 {
+        self.create_local_workspace(
+            name,
+            working_directory,
+            None,
+            Default::default(),
+            initial_input,
+        )
+    }
+
     /// Create from worker-validated project inputs; overrides reach the first surface before realization.
     pub(crate) fn create_workspace_configured(
         &mut self,

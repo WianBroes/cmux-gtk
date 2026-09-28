@@ -14,6 +14,78 @@ fn optional_target(params: &serde_json::Value) -> Result<Option<String>, &'stati
     }
 }
 
+/// Parameters shared by the terminal creation methods (`surface.split`, `pane.create`,
+/// `surface.create`), with upstream's names.
+struct CreationParams {
+    workspace: Option<String>,
+    /// Surface of the calling terminal: its workspace is the default one.
+    caller: Option<String>,
+    pane: Option<String>,
+    launch: crate::split_engine::TerminalLaunch,
+    focus: Option<bool>,
+}
+
+/// Read creation parameters. Only terminals are created here: browser panes open through
+/// `browser.open`. `initial_input` may end with the Enter upstream's CLI appends; cmux adds its own.
+fn creation_params(params: &serde_json::Value) -> Result<CreationParams, &'static str> {
+    let text = |key: &str| -> Result<Option<String>, &'static str> {
+        match params.get(key) {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(serde_json::Value::String(value)) => Ok(Some(value.clone())),
+            Some(_) => Err("creation parameters must be strings"),
+        }
+    };
+    match text("type")?.as_deref() {
+        None | Some("terminal") => {}
+        Some("browser") => {
+            return Err("browser panes are not created here yet; use `cmux browser open`")
+        }
+        Some(_) => return Err("type must be terminal"),
+    }
+    let initial_input = text("initial_input")?
+        .map(|input| {
+            input
+                .strip_suffix('\r')
+                .or_else(|| input.strip_suffix('\n'))
+                .unwrap_or(&input)
+                .to_owned()
+        })
+        .filter(|input| !input.trim().is_empty());
+    let working_directory = match text("working_directory")? {
+        Some(path) if !path.starts_with('/') || path.contains('\0') => {
+            return Err("working_directory must be an absolute path")
+        }
+        path => path.map(std::path::PathBuf::from),
+    };
+    let focus = match params.get("focus") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::Bool(focus)) => Some(*focus),
+        Some(_) => return Err("focus must be a boolean"),
+    };
+    Ok(CreationParams {
+        workspace: text("workspace_id")?,
+        caller: text("caller_surface_id")?,
+        pane: text("pane_id")?,
+        launch: crate::split_engine::TerminalLaunch {
+            initial_input,
+            working_directory,
+        },
+        focus,
+    })
+}
+
+/// Map a split direction; `horizontal`/`vertical` are this fork's original right/down names.
+fn split_side(value: &str) -> Option<crate::split_engine::FocusDirection> {
+    use crate::split_engine::FocusDirection;
+    match value.to_ascii_lowercase().as_str() {
+        "left" | "l" => Some(FocusDirection::Left),
+        "right" | "r" | "horizontal" => Some(FocusDirection::Right),
+        "up" | "u" => Some(FocusDirection::Up),
+        "down" | "d" | "vertical" => Some(FocusDirection::Down),
+        _ => None,
+    }
+}
+
 /// Publish `agent.hook.<HookEventName>` with operational identifiers only (upstream privacy rules:
 /// no prompt or tool input). `surface_id` is the exact surface the hook ran in.
 fn agent_hook_event(params: &serde_json::Value) -> Result<(), &'static str> {
@@ -411,6 +483,20 @@ async fn dispatch_request(
                 terminal_transport,
                 terminal_profile,
                 terminal_tmux_session,
+                initial_input: match params.get("initial_input") {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(serde_json::Value::String(input)) => Some(
+                        input
+                            .strip_suffix('\r')
+                            .or_else(|| input.strip_suffix('\n'))
+                            .unwrap_or(input)
+                            .to_owned(),
+                    )
+                    .filter(|input| !input.trim().is_empty()),
+                    Some(_) => {
+                        return err(req_id, "invalid_params", "initial_input must be a string")
+                    }
+                },
                 resp_tx,
             }
         }
@@ -673,27 +759,57 @@ async fn dispatch_request(
                 resp_tx,
             }
         }
-        "surface.split" => {
+        "surface.split" | "pane.create" => {
+            let creation = match creation_params(&params) {
+                Ok(creation) => creation,
+                Err(message) => return err(req_id, "invalid_params", message),
+            };
             let direction = match params.get("direction") {
-                None => commands::SplitDirection::Horizontal,
-                Some(serde_json::Value::String(value)) if value == "horizontal" => {
-                    commands::SplitDirection::Horizontal
-                }
-                Some(serde_json::Value::String(value)) if value == "vertical" => {
-                    commands::SplitDirection::Vertical
-                }
-                _ => {
-                    return err(
-                        req_id,
-                        "invalid_params",
-                        "direction must be horizontal or vertical",
-                    )
-                }
+                // `surface.split` has always defaulted to a right split, as `pane.create` does upstream.
+                None => crate::split_engine::FocusDirection::Right,
+                Some(serde_json::Value::String(value)) => match split_side(value) {
+                    Some(direction) => direction,
+                    None => {
+                        return err(
+                            req_id,
+                            "invalid_params",
+                            "direction must be left, right, up, down, horizontal or vertical",
+                        )
+                    }
+                },
+                _ => return err(req_id, "invalid_params", "direction must be a string"),
             };
             commands::SocketCommand::SurfaceSplit {
                 req_id: req_id.clone(),
-                id: target,
+                // Upstream's CLI names the split surface `surface_id`; this fork's used `id`.
+                id: target.or_else(|| {
+                    params
+                        .get("surface_id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                }),
+                workspace: creation.workspace,
+                caller: creation.caller,
+                pane: creation.pane,
                 direction,
+                launch: creation.launch,
+                // `surface.split` kept focus before `focus` existed; upstream's CLI sends it.
+                focus: creation.focus.unwrap_or(method == "surface.split"),
+                resp_tx,
+            }
+        }
+        "surface.create" => {
+            let creation = match creation_params(&params) {
+                Ok(creation) => creation,
+                Err(message) => return err(req_id, "invalid_params", message),
+            };
+            commands::SocketCommand::SurfaceCreate {
+                req_id: req_id.clone(),
+                workspace: creation.workspace,
+                caller: creation.caller,
+                pane: creation.pane,
+                launch: creation.launch,
+                focus: creation.focus.unwrap_or(false),
                 resp_tx,
             }
         }
