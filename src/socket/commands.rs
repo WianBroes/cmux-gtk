@@ -131,6 +131,8 @@ pub enum SocketCommand {
         before: Option<String>,
         /// Anchor workspace: the moved one lands immediately after this one.
         after: Option<String>,
+        /// Report the resolved final index without touching the order.
+        dry_run: bool,
         resp_tx: RespTx,
     },
     WorkspaceReorderMany {
@@ -239,6 +241,8 @@ pub enum SocketCommand {
         before: Option<String>,
         /// Anchor surface of the same pane: the moved one lands immediately after it.
         after: Option<String>,
+        /// Select the reordered surface after the move; false keeps the current selection.
+        focus: bool,
         resp_tx: RespTx,
     },
     SurfaceDragToSplit {

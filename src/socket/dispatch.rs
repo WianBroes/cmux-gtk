@@ -682,12 +682,18 @@ async fn dispatch_request(
             if let Err(message) = only_main_window(&params) {
                 return err(req_id, "invalid_params", &message);
             }
+            let dry_run = match params.get("dry_run") {
+                None | Some(serde_json::Value::Null) => false,
+                Some(serde_json::Value::Bool(value)) => *value,
+                Some(_) => return err(req_id, "invalid_params", "dry_run must be boolean"),
+            };
             commands::SocketCommand::WorkspaceReorder {
                 req_id: req_id.clone(),
                 id: id.to_owned(),
                 position,
                 before,
                 after,
+                dry_run,
                 resp_tx,
             }
         }
@@ -968,12 +974,19 @@ async fn dispatch_request(
             if let Err(message) = only_main_window(&params) {
                 return err(req_id, "invalid_params", &message);
             }
+            // Reordering keeps the current selection unless the caller asks for focus.
+            let focus = match params.get("focus") {
+                None | Some(serde_json::Value::Null) => false,
+                Some(serde_json::Value::Bool(value)) => *value,
+                Some(_) => return err(req_id, "invalid_params", "focus must be a boolean"),
+            };
             commands::SocketCommand::SurfaceReorder {
                 req_id: req_id.clone(),
                 id: id.to_owned(),
                 position,
                 before,
                 after,
+                focus,
                 resp_tx,
             }
         }

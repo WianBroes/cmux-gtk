@@ -932,6 +932,8 @@ fn expand_workspace_namespace(command: Commands) -> Commands {
         Commands::Workspace(WorkspaceCommands::Rename { id, name, workspace }) => {
             Commands::RenameWorkspace { id, name, workspace }
         }
+        Commands::Workspace(WorkspaceCommands::List) => Commands::ListWorkspaces,
+        Commands::Workspace(WorkspaceCommands::Current) => Commands::CurrentWorkspace,
         other => other,
     }
 }
@@ -1060,6 +1062,7 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             before,
             after,
             window,
+            dry_run,
             ..
         } => {
             let mut params = serde_json::Map::new();
@@ -1071,6 +1074,9 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
                 if let Some(value) = value {
                     params.insert(key.into(), json!(value));
                 }
+            }
+            if *dry_run {
+                params.insert("dry_run".into(), json!(true));
             }
             ("workspace.reorder", Value::Object(params))
         }
@@ -1243,6 +1249,7 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             before,
             after,
             window,
+            focus,
             ..
         } => {
             let mut params = serde_json::Map::new();
@@ -1254,6 +1261,10 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
                 if let Some(value) = value {
                     params.insert(key.into(), json!(value));
                 }
+            }
+            // Omitted `--focus` keeps the current selection, unlike `surface.move`.
+            if let Some(focus) = focus {
+                params.insert("focus".into(), json!(focus));
             }
             ("surface.reorder", Value::Object(params))
         }
@@ -1651,6 +1662,21 @@ mod tests {
         assert_eq!(params["before"], "surface:1");
         assert!(params.get("position").is_none());
         assert!(params.get("after").is_none());
+        // Without `--focus` the server keeps the current selection.
+        assert!(params.get("focus").is_none());
+
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "reorder-surface",
+            "surface:3",
+            "1",
+            "--focus",
+            "true",
+        ])
+        .expect("focus reorder should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "surface.reorder");
+        assert_eq!(params["focus"], true);
 
         let mut cli = Cli::try_parse_from([
             "cmux",
@@ -1670,6 +1696,36 @@ mod tests {
         assert_eq!(params["after"], "workspace:1");
         assert_eq!(params["window"], "window:1");
         assert!(params.get("position").is_none());
+        assert!(params.get("dry_run").is_none());
+
+        let mut cli = Cli::try_parse_from([
+            "cmux",
+            "reorder-workspace",
+            "workspace:3",
+            "0",
+            "--dry-run",
+        ])
+        .expect("dry-run reorder should parse");
+        handles::canonicalize(&mut cli).expect("canonicalize");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "workspace.reorder");
+        assert_eq!(params["id"], "workspace:3");
+        assert_eq!(params["position"], 0);
+        assert_eq!(params["dry_run"], true);
+    }
+
+    /// `workspace list|current` dispatch onto the two workspace readers they mirror.
+    #[test]
+    fn workspace_namespace_list_and_current_map_to_their_verbs() {
+        use args::WorkspaceCommands;
+        let expanded = expand_workspace_namespace(Commands::Workspace(WorkspaceCommands::List));
+        assert!(matches!(expanded, Commands::ListWorkspaces));
+        assert_eq!(command_to_rpc(&expanded).0, "workspace.list");
+
+        let expanded =
+            expand_workspace_namespace(Commands::Workspace(WorkspaceCommands::Current));
+        assert!(matches!(expanded, Commands::CurrentWorkspace));
+        assert_eq!(command_to_rpc(&expanded).0, "workspace.current");
     }
 
     /// `split-off` keeps upstream's focus default and names its surface.

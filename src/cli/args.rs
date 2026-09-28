@@ -424,6 +424,9 @@ pub enum Commands {
         /// Window owning the order; this build has a single window (`window:1`)
         #[arg(long)]
         window: Option<String>,
+        /// Print the resolved final index without applying
+        #[arg(long)]
+        dry_run: bool,
     },
 
     // -- Surface commands --
@@ -641,6 +644,13 @@ pub enum Commands {
         /// Window owning the pane; this build has a single window (`window:1`)
         #[arg(long)]
         window: Option<String>,
+        /// Select the reordered surface; by default the current focus is kept
+        #[arg(
+            long,
+            value_name = "true|false",
+            value_parser = clap::builder::BoolishValueParser::new()
+        )]
+        focus: Option<bool>,
     },
     /// Move a surface into a newly split pane next to a target pane
     DragSurfaceToSplit {
@@ -928,8 +938,9 @@ pub enum Commands {
 /// `cmux workspace <sub>`: upstream spelling of the legacy workspace verbs, same arguments.
 ///
 /// The parser mirrors the legacy fields one for one so `run` can expand the namespace onto
-/// `new-workspace`, `close-workspace`, `select-workspace` and `rename-workspace` and keep a
-/// single canonicalization and dispatch path.
+/// `new-workspace`, `close-workspace`, `select-workspace`, `rename-workspace`,
+/// `list-workspaces` and `current-workspace` and keep a single canonicalization and
+/// dispatch path.
 #[derive(Subcommand)]
 pub enum WorkspaceCommands {
     /// Create a new workspace (same options as `new-workspace`)
@@ -973,6 +984,10 @@ pub enum WorkspaceCommands {
         #[arg(long, required_unless_present = "id")]
         workspace: Option<String>,
     },
+    /// List all workspaces (same output as `list-workspaces`)
+    List,
+    /// Show the current workspace (same output as `current-workspace`)
+    Current,
 }
 
 /// Inbox operations share the socket's exact notification and target identities.
@@ -2403,6 +2418,51 @@ mod handle_argument_tests {
         }
     }
 
+    /// `reorder-surface --focus` and `reorder-workspace --dry-run` parse upstream's flags.
+    #[test]
+    fn reorder_focus_and_dry_run_parse() {
+        match parse(&[
+            "reorder-surface",
+            "surface:2",
+            "--index",
+            "0",
+            "--focus",
+            "true",
+        ]) {
+            Commands::ReorderSurface { focus, .. } => assert_eq!(focus, Some(true)),
+            _ => panic!("wrong command variant"),
+        }
+        // The flag takes both boolean spellings and nothing else; absent means "keep focus".
+        match parse(&[
+            "reorder-surface",
+            "--surface",
+            SURFACE,
+            "1",
+            "--focus",
+            "false",
+        ]) {
+            Commands::ReorderSurface { focus, .. } => assert_eq!(focus, Some(false)),
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["reorder-surface", SURFACE, "1"]) {
+            Commands::ReorderSurface { focus, .. } => assert!(focus.is_none()),
+            _ => panic!("wrong command variant"),
+        }
+        assert!(
+            Cli::try_parse_from(["cmux", "reorder-surface", SURFACE, "1", "--focus", "maybe"])
+                .is_err()
+        );
+
+        match parse(&["reorder-workspace", WORKSPACE, "0", "--dry-run"]) {
+            Commands::ReorderWorkspace { dry_run, .. } => assert!(dry_run),
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["reorder-workspace", WORKSPACE, "0"]) {
+            Commands::ReorderWorkspace { dry_run, .. } => assert!(!dry_run),
+            _ => panic!("wrong command variant"),
+        }
+    }
+
     /// Upstream's `split-off --surface <handle> <direction>` parses with its focus flag.
     #[test]
     fn split_off_form_parses() {
@@ -2497,9 +2557,17 @@ mod handle_argument_tests {
             _ => panic!("wrong command variant"),
         }
 
-        // The namespace exists only for its four subcommands.
+        // The namespace exists only for its six subcommands.
         assert!(Cli::try_parse_from(["cmux", "workspace"]).is_err());
-        assert!(Cli::try_parse_from(["cmux", "workspace", "list"]).is_err());
+        assert!(Cli::try_parse_from(["cmux", "workspace", "env"]).is_err());
+        match parse(&["workspace", "list"]) {
+            Commands::Workspace(WorkspaceCommands::List) => {}
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["workspace", "current"]) {
+            Commands::Workspace(WorkspaceCommands::Current) => {}
+            _ => panic!("wrong command variant"),
+        }
         // The legacy verbs stay available.
         assert!(matches!(
             parse(&["new-workspace", "--name", "X"]),

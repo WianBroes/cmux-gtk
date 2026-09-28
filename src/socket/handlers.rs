@@ -834,6 +834,7 @@ fn handle_socket_command_traced(
             position,
             before,
             after,
+            dry_run,
             resp_tx,
         } => {
             // SOCK-05: No focus side effects.
@@ -880,10 +881,33 @@ fn handle_socket_command_traced(
                     }
                 }
             };
+            // The reply carries the resolved slot: `--dry-run` reports it and stops here.
+            let workspace_ref = s
+                .handles
+                .ensure_ref(super::handles::HandleKind::Workspace, &id);
+            let window_ref = s.handles.ensure_ref(
+                super::handles::HandleKind::Window,
+                super::handles::MAIN_WINDOW_ID,
+            );
+            let mut reply = json!({
+                "workspace_id": id,
+                "workspace_ref": workspace_ref,
+                "window_id": super::handles::MAIN_WINDOW_ID,
+                "window_ref": window_ref,
+                "from_index": from,
+                "index": to,
+                "to_index": to,
+            });
+            if dry_run {
+                reply["dry_run"] = json!(true);
+                drop(s);
+                let _ = resp_tx.send(ok(req_id, reply));
+                return;
+            }
             s.reorder_workspace(from, to);
             drop(s);
             crate::sidebar::rebuild_grouped_sidebar(state);
-            let _ = resp_tx.send(ok(req_id, json!({})));
+            let _ = resp_tx.send(ok(req_id, reply));
         }
         SocketCommand::WorkspaceGroupList { req_id, resp_tx } => {
             let state = state.borrow();
@@ -1470,6 +1494,7 @@ fn handle_socket_command_traced(
             position,
             before,
             after,
+            focus,
             resp_tx,
         } => {
             let Some(uuid) = uuid::Uuid::parse_str(&id).ok() else {
@@ -1548,6 +1573,12 @@ fn handle_socket_command_traced(
                 };
                 match s.split_engines[index].reorder_surface(uuid, position) {
                     Ok(result) => {
+                        // `focus` selects the tab it reordered and shows its workspace,
+                        // the same pairing `surface.move` uses for a focused move.
+                        if focus {
+                            s.split_engines[index].focus_surface(&id);
+                            s.switch_to_index(index);
+                        }
                         s.trigger_session_save();
                         ok(
                             req_id,

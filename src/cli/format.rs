@@ -325,6 +325,34 @@ pub fn format_mutation(command_name: &str, result: &Value) -> String {
         }
         "workspace.set_description" => format!("Set workspace description: {}", id),
         "workspace.clear_description" => format!("Cleared workspace description: {}", id),
+        // Upstream's reorder summary, with `plan ` prefixing the `--dry-run` reply.
+        "workspace.reorder" => {
+            let workspace = result
+                .get("workspace_ref")
+                .or_else(|| result.get("workspace_id"))
+                .or_else(|| result.get("id"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let window = result
+                .get("window_ref")
+                .or_else(|| result.get("window_id"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let index = result
+                .get("index")
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "?".to_owned());
+            let plan = if result
+                .get("dry_run")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                "plan "
+            } else {
+                ""
+            };
+            format!("OK {plan}workspace={workspace} window={window} index={index}")
+        }
         // Upstream's creation summary: `OK surface:N pane:N workspace:N`.
         "surface.split" | "pane.create" | "surface.create" => {
             let field = |ref_key: &str, id_key: &str| {
@@ -396,6 +424,7 @@ pub fn format_response(method: &str, result: &Value, json_mode: bool, color: boo
         "workspace.create"
         | "workspace.close"
         | "workspace.rename"
+        | "workspace.reorder"
         | "surface.split"
         | "pane.create"
         | "surface.create"
