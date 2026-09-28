@@ -537,6 +537,7 @@ fn handle_socket_command_traced(
                 "browser.wait",
                 // P0: getters
                 "browser.get.url",
+                "browser.url.get",
                 "browser.get.title",
                 "browser.get.text",
                 "browser.get.html",
@@ -549,23 +550,13 @@ fn handle_socket_command_traced(
                 "browser.is.visible",
                 "browser.is.enabled",
                 "browser.is.checked",
-                // P1: locators
-                "browser.find.role",
-                "browser.find.text",
-                "browser.find.label",
-                "browser.find.placeholder",
-                "browser.find.alt",
-                "browser.find.title",
-                "browser.find.testid",
-                "browser.find.nth",
-                "browser.find.first",
-                "browser.find.last",
                 // P1: frames, dialogs, console, errors
                 "browser.frame.select",
                 "browser.frame.main",
                 "browser.dialog.accept",
                 "browser.dialog.dismiss",
                 "browser.console.list",
+                "browser.console.clear",
                 "browser.errors.list",
                 "browser.highlight",
                 "browser.state.save",
@@ -1905,27 +1896,35 @@ fn handle_socket_command_traced(
                 return;
             }
             if let Some(bm) = s.browser_sessions.get(&id) {
-                if let Some(params) = params.as_object_mut() {
-                    params.remove("surface_ref");
-                    params.remove("surface_id");
+                if !params.is_object() {
+                    params = json!({});
                 }
-                // Translate cmux CLI action names to agent-browser action names
-                let daemon_action = match action.as_str() {
-                    "open" => "launch",
-                    "goto" => "navigate",
-                    "eval" => "evaluate",
-                    "gethtml" => "innerhtml",
-                    "stream.enable" => "stream_enable",
-                    "stream.disable" => "stream_disable",
-                    _ => &action,
+                let fields = params.as_object_mut().unwrap();
+                fields.remove("surface_ref");
+                fields.remove("surface_id");
+                // Translate cmux CLI and upstream action names to agent-browser action names
+                let daemon_action = match crate::browser::daemon_action(&action, fields) {
+                    Ok(daemon_action) => daemon_action,
+                    Err(message) => {
+                        let _ = resp_tx.send(err(req_id, "not_supported", &message));
+                        return;
+                    }
                 };
+                let style_property = (daemon_action == "styles")
+                    .then(|| {
+                        fields
+                            .get("property")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .flatten();
                 let Some(runtime) = s.runtime_handle.clone() else {
                     let _ = resp_tx.send(err(req_id, "not_running", "Async runtime unavailable"));
                     return;
                 };
                 let session = bm.session_identity();
                 let exchange = bm.send_command_async(
-                    daemon_action,
+                    &daemon_action,
                     params,
                     trace_id
                         .as_deref()
@@ -1936,7 +1935,10 @@ fn handle_socket_command_traced(
                 spawn_browser_exchange(
                     &runtime,
                     async move {
-                        let result = exchange.await?;
+                        let mut result = exchange.await?;
+                        if let Some(property) = style_property {
+                            result = crate::browser::pick_style(result, &property);
+                        }
                         if result.get("success").and_then(Value::as_bool) != Some(false) {
                             if let Some(url) = result
                                 .get("data")

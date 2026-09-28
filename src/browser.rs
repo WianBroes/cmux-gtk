@@ -822,9 +822,144 @@ fn snapshot_text(mut response: Value) -> Result<String, String> {
     serde_json::to_string(&response).map_err(|error| format!("Invalid snapshot: {error}"))
 }
 
+/// Translate a socket browser action (cmux CLI or upstream macOS name) into the
+/// agent-browser daemon action, renaming params the daemon spells differently.
+/// `Err` carries the message for actions the daemon cannot perform.
+pub(crate) fn daemon_action(
+    action: &str,
+    params: &mut serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let rename = |params: &mut serde_json::Map<String, Value>, from: &str, to: &str| {
+        if let Some(value) = params.remove(from) {
+            params.entry(to).or_insert(value);
+        }
+    };
+    let daemon = match action {
+        "open" => "launch",
+        "goto" => "navigate",
+        "eval" => "evaluate",
+        "gethtml" | "get.html" => "innerhtml",
+        "stream.enable" => "stream_enable",
+        "stream.disable" => "stream_disable",
+        "get.url" | "url.get" => "url",
+        "get.title" => "title",
+        "get.text" => "gettext",
+        "get.value" => "inputvalue",
+        "get.attr" => {
+            rename(params, "attr", "attribute");
+            "getattribute"
+        }
+        "get.count" => "count",
+        "get.box" => "boundingbox",
+        "get.styles" => "styles",
+        "is.visible" => "isvisible",
+        "is.enabled" => "isenabled",
+        "is.checked" => "ischecked",
+        "frame.select" => "frame",
+        "frame.main" => "mainframe",
+        "dialog.accept" | "dialog.dismiss" => {
+            rename(params, "text", "promptText");
+            let response = action.strip_prefix("dialog.").unwrap_or_default();
+            params.insert("response".into(), Value::String(response.into()));
+            "dialog"
+        }
+        "console.list" => "console",
+        "console.clear" => {
+            params.insert("clear".into(), Value::Bool(true));
+            "console"
+        }
+        "errors.list" => "errors",
+        "errors.clear" => return Err("agent-browser cannot clear page errors".into()),
+        "state.save" => "state_save",
+        "state.load" => "state_load",
+        _ if action.starts_with("find.") => {
+            return Err("browser find is not supported: agent-browser locators always act on the element; use snapshot refs or CSS selectors".into())
+        }
+        _ => action,
+    };
+    Ok(daemon.to_string())
+}
+
+/// Reduce a `styles` response to one computed property, as `get styles --property` asks.
+pub(crate) fn pick_style(mut response: Value, property: &str) -> Value {
+    let value = response
+        .get("data")
+        .and_then(|data| data.get("styles"))
+        .and_then(|styles| styles.get(property))
+        .cloned()
+        .unwrap_or(Value::Null);
+    if let Some(data) = response.get_mut("data") {
+        *data = serde_json::json!({"property": property, "value": value});
+    }
+    response
+}
+
 #[cfg(test)]
 mod manager_tests {
     use super::*;
+
+    /// Upstream method names reach the daemon under its own action and param names.
+    #[test]
+    fn upstream_actions_translate_to_daemon_actions() {
+        let translate = |action: &str, params: Value| {
+            let mut params = params.as_object().cloned().unwrap();
+            daemon_action(action, &mut params).map(|daemon| (daemon, Value::Object(params)))
+        };
+        assert_eq!(
+            translate(
+                "get.attr",
+                serde_json::json!({"selector": "#i", "attr": "href"})
+            )
+            .unwrap(),
+            (
+                "getattribute".into(),
+                serde_json::json!({"selector": "#i", "attribute": "href"})
+            )
+        );
+        assert_eq!(
+            translate("dialog.accept", serde_json::json!({"text": "oui"})).unwrap(),
+            (
+                "dialog".into(),
+                serde_json::json!({"promptText": "oui", "response": "accept"})
+            )
+        );
+        assert_eq!(
+            translate("console.clear", serde_json::json!({})).unwrap(),
+            ("console".into(), serde_json::json!({"clear": true}))
+        );
+        for (upstream, daemon) in [
+            ("get.url", "url"),
+            ("url.get", "url"),
+            ("get.html", "innerhtml"),
+            ("gethtml", "innerhtml"),
+            ("get.value", "inputvalue"),
+            ("get.box", "boundingbox"),
+            ("is.visible", "isvisible"),
+            ("frame.main", "mainframe"),
+            ("state.save", "state_save"),
+            ("eval", "evaluate"),
+            ("click", "click"),
+        ] {
+            assert_eq!(
+                translate(upstream, serde_json::json!({})).unwrap().0,
+                daemon
+            );
+        }
+        assert!(translate("find.role", serde_json::json!({})).is_err());
+        assert!(translate("errors.clear", serde_json::json!({})).is_err());
+    }
+
+    /// `--property` keeps one computed style, `null` when the page has none.
+    #[test]
+    fn style_property_is_picked_from_the_full_map() {
+        let response =
+            serde_json::json!({"success": true, "data": {"styles": {"color": "rgb(255, 0, 0)"}}});
+        assert_eq!(
+            pick_style(response.clone(), "color")["data"],
+            serde_json::json!({"property": "color", "value": "rgb(255, 0, 0)"})
+        );
+        assert_eq!(pick_style(response, "nope")["data"]["value"], Value::Null);
+    }
 
     /// Text fields preserve Unicode and emptiness; nested fallback does not gain indentation.
     #[test]

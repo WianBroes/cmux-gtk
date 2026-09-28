@@ -1203,6 +1203,7 @@ async fn dispatch_request(
             let action = method.strip_prefix("browser.").unwrap().to_string();
             let surface_ref = params
                 .get("surface_ref")
+                .or_else(|| params.get("surface_id"))
                 .and_then(|v| v.as_str())
                 .map(String::from);
             commands::SocketCommand::BrowserAction {
