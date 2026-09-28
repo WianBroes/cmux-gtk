@@ -849,6 +849,11 @@ pub(crate) fn daemon_action(
             rename(params, "attr", "attribute");
             "getattribute"
         }
+        "scroll" => {
+            rename(params, "dx", "x");
+            rename(params, "dy", "y");
+            "scroll"
+        }
         "get.count" => "count",
         "get.box" => "boundingbox",
         "get.styles" => "styles",
@@ -945,6 +950,10 @@ mod manager_tests {
                 daemon
             );
         }
+        assert_eq!(
+            translate("scroll", serde_json::json!({"dx": 0, "dy": -120})).unwrap(),
+            ("scroll".into(), serde_json::json!({"x": 0, "y": -120}))
+        );
         assert!(translate("find.role", serde_json::json!({})).is_err());
         assert!(translate("errors.clear", serde_json::json!({})).is_err());
     }
