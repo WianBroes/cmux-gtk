@@ -13,6 +13,7 @@ mod browser_timeout;
 mod config;
 mod diagnostics;
 mod events;
+mod file_explorer;
 mod focus_history;
 mod ghostty;
 mod git_metadata;
@@ -68,6 +69,12 @@ const APP_CSS: &str = "
 /* cmux Phase 2 styles — per UI-SPEC.md */
 window { background-color: #1a1a1a; }
 .sidebar { background-color: #242424; }
+/* File explorer (right sidebar Files mode): rows, header and selection follow the dark
+   sidebar instead of the light theme's white treeview. */
+.file-explorer treeview.view { background-color: #242424; color: #cccccc; }
+.file-explorer treeview.view:selected { background-color: #3a63a8; color: #ffffff; }
+.file-explorer .heading { color: #cccccc; }
+.file-explorer .dim-label { color: #c0c0c0; }
 .workspace-list { background-color: #242424; }
 .workspace-list row { min-height: 36px; padding: 8px 16px; }
 .workspace-list row label { color: #cccccc; font-size: 14px; font-weight: 400; }
@@ -505,6 +512,7 @@ fn build_ui(
     crate::sidebar::rebuild_grouped_sidebar(&state);
 
     crate::git_metadata::start(&state, &window);
+    crate::file_explorer::start_root_refresh(&state);
     crate::ports::start(&state, &window);
     crate::agent_activity::start(&state, &window);
     crate::browser::location::start(&state, &window);

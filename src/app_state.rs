@@ -107,6 +107,20 @@ impl AppState {
         }
     }
 
+    /// Point the right sidebar's Files tree at the focused workspace's root
+    /// (upstream `FileExplorerWorkspaceRootResolver`: local current directory,
+    /// remote workspaces unavailable). Cheap when the root did not change.
+    pub fn refresh_right_sidebar(&self) {
+        let Some(sidebar) = &self.right_sidebar else {
+            return;
+        };
+        let index = self.active_index;
+        let workspace = self.workspaces.get(index);
+        let is_remote = workspace.is_some_and(|workspace| workspace.remote_target.is_some());
+        let directory = self.local_workspace_directory(index);
+        sidebar.show_root(crate::file_explorer::resolve_root(is_remote, directory));
+    }
+
     /// Create a new AppState. Does NOT create the first workspace — caller must call
     /// create_workspace() after constructing the GTK widget tree (Plan 04 wires this).
     pub fn new(
@@ -749,6 +763,8 @@ impl AppState {
         if let Some(engine) = self.split_engines.get(index) {
             engine.focus_active_surface();
         }
+        // The Files tree follows the focused workspace (upstream root sync).
+        self.refresh_right_sidebar();
     }
 
     /// Move a workspace and its engine together while retaining active identity and focus.
