@@ -455,11 +455,17 @@ fn collect_targets<'a>(command: &'a mut Commands, targets: &mut Vec<Target<'a>>)
             id,
             pane,
             workspace,
+            window,
+            before,
+            after,
             ..
         } => {
             targets.push(Target::Optional(HandleKind::Surface, id));
             targets.push(Target::Optional(HandleKind::Pane, pane));
             targets.push(Target::Optional(HandleKind::Workspace, workspace));
+            targets.push(Target::Optional(HandleKind::Window, window));
+            targets.push(Target::Optional(HandleKind::Surface, before));
+            targets.push(Target::Optional(HandleKind::Surface, after));
         }
         Commands::Notify {
             workspace, surface, ..

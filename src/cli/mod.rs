@@ -1162,18 +1162,32 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             id,
             pane,
             workspace,
+            window,
+            before,
+            after,
             position,
             no_focus,
+            focus,
             ..
         } => {
             let mut params = serde_json::Map::new();
             params.insert("id".into(), json!(id));
-            params.insert("focus".into(), json!(!no_focus));
-            if let Some(workspace) = workspace {
-                params.insert("workspace".into(), json!(workspace));
-            }
-            if let Some(pane) = pane {
-                params.insert("pane".into(), json!(pane));
+            // `--focus` is upstream's spelling; without either flag the moved surface keeps
+            // the historical focus-the-move behavior.
+            params.insert(
+                "focus".into(),
+                json!(focus.as_ref().copied().unwrap_or(!*no_focus)),
+            );
+            for (key, value) in [
+                ("workspace", workspace),
+                ("pane", pane),
+                ("window", window),
+                ("before", before),
+                ("after", after),
+            ] {
+                if let Some(value) = value {
+                    params.insert(key.into(), json!(value));
+                }
             }
             if let Some(position) = position {
                 params.insert("position".into(), json!(position));
@@ -1528,6 +1542,31 @@ mod tests {
         assert!(params.get("pane").is_none());
         assert!(params.get("position").is_none());
         assert_eq!(params["focus"], false);
+    }
+
+    /// Relative placement, the window and `--focus` reach `surface.move` as their parameters.
+    #[test]
+    fn move_surface_placement_flags_map_to_parameters() {
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "move-surface",
+            "surface:3",
+            "--before",
+            "surface:1",
+            "--window",
+            "window:1",
+            "--focus",
+            "false",
+        ])
+        .expect("surface move arguments should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "surface.move");
+        assert_eq!(params["id"], "surface:3");
+        assert_eq!(params["before"], "surface:1");
+        assert_eq!(params["window"], "window:1");
+        assert_eq!(params["focus"], false);
+        assert!(params.get("after").is_none());
+        assert!(params.get("position").is_none());
     }
 
     /// The description commands reach the workspace by uuid, set and clear apart.

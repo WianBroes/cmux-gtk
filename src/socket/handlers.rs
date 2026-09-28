@@ -1253,6 +1253,8 @@ fn handle_socket_command_traced(
             workspace,
             pane,
             position,
+            before,
+            after,
             focus,
             resp_tx,
         } => {
@@ -1284,6 +1286,54 @@ fn handle_socket_command_traced(
                     let _ = resp_tx.send(err(req_id, "not_found", "surface not found"));
                     return;
                 };
+                // `before` / `after` name an anchor surface whose pane and slot decide both the
+                // destination and the position; an explicit pane or workspace must agree with it.
+                let anchor = match (before.as_deref(), after.as_deref()) {
+                    (None, None) => None,
+                    (Some(_), Some(_)) => {
+                        let _ = resp_tx.send(err(
+                            req_id,
+                            "invalid_params",
+                            "only one of before or after may be given",
+                        ));
+                        return;
+                    }
+                    (before, after) => {
+                        let reference = before.or(after).expect("one anchor is present");
+                        let Ok(anchor) = uuid::Uuid::parse_str(reference) else {
+                            let _ =
+                                resp_tx.send(err(req_id, "invalid_params", "invalid surface UUID"));
+                            return;
+                        };
+                        if anchor == uuid {
+                            let _ = resp_tx.send(err(
+                                req_id,
+                                "invalid_params",
+                                "before/after cannot name the surface being moved",
+                            ));
+                            return;
+                        }
+                        let text = anchor.to_string();
+                        let found =
+                            s.split_engines
+                                .iter()
+                                .enumerate()
+                                .find_map(|(index, engine)| {
+                                    engine
+                                        .surface_location(&text)
+                                        .map(|(pane, slot)| (index, pane, slot))
+                                });
+                        let Some((engine_index, pane, slot)) = found else {
+                            let _ = resp_tx.send(err(
+                                req_id,
+                                "not_found",
+                                "before/after surface not found",
+                            ));
+                            return;
+                        };
+                        Some((engine_index, pane, slot, before.is_some()))
+                    }
+                };
                 let destination_workspace = match workspace.as_deref() {
                     Some(value) => match uuid::Uuid::parse_str(value) {
                         Ok(value) => value,
@@ -1296,20 +1346,63 @@ fn handle_socket_command_traced(
                             return;
                         }
                     },
-                    None => pane_id
-                        .and_then(|pane_id| {
-                            s.split_engines
-                                .iter()
-                                .position(|engine| engine.contains_pane(pane_id))
-                        })
-                        .and_then(|index| s.workspaces.get(index).map(|workspace| workspace.uuid))
-                        .unwrap_or(s.workspaces[source_index].uuid),
+                    None => match anchor {
+                        Some((engine_index, _, _, _)) => s.workspaces[engine_index].uuid,
+                        None => pane_id
+                            .and_then(|pane_id| {
+                                s.split_engines
+                                    .iter()
+                                    .position(|engine| engine.contains_pane(pane_id))
+                            })
+                            .and_then(|index| {
+                                s.workspaces.get(index).map(|workspace| workspace.uuid)
+                            })
+                            .unwrap_or(s.workspaces[source_index].uuid),
+                    },
+                };
+                let (destination_pane, placement) = match anchor {
+                    Some((engine_index, anchor_pane, anchor_slot, place_before)) => {
+                        if s.workspaces[engine_index].uuid != destination_workspace {
+                            let _ = resp_tx.send(err(
+                                req_id,
+                                "invalid_params",
+                                "before/after and workspace name different workspaces",
+                            ));
+                            return;
+                        }
+                        if pane_id.is_some_and(|pane| pane != anchor_pane) {
+                            let _ = resp_tx.send(err(
+                                req_id,
+                                "invalid_params",
+                                "before/after and pane name different panes",
+                            ));
+                            return;
+                        }
+                        // In the anchor's own pane the removal of the moved tab shifts the slot.
+                        let source_slot = if source_index == engine_index {
+                            s.split_engines[source_index]
+                                .surface_location(&id)
+                                .filter(|(source_pane, _)| *source_pane == anchor_pane)
+                                .map(|(_, slot)| slot)
+                        } else {
+                            None
+                        };
+                        let shifted = match source_slot {
+                            Some(source_slot) => {
+                                anchor_slot - usize::from(source_slot < anchor_slot)
+                            }
+                            None => anchor_slot,
+                        };
+                        let slot = if place_before { shifted } else { shifted + 1 };
+                        (Some(anchor_pane), Some(slot))
+                    }
+                    None => (pane_id, position),
                 };
                 match s.move_surface_between_workspaces(
                     uuid,
                     destination_workspace,
-                    pane_id,
-                    position,
+                    destination_pane,
+                    placement,
                     focus,
                 ) {
                     Ok((result, route_restarted)) => ok(

@@ -74,6 +74,22 @@ fn creation_params(params: &serde_json::Value) -> Result<CreationParams, &'stati
     })
 }
 
+/// Read an optional string parameter under this fork's name and upstream's alias.
+fn optional_text(
+    params: &serde_json::Value,
+    key: &'static str,
+    alias: &'static str,
+) -> Result<Option<String>, String> {
+    for name in [key, alias] {
+        match params.get(name) {
+            None | Some(serde_json::Value::Null) => {}
+            Some(serde_json::Value::String(value)) => return Ok(Some(value.clone())),
+            Some(_) => return Err(format!("{key} must be a string")),
+        }
+    }
+    Ok(None)
+}
+
 /// Map a split direction; `horizontal`/`vertical` are this fork's original right/down names.
 fn split_side(value: &str) -> Option<crate::split_engine::FocusDirection> {
     use crate::split_engine::FocusDirection;
@@ -832,20 +848,25 @@ async fn dispatch_request(
             resp_tx,
         },
         "surface.move" => {
-            let Some(id) = params.get("id").and_then(serde_json::Value::as_str) else {
+            let Some(id) = params
+                .get("id")
+                .or_else(|| params.get("surface_id"))
+                .and_then(serde_json::Value::as_str)
+            else {
                 return err(req_id, "invalid_params", "id must be a surface UUID");
             };
-            let pane = match params.get("pane") {
+            let pane = match params.get("pane").or_else(|| params.get("pane_id")) {
                 None | Some(serde_json::Value::Null) => None,
                 Some(serde_json::Value::String(value)) => Some(value.to_owned()),
                 Some(_) => return err(req_id, "invalid_params", "pane must be a pane reference"),
             };
-            let workspace = match params.get("workspace") {
+            let workspace = match params.get("workspace").or_else(|| params.get("workspace_id")) {
                 None | Some(serde_json::Value::Null) => None,
                 Some(serde_json::Value::String(value)) => Some(value.to_owned()),
                 Some(_) => return err(req_id, "invalid_params", "workspace must be a UUID"),
             };
-            let position = match params.get("position") {
+            // Upstream names the insertion slot `index`; this fork has always read `position`.
+            let position = match params.get("position").or_else(|| params.get("index")) {
                 None => None,
                 Some(value) => match value.as_u64().and_then(|value| usize::try_from(value).ok()) {
                     Some(value) => Some(value),
@@ -858,12 +879,49 @@ async fn dispatch_request(
                     }
                 },
             };
+            let before = match optional_text(&params, "before", "before_surface_id") {
+                Ok(before) => before,
+                Err(message) => return err(req_id, "invalid_params", &message),
+            };
+            let after = match optional_text(&params, "after", "after_surface_id") {
+                Ok(after) => after,
+                Err(message) => return err(req_id, "invalid_params", &message),
+            };
+            let placements = [position.is_some(), before.is_some(), after.is_some()]
+                .into_iter()
+                .filter(|given| *given)
+                .count();
+            if placements > 1 {
+                return err(
+                    req_id,
+                    "invalid_params",
+                    "only one of position, before or after may be given",
+                );
+            }
+            // Linux builds one GTK window: the ref and the window id name it, nothing else can.
+            match optional_text(&params, "window", "window_id") {
+                Ok(Some(window))
+                    if window != super::handles::MAIN_WINDOW_ID && window != "window:1" =>
+                {
+                    return err(
+                        req_id,
+                        "invalid_params",
+                        &format!(
+                            "this build has a single window; pass window:1 (got {window})"
+                        ),
+                    )
+                }
+                Ok(_) => {}
+                Err(message) => return err(req_id, "invalid_params", &message),
+            }
             commands::SocketCommand::SurfaceMove {
                 req_id: req_id.clone(),
                 id: id.to_owned(),
                 workspace,
                 pane,
                 position,
+                before,
+                after,
                 focus: params
                     .get("focus")
                     .and_then(serde_json::Value::as_bool)

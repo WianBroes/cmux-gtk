@@ -218,6 +218,10 @@ pub enum SocketCommand {
         workspace: Option<String>,
         pane: Option<String>,
         position: Option<usize>,
+        /// Anchor surface: the moved surface lands immediately before this one.
+        before: Option<String>,
+        /// Anchor surface: the moved surface lands immediately after this one.
+        after: Option<String>,
         focus: bool,
         resp_tx: RespTx,
     },

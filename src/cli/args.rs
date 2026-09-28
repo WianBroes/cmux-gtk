@@ -574,12 +574,29 @@ pub enum Commands {
         /// Destination workspace UUID; defaults to the pane owner or source workspace
         #[arg(long)]
         workspace: Option<String>,
-        /// Zero-based insertion position; defaults to the end
+        /// Destination window; this build has a single window (`window:1`)
         #[arg(long)]
+        window: Option<String>,
+        /// Place the surface before this surface (same pane/workspace context)
+        #[arg(long, visible_alias = "before-surface", conflicts_with = "after")]
+        before: Option<String>,
+        /// Place the surface after this surface (same pane/workspace context)
+        #[arg(long, visible_alias = "after-surface")]
+        after: Option<String>,
+        /// Zero-based insertion position; defaults to the end
+        #[arg(long, visible_alias = "index", conflicts_with_all = ["before", "after"])]
         position: Option<usize>,
         /// Preserve current focus instead of selecting the moved surface
-        #[arg(long)]
+        #[arg(long, conflicts_with = "focus")]
         no_focus: bool,
+        /// Focus the surface after moving; `--focus false` equals `--no-focus`
+        #[arg(
+            long,
+            value_name = "true|false",
+            value_parser = clap::builder::BoolishValueParser::new(),
+            conflicts_with = "no_focus"
+        )]
+        focus: Option<bool>,
     },
     /// Reorder a surface tab inside its current pane
     ReorderSurface {
@@ -2072,6 +2089,93 @@ mod handle_argument_tests {
                 pane: None
             }
         ));
+    }
+
+    /// Upstream's placement, window and focus flags reach the same move command.
+    #[test]
+    fn move_surface_placement_window_and_focus_forms_parse() {
+        match parse(&["move-surface", "surface:3", "--before", "surface:1"]) {
+            Commands::MoveSurface {
+                id,
+                before,
+                after,
+                position,
+                ..
+            } => {
+                assert_eq!(id.as_deref(), Some("surface:3"));
+                assert_eq!(before.as_deref(), Some("surface:1"));
+                assert!(after.is_none());
+                assert!(position.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&[
+            "move-surface",
+            SURFACE,
+            "--window",
+            "window:1",
+            "--index",
+            "0",
+            "--focus",
+            "false",
+        ]) {
+            Commands::MoveSurface {
+                window,
+                position,
+                focus,
+                no_focus,
+                ..
+            } => {
+                assert_eq!(window.as_deref(), Some("window:1"));
+                assert_eq!(position, Some(0));
+                assert_eq!(focus, Some(false));
+                assert!(!no_focus);
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["move-surface", SURFACE, "--no-focus"]) {
+            Commands::MoveSurface {
+                focus, no_focus, ..
+            } => {
+                assert!(focus.is_none());
+                assert!(no_focus);
+            }
+            _ => panic!("wrong command variant"),
+        }
+
+        // Contradicting placements, and a focus spelling given twice, are refused.
+        for arguments in [
+            vec![
+                "move-surface",
+                SURFACE,
+                "--before",
+                "surface:1",
+                "--after",
+                "surface:2",
+            ],
+            vec![
+                "move-surface",
+                SURFACE,
+                "--index",
+                "1",
+                "--before",
+                "surface:1",
+            ],
+            vec![
+                "move-surface",
+                SURFACE,
+                "--position",
+                "1",
+                "--after",
+                "surface:2",
+            ],
+            vec!["move-surface", SURFACE, "--focus", "true", "--no-focus"],
+        ] {
+            assert!(
+                Cli::try_parse_from(arguments.iter().collect::<Vec<_>>()).is_err(),
+                "{arguments:?} must be refused"
+            );
+        }
     }
 
     /// `--id-format` is global, validates its value and leaves the default output untouched.

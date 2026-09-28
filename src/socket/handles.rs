@@ -100,6 +100,9 @@ const HANDLE_KEYS: &[&str] = &[
     "surface",
     "surface_id",
     "surface_ref",
+    // Relative placement anchors of `surface.move`, `surface.reorder` and `workspace.reorder`.
+    "before",
+    "after",
 ];
 const HANDLE_LIST_KEYS: &[&str] = &["workspace_ids"];
 

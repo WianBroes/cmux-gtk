@@ -1505,6 +1505,20 @@ impl SplitEngine {
         replace_in_tree(&mut self.root, target_pane_id, &mut replacer)
     }
 
+    /// The pane owning `uuid` and the tab's zero-based index inside that pane's strip.
+    ///
+    /// Used to anchor relative placement (`--before` / `--after`); returns `None` when no
+    /// pane in this workspace holds the surface.
+    pub fn surface_location(&self, uuid: &str) -> Option<(u64, usize)> {
+        let pane_id = self.find_pane_id_by_uuid(uuid)?;
+        let (_, surfaces) = find_pane_tabs(&self.root, pane_id)?;
+        let index = surfaces
+            .borrow()
+            .iter()
+            .position(|surface| surface.uuid().to_string() == uuid)?;
+        Some((pane_id, index))
+    }
+
     /// Reorder one tab inside its current pane. GTK emits `page-reordered`, which updates
     /// the model before this method returns.
     pub fn reorder_surface(
@@ -1556,12 +1570,19 @@ impl SplitEngine {
                     .iter()
                     .position(|surface| surface.uuid() == uuid)
                     .ok_or("surface not found")?;
+                if focus {
+                    self.focus_surface(&uuid.to_string());
+                }
                 return Ok(SurfaceMoveResult {
                     pane_id: destination_pane,
                     position: current,
                 });
             };
-            return self.reorder_surface(uuid, position);
+            let result = self.reorder_surface(uuid, position)?;
+            if focus {
+                self.focus_surface(&uuid.to_string());
+            }
+            return Ok(result);
         }
         let position = position.unwrap_or(destination_count);
         if position > destination_count {
