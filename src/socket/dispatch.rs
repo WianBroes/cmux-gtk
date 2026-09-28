@@ -1021,6 +1021,36 @@ async fn dispatch_request(
                 resp_tx,
             }
         }
+        "tab.action" => {
+            let Some(action) = params.get("action").and_then(serde_json::Value::as_str) else {
+                return err(req_id, "invalid_params", "action must be a string");
+            };
+            let surface = match optional_text(&params, "surface_id", "surface_id") {
+                Ok(surface) => surface,
+                Err(message) => return err(req_id, "invalid_params", &message),
+            };
+            let workspace = match optional_text(&params, "workspace_id", "workspace_id") {
+                Ok(workspace) => workspace,
+                Err(message) => return err(req_id, "invalid_params", &message),
+            };
+            if let Err(message) = only_main_window(&params) {
+                return err(req_id, "invalid_params", &message);
+            }
+            // `title` and `url` only reach the upstream actions this build rejects first.
+            let focus = match params.get("focus") {
+                None | Some(serde_json::Value::Null) => false,
+                Some(serde_json::Value::Bool(focus)) => *focus,
+                Some(_) => return err(req_id, "invalid_params", "focus must be a boolean"),
+            };
+            commands::SocketCommand::TabAction {
+                req_id: req_id.clone(),
+                action: action.to_owned(),
+                surface,
+                workspace,
+                focus,
+                resp_tx,
+            }
+        }
 "surface.drag_to_split" => {
             let Some(id) = params.get("id").and_then(serde_json::Value::as_str) else {
                 return err(req_id, "invalid_params", "id must be a surface UUID");

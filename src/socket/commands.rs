@@ -260,6 +260,19 @@ pub enum SocketCommand {
         focus: bool,
         resp_tx: RespTx,
     },
+    /// One `tab.action` call: an action name plus the target tab it resolves.
+    TabAction {
+        req_id: Value,
+        /// Action as written by the caller; the handler normalizes, aliases and validates it.
+        action: String,
+        /// Target surface UUID; None targets the focused tab, as upstream.
+        surface: Option<String>,
+        /// Workspace UUID when the caller names one instead of the surface's own.
+        workspace: Option<String>,
+        /// Move focus to the destination where the action supports it (creation only).
+        focus: bool,
+        resp_tx: RespTx,
+    },
     SurfaceDragToSplit {
         req_id: Value,
         id: String,

@@ -352,24 +352,19 @@ pub fn mark_read_where(state: &mut AppState, workspace: Uuid, surface: Option<Uu
     changed
 }
 
-/// Mark every notification of one workspace unread again and show its sidebar dot
-/// (upstream `workspace.action mark_unread`). Returns how many records changed; the
-/// attention flag is set even when the workspace had no notifications.
-pub fn mark_unread_workspace(state: &mut AppState, workspace: Uuid) -> usize {
+/// Mark the notifications of a workspace (surface `None`) or of one tab unread again
+/// (upstream `workspace.action mark_unread` / `tab.action mark_unread`). Returns how many
+/// records changed; the attention flags belong to the caller, which owns that state.
+pub fn mark_unread_where(state: &mut AppState, workspace: Uuid, surface: Option<Uuid>) -> usize {
     let mut changed = 0;
     for record in &mut state.inbox.records {
-        if record.workspace_id == workspace && record.is_read {
+        if record.workspace_id == workspace
+            && surface.is_none_or(|surface| Some(surface) == record.surface_id)
+            && record.is_read
+        {
             record.is_read = false;
             changed += 1;
         }
-    }
-    if let Some(index) = state
-        .workspaces
-        .iter()
-        .position(|row| row.uuid == workspace)
-    {
-        state.workspaces[index].has_attention = true;
-        state.update_sidebar_attention(index);
     }
     if changed > 0 {
         refresh(state);

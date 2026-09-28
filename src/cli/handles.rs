@@ -438,6 +438,38 @@ pub(super) fn canonicalize(cli: &mut Cli) -> Result<(), CliError> {
             }
             *action = Some(name);
         }
+        Commands::TabAction {
+            action,
+            title,
+            action_positional,
+            value_words,
+            ..
+        } => {
+            // Same positional reading as `workspace-action`: action first, then the title;
+            // with `--action` present every positional word belongs to the title.
+            let flagged = action.take();
+            let first = action_positional.take();
+            let (name, words): (Option<String>, Vec<String>) = match flagged {
+                Some(name) => (
+                    Some(name),
+                    first
+                        .into_iter()
+                        .chain(value_words.drain(..))
+                        .collect::<Vec<_>>(),
+                ),
+                None => (first, value_words.drain(..).collect()),
+            };
+            let Some(name) = name else {
+                return Err(CliError::Command(
+                    "tab-action requires --action <name>".into(),
+                ));
+            };
+            let value = words.join(" ");
+            if title.is_none() && !value.trim().is_empty() {
+                *title = Some(value.trim().to_owned());
+            }
+            *action = Some(name.to_lowercase().replace('-', "_"));
+        }
         Commands::Identify {
             workspace,
             surface,
@@ -634,6 +666,14 @@ fn collect_targets<'a>(command: &'a mut Commands, targets: &mut Vec<Target<'a>>)
 
         Commands::WorkspaceAction { workspace, .. } => {
             targets.push(Target::Optional(HandleKind::Workspace, workspace))
+        }
+
+        Commands::TabAction {
+            surface, workspace, window, ..
+        } => {
+            targets.push(Target::Optional(HandleKind::Surface, surface));
+            targets.push(Target::Optional(HandleKind::Workspace, workspace));
+            targets.push(Target::Optional(HandleKind::Window, window));
         }
 
         Commands::ListPaneSurfaces { pane } => {
@@ -952,6 +992,31 @@ mod tests {
         assert_eq!(id.as_deref(), Some("workspace:2"));
         assert_eq!(position, Some(3));
         assert!(workspace.is_none());
+    }
+
+    /// `tab-action` reads its action and trailing title the same way, without value checks
+    /// (the actions needing a title are rejected as unsupported on Linux instead).
+    #[test]
+    fn canonicalize_tab_action_fills_positional_values() {
+        let mut cli = parse(&["tab-action", "rename", "build", "logs"]);
+        canonicalize(&mut cli).expect("positional rename should canonicalize");
+        let Commands::TabAction { action, title, .. } = cli.command else {
+            panic!("wrong command");
+        };
+        assert_eq!(action.as_deref(), Some("rename"));
+        assert_eq!(title.as_deref(), Some("build logs"));
+
+        let mut cli = parse(&["tab-action", "--action", "Close-To-Left"]);
+        canonicalize(&mut cli).expect("flagged action should canonicalize");
+        let Commands::TabAction { action, title, .. } = cli.command else {
+            panic!("wrong command");
+        };
+        assert_eq!(action.as_deref(), Some("close_to_left"));
+        assert!(title.is_none());
+
+        let mut cli = parse(&["tab-action"]);
+        let error = canonicalize(&mut cli).expect_err("an action is required");
+        assert_eq!(error.to_string(), "tab-action requires --action <name>");
     }
 
     /// Positional words become the value upstream's CLI infers, and the action normalizes.

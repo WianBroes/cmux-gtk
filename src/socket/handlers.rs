@@ -27,6 +27,54 @@ const WORKSPACE_ACTIONS: &[&str] = &[
     "clear_color",
 ];
 
+/// Tab actions `tab.action` implements on Linux, after alias normalization.
+const TAB_ACTIONS: &[&str] = &[
+    "close_left",
+    "close_right",
+    "close_others",
+    "mark_read",
+    "mark_unread",
+    "new_terminal_right",
+];
+
+/// Upstream tab actions this build has no equivalent for, plus the one that arrives with
+/// its own command (point 4): they fail with the support note, not as unknown actions.
+const TAB_ACTIONS_UNSUPPORTED: &[&str] = &[
+    "rename",
+    "clear_name",
+    "pin",
+    "unpin",
+    "toggle_full_width_tab",
+    "reload",
+    "duplicate",
+    "new_browser_right",
+    "move_to_new_workspace",
+];
+
+/// Lowercase, dash-free and reduced to the canonical action name upstream dispatches on.
+fn canonical_tab_action(action: &str) -> String {
+    let normalized = action.to_lowercase().replace('-', "_");
+    match normalized.as_str() {
+        "close_to_left" => "close_left",
+        "close_to_right" => "close_right",
+        "close_other_tabs" => "close_others",
+        "mark_as_unread" => "mark_unread",
+        "reload_tab" => "reload",
+        "duplicate_tab" => "duplicate",
+        "toggle_full_width" | "toggle_full_width_tab_mode" => "toggle_full_width_tab",
+        "new_browser_to_right" | "new_browser_tab_to_right" => "new_browser_right",
+        "new_terminal_to_right" | "new_terminal_tab_to_right" => "new_terminal_right",
+        "detach_to_workspace" | "detach_to_new_workspace" => "move_to_new_workspace",
+        other => other,
+    }
+    .to_owned()
+}
+
+/// What this build can do with a tab; both rejections quote it.
+fn tab_support_note() -> String {
+    format!("supported: {}", TAB_ACTIONS.join(", "))
+}
+
 /// Snapshot one workspace's identity and layout counts without changing focus or retaining widgets.
 /// Return None for an absent index; missing engines produce unknown counts rather than fabricated zeroes.
 fn workspace_record(state: &crate::app_state::AppState, index: usize) -> Option<Value> {
@@ -491,6 +539,7 @@ fn handle_socket_command_traced(
                 "workspace.reorder",
                 "workspace.reorder_many",
                 "workspace.action",
+                "tab.action",
                 "workspace.group.list",
                 "workspace.group.create",
                 "workspace.group.update",
@@ -1072,7 +1121,10 @@ fn handle_socket_command_traced(
                     s.trigger_session_save();
                 }
                 "mark_unread" => {
-                    crate::inbox_actions::mark_unread_workspace(&mut s, target);
+                    crate::inbox_actions::mark_unread_where(&mut s, target, None);
+                    // Light the dot even when the workspace had nothing to read.
+                    s.workspaces[index].has_attention = true;
+                    s.update_sidebar_attention(index);
                 }
                 "set_color" => {
                     let Some(hex) = color
@@ -1120,6 +1172,228 @@ fn handle_socket_command_traced(
             let mut reply = json!({
                 "action": action,
                 "workspace_id": target,
+                "workspace_ref": workspace_ref,
+                "window_id": super::handles::MAIN_WINDOW_ID,
+                "window_ref": window_ref,
+            });
+            if let (Some(reply), Some(extras)) = (reply.as_object_mut(), extras.as_object()) {
+                for (key, value) in extras {
+                    reply.insert(key.clone(), value.clone());
+                }
+            }
+            let _ = resp_tx.send(ok(req_id, reply));
+        }
+        SocketCommand::TabAction {
+            req_id,
+            action,
+            surface,
+            workspace,
+            focus,
+            resp_tx,
+        } => {
+            // Upstream lowercases the action, maps dashes onto underscores, then aliases.
+            let echoed = action.to_lowercase().replace('-', "_");
+            let action = canonical_tab_action(&echoed);
+            if !TAB_ACTIONS.contains(&action.as_str()) {
+                let message = if TAB_ACTIONS_UNSUPPORTED.contains(&action.as_str()) {
+                    format!(
+                        "tab action {action} is not supported on Linux ({})",
+                        tab_support_note()
+                    )
+                } else {
+                    format!("Unknown tab action: {echoed} ({})", tab_support_note())
+                };
+                let _ = resp_tx.send(err(req_id, "invalid_params", &message));
+                return;
+            }
+            let mut s = state.borrow_mut();
+            let requested = match workspace.as_deref() {
+                None => None,
+                Some(text) => match uuid::Uuid::parse_str(text) {
+                    Ok(uuid) => Some(uuid),
+                    Err(_) => {
+                        let _ =
+                            resp_tx.send(err(req_id, "invalid_params", "invalid workspace UUID"));
+                        return;
+                    }
+                },
+            };
+            // The surface names its own workspace; without one the caller's, else the active.
+            let located = surface.as_deref().and_then(|id| {
+                s.split_engines
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, engine)| {
+                        engine
+                            .find_pane_id_by_uuid(id)
+                            .map(|pane_id| (index, pane_id))
+                    })
+            });
+            let (index, pane_id, surface_uuid) = match located {
+                Some((index, pane_id)) => {
+                    if let Some(requested) = requested {
+                        if s.workspaces[index].uuid != requested {
+                            let _ = resp_tx.send(err(
+                                req_id,
+                                "invalid_params",
+                                "surface is not in the named workspace",
+                            ));
+                            return;
+                        }
+                    }
+                    let id = surface.clone().expect("a located surface was named");
+                    (index, pane_id, id)
+                }
+                None => {
+                    if surface.is_some() {
+                        let _ = resp_tx.send(err(req_id, "not_found", "surface not found"));
+                        return;
+                    }
+                    let index = match requested {
+                        Some(uuid) => s.workspaces.iter().position(|row| row.uuid == uuid),
+                        None => Some(s.active_index),
+                    };
+                    let Some(index) = index.filter(|index| *index < s.workspaces.len()) else {
+                        let _ = resp_tx.send(err(req_id, "not_found", "workspace not found"));
+                        return;
+                    };
+                    // No tab named: the selected tab of that workspace's active pane.
+                    let Some(focused) = s.split_engines[index].active_pane_uuid() else {
+                        let _ = resp_tx.send(err(req_id, "not_found", "no focused tab"));
+                        return;
+                    };
+                    let Some(pane_id) = s.split_engines[index].find_pane_id_by_uuid(&focused)
+                    else {
+                        let _ = resp_tx.send(err(req_id, "not_found", "no focused tab"));
+                        return;
+                    };
+                    (index, pane_id, focused)
+                }
+            };
+            let surface_id: uuid::Uuid = match surface_uuid.parse() {
+                Ok(uuid) => uuid,
+                Err(_) => {
+                    let _ = resp_tx.send(err(req_id, "invalid_request", "invalid surface UUID"));
+                    return;
+                }
+            };
+            let workspace_uuid = s.workspaces[index].uuid;
+            let mut extras = json!({});
+            match action.as_str() {
+                // Every close stays inside the anchor's pane and never closes the anchor.
+                "close_left" | "close_right" | "close_others" => {
+                    let Some((_, slot)) = s.split_engines[index].surface_location(&surface_uuid)
+                    else {
+                        let _ = resp_tx.send(err(req_id, "not_found", "surface not found"));
+                        return;
+                    };
+                    let Some(pane) = s.split_engines[index]
+                        .pane_info()
+                        .into_iter()
+                        .find(|pane| pane.id == pane_id)
+                    else {
+                        let _ = resp_tx.send(err(req_id, "not_found", "pane not found"));
+                        return;
+                    };
+                    let ids = pane.surface_ids;
+                    let targets: Vec<uuid::Uuid> = match action.as_str() {
+                        "close_left" => ids[..slot].to_vec(),
+                        "close_right" => ids[(slot + 1).min(ids.len())..].to_vec(),
+                        _ => {
+                            let mut others = ids;
+                            others.remove(slot);
+                            others
+                        }
+                    };
+                    let mut closed = 0;
+                    for target in targets {
+                        if matches!(
+                            s.split_engines[index].close_surface_and_empty_pane(target),
+                            crate::split_engine::CloseSurfaceResult::Closed
+                        ) {
+                            closed += 1;
+                        }
+                    }
+                    s.trigger_session_save();
+                    extras["closed"] = json!(closed);
+                }
+                "mark_read" => {
+                    let scope = crate::inbox::Scope {
+                        workspace_id: Some(workspace_uuid),
+                        surface_id: Some(surface_id),
+                    };
+                    let _ = crate::inbox_actions::handle(
+                        &mut s,
+                        crate::inbox::Action::MarkRead {
+                            id: None,
+                            scope,
+                            all: false,
+                        },
+                    );
+                    crate::inbox_actions::refresh(&s);
+                    s.split_engines[index].root.set_attention(pane_id, false);
+                    s.workspaces[index].has_attention = s.split_engines[index].root.any_attention();
+                    s.update_sidebar_attention(index);
+                    s.trigger_session_save();
+                }
+                "mark_unread" => {
+                    crate::inbox_actions::mark_unread_where(
+                        &mut s,
+                        workspace_uuid,
+                        Some(surface_id),
+                    );
+                    s.split_engines[index].root.set_attention(pane_id, true);
+                    s.workspaces[index].has_attention = s.split_engines[index].root.any_attention();
+                    s.update_sidebar_attention(index);
+                }
+                "new_terminal_right" => {
+                    let Some((_, slot)) = s.split_engines[index].surface_location(&surface_uuid)
+                    else {
+                        let _ = resp_tx.send(err(req_id, "not_found", "surface not found"));
+                        return;
+                    };
+                    if focus && index != s.active_index {
+                        s.switch_to_index(index);
+                    }
+                    // The new shell inherits the pane's terminal context (same CWD fallback).
+                    let launch = crate::split_engine::TerminalLaunch {
+                        initial_input: None,
+                        working_directory: None,
+                    };
+                    let created =
+                        match s.split_engines[index].new_terminal_surface(pane_id, launch, focus) {
+                            Ok(created) => created,
+                            Err(message) => {
+                                let _ = resp_tx.send(err(req_id, "create_failed", message));
+                                return;
+                            }
+                        };
+                    let _ = s.split_engines[index].reorder_surface(created, slot + 1);
+                    extras["created_surface_id"] = json!(created);
+                    extras["created_surface_ref"] = json!(s
+                        .handles
+                        .ensure_ref(super::handles::HandleKind::Surface, &created.to_string()));
+                    s.trigger_session_save();
+                }
+                _ => unreachable!("the action list is validated above"),
+            }
+            let surface_ref = s
+                .handles
+                .ensure_ref(super::handles::HandleKind::Surface, &surface_uuid);
+            let workspace_ref = s.handles.ensure_ref(
+                super::handles::HandleKind::Workspace,
+                &workspace_uuid.to_string(),
+            );
+            let window_ref = s.handles.ensure_ref(
+                super::handles::HandleKind::Window,
+                super::handles::MAIN_WINDOW_ID,
+            );
+            drop(s);
+            let mut reply = json!({
+                "action": echoed,
+                "surface_id": surface_uuid,
+                "surface_ref": surface_ref,
+                "workspace_id": workspace_uuid,
                 "workspace_ref": workspace_ref,
                 "window_id": super::handles::MAIN_WINDOW_ID,
                 "window_ref": window_ref,

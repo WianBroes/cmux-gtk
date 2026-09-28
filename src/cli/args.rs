@@ -455,6 +455,40 @@ pub enum Commands {
         #[arg(num_args = 0.., value_name = "TEXT")]
         value_words: Vec<String>,
     },
+    /// Perform a horizontal tab context-menu action (upstream `tab-action`)
+    TabAction {
+        /// Action name; may also be given as the first positional argument
+        #[arg(long)]
+        action: Option<String>,
+        /// Target tab: surface UUID, ref (surface:N) or index; default is the focused tab
+        #[arg(long, visible_alias = "tab")]
+        surface: Option<String>,
+        /// Workspace owning the tab context; defaults to the tab's, else the active one
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Window context; this build has a single window (`window:1`)
+        #[arg(long)]
+        window: Option<String>,
+        /// Title given to `rename` (rejected on Linux: tabs have no custom title)
+        #[arg(long)]
+        title: Option<String>,
+        /// URL given to `new-browser-right` (rejected on Linux)
+        #[arg(long)]
+        url: Option<String>,
+        /// Focus the destination where the action supports it (creation only)
+        #[arg(
+            long,
+            value_name = "true|false",
+            value_parser = clap::builder::BoolishValueParser::new()
+        )]
+        focus: Option<bool>,
+        /// Action, or the first word of a positional title, passed without `--action`
+        #[arg(value_name = "ACTION")]
+        action_positional: Option<String>,
+        /// Remaining words of a positional title (`rename build logs`)
+        #[arg(num_args = 0.., value_name = "TEXT")]
+        value_words: Vec<String>,
+    },
 
     // -- Surface commands --
     /// Reorder listed workspaces first, retaining the relative order of all others
@@ -2681,6 +2715,74 @@ mod handle_argument_tests {
             }
             _ => panic!("wrong command variant"),
         }
+    }
+
+    /// `tab-action` parses upstream's flags, its positional action and trailing title.
+    #[test]
+    fn tab_action_forms_parse() {
+        match parse(&[
+            "tab-action",
+            "--action",
+            "close-right",
+            "--surface",
+            "surface:2",
+        ]) {
+            Commands::TabAction {
+                action, surface, ..
+            } => {
+                assert_eq!(action.as_deref(), Some("close-right"));
+                assert_eq!(surface.as_deref(), Some("surface:2"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        // `--tab` is upstream's spelling of the same target flag.
+        match parse(&["tab-action", "--action", "pin", "--tab", "surface:3"]) {
+            Commands::TabAction { surface, .. } => {
+                assert_eq!(surface.as_deref(), Some("surface:3"))
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["tab-action", "rename", "build", "logs"]) {
+            Commands::TabAction {
+                action,
+                action_positional,
+                value_words,
+                ..
+            } => {
+                assert!(action.is_none());
+                assert_eq!(action_positional.as_deref(), Some("rename"));
+                assert_eq!(value_words, vec!["build", "logs"]);
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&[
+            "tab-action",
+            "--action",
+            "new-terminal-right",
+            "--focus",
+            "true",
+            "--workspace",
+            "workspace:2",
+            "--window",
+            "window:1",
+        ]) {
+            Commands::TabAction {
+                focus,
+                workspace,
+                window,
+                ..
+            } => {
+                assert_eq!(focus, Some(true));
+                assert_eq!(workspace.as_deref(), Some("workspace:2"));
+                assert_eq!(window.as_deref(), Some("window:1"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["tab-action", "--action", "rename", "--title", "Logs"]) {
+            Commands::TabAction { title, .. } => assert_eq!(title.as_deref(), Some("Logs")),
+            _ => panic!("wrong command variant"),
+        }
+        assert!(Cli::try_parse_from(["cmux", "tab-action", "--focus", "maybe"]).is_err());
     }
 
     /// `--id-format` is global, validates its value and leaves the default output untouched.
