@@ -358,6 +358,46 @@ fn pane_drop_direction(x: f64, y: f64, width: f64, height: f64, tab_bar_bottom: 
         .unwrap_or("center")
 }
 
+/// Upstream's tab width cap (Bonsplit `tabMaxWidth`).
+const TAB_MAX_WIDTH: i32 = 220;
+
+/// Give each tab title an even share of the tab strip, up to `TAB_MAX_WIDTH` per tab and never
+/// more than the full title; a narrow pane shares less and the titles truncate.
+fn fit_tab_titles(notebook: &gtk4::Notebook, actions: &gtk4::ScrolledWindow) {
+    let pages = notebook.n_pages() as i32;
+    let width = notebook.width();
+    if pages == 0 || width <= 0 {
+        return;
+    }
+    let (_, actions_width, _, _) = actions.measure(gtk4::Orientation::Horizontal, -1);
+    let share = ((width - actions_width) / pages).min(TAB_MAX_WIDTH);
+    for index in 0..notebook.n_pages() {
+        let Some(tab) = notebook
+            .nth_page(Some(index))
+            .and_then(|page| notebook.tab_label(&page))
+        else {
+            continue;
+        };
+        let mut child = tab.first_child();
+        while let Some(widget) = child {
+            if widget.widget_name() == TAB_TITLE {
+                // The tab's other parts (dot, icon, close, padding) take their share first.
+                let (_, label_natural, _, _) = widget.measure(gtk4::Orientation::Horizontal, -1);
+                let chrome = tab.parent().map_or(0, |gizmo| {
+                    let (_, natural, _, _) = gizmo.measure(gtk4::Orientation::Horizontal, -1);
+                    natural - label_natural
+                });
+                let target = (share - chrome).clamp(0, label_natural);
+                if widget.width_request() != target {
+                    widget.set_width_request(target);
+                }
+                break;
+            }
+            child = widget.next_sibling();
+        }
+    }
+}
+
 /// Construct a tabbed pane and synchronize native focus when its selected page changes.
 fn create_pane(pane_id: u64, initial_surface: PaneSurface) -> SplitNode {
     let notebook = gtk4::Notebook::new();
@@ -408,6 +448,12 @@ fn create_pane(pane_id: u64, initial_surface: PaneSurface) -> SplitNode {
     actions_clip.set_propagate_natural_height(true);
     actions_clip.set_child(Some(&actions));
     notebook.set_action_widget(&actions_clip, gtk4::PackType::End);
+    // GtkNotebook draws tabs at their minimum width, so titles are widened here to fill the
+    // space the pane has, like the browser pane follows its size: checked each frame, set on change.
+    notebook.add_tick_callback(move |notebook, _| {
+        fit_tab_titles(notebook, &actions_clip);
+        gtk4::glib::ControlFlow::Continue
+    });
 
     let surfaces = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     append_pane_surface(&notebook, &surfaces, initial_surface, true);
