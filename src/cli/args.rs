@@ -487,7 +487,8 @@ pub enum Commands {
         /// Side of the new pane: left, right, up or down
         #[arg(value_parser = ["left", "right", "up", "down", "l", "r", "u", "d"])]
         direction: String,
-        /// Surface whose pane is split: UUID, ref (surface:N) or index (default: focused)
+        /// Surface whose pane is split: UUID, ref (surface:N) or index (default: the calling
+        /// terminal, else the focused one)
         #[arg(long, visible_alias = "panel")]
         surface: Option<String>,
         /// Workspace whose focused pane is split: UUID, ref (workspace:N) or index
@@ -508,7 +509,8 @@ pub enum Commands {
         /// Side of the new pane: left, right, up or down
         #[arg(long, default_value = "right", value_parser = ["left", "right", "up", "down", "l", "r", "u", "d"])]
         direction: String,
-        /// Workspace: UUID, ref (workspace:N) or index (default: current)
+        /// Workspace: UUID, ref (workspace:N) or index (default: the calling terminal's, else
+        /// the current one)
         #[arg(long)]
         workspace: Option<String>,
         /// Text typed into the new shell, followed by Enter
@@ -523,10 +525,11 @@ pub enum Commands {
         /// Surface type; only terminal is created here (browser: `cmux browser open`)
         #[arg(long, value_parser = ["terminal", "browser"])]
         r#type: Option<String>,
-        /// Pane: ref (pane:N), surface UUID or index (default: focused pane)
+        /// Pane: ref (pane:N), surface UUID or index (default: the workspace's focused pane)
         #[arg(long)]
         pane: Option<String>,
-        /// Workspace: UUID, ref (workspace:N) or index (default: current)
+        /// Workspace: UUID, ref (workspace:N) or index (default: the calling terminal's, else
+        /// the current one)
         #[arg(long)]
         workspace: Option<String>,
         /// Folder the new terminal starts in
