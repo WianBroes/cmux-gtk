@@ -18,6 +18,7 @@ fn workspace_record(state: &crate::app_state::AppState, index: usize) -> Option<
     Some(json!({
         "index": index,
         "id": workspace.uuid,
+        "ref": state.handles.ensure_ref(super::handles::HandleKind::Workspace, &workspace.uuid.to_string()),
         "uuid": workspace.uuid,
         "git": workspace.git,
         "ports": workspace.ports,
@@ -42,6 +43,64 @@ fn workspace_record(state: &crate::app_state::AppState, index: usize) -> Option<
         "pane_count": counts.map(|(panes, _)| panes),
         "surface_count": counts.map(|(_, surfaces)| surfaces),
     }))
+}
+
+/// The single main window, with its ref and index like upstream `window.list` items.
+fn window_record(state: &crate::app_state::AppState) -> Value {
+    use super::handles::{HandleKind, MAIN_WINDOW_ID};
+    json!({
+        "id": MAIN_WINDOW_ID,
+        "ref": state.handles.ensure_ref(HandleKind::Window, MAIN_WINDOW_ID),
+        "index": 0,
+        "key": true,
+        "workspaces": state.workspaces.len(),
+        "workspace_count": state.workspaces.len(),
+    })
+}
+
+/// Window, workspace, pane and surface of one location, ids beside refs (upstream identify payload).
+/// None when `surface` is given but not in that workspace.
+fn identify_location(
+    state: &crate::app_state::AppState,
+    index: usize,
+    surface: Option<uuid::Uuid>,
+) -> Option<Value> {
+    use super::handles::{HandleKind, MAIN_WINDOW_ID};
+    let workspace = state.workspaces.get(index)?.uuid.to_string();
+    let engine = state.split_engines.get(index)?;
+    let mut payload = json!({
+        "window_id": MAIN_WINDOW_ID,
+        "window_ref": state.handles.ensure_ref(HandleKind::Window, MAIN_WINDOW_ID),
+        "workspace_id": workspace,
+        "workspace_ref": state.handles.ensure_ref(HandleKind::Workspace, &workspace),
+        "surface_id": null, "surface_ref": null, "surface_type": null,
+        "is_browser_surface": null, "pane_id": null, "pane_ref": null,
+    });
+    if let Some(surface) = surface {
+        let pane = engine
+            .pane_info()
+            .into_iter()
+            .find(|pane| pane.surface_ids.contains(&surface))?;
+        let browser = engine
+            .browser_tabs()
+            .iter()
+            .any(|widgets| widgets.uuid == surface);
+        let id = surface.to_string();
+        let fields = payload.as_object_mut()?;
+        fields.insert(
+            "surface_ref".into(),
+            json!(state.handles.ensure_ref(HandleKind::Surface, &id)),
+        );
+        fields.insert("surface_id".into(), json!(id));
+        fields.insert(
+            "surface_type".into(),
+            json!(if browser { "browser" } else { "terminal" }),
+        );
+        fields.insert("is_browser_surface".into(), json!(browser));
+        fields.insert("pane_id".into(), json!(format!("pane:{}", pane.id)));
+        fields.insert("pane_ref".into(), json!(format!("pane:{}", pane.id)));
+    }
+    Some(payload)
 }
 
 /// Resolve a live terminal in the current workspace without focus changes; GTK-thread callers only.
@@ -170,19 +229,65 @@ fn handle_socket_command_traced(
             );
         }
 
+        SocketCommand::ResolveHandles {
+            req_id,
+            refs,
+            resp_tx,
+        } => {
+            let s = state.borrow();
+            let response = match super::handles::resolve_all(&s.handles, &s, &refs) {
+                Ok(resolved) => ok(req_id, json!(resolved)),
+                Err(message) => err(req_id, "not_found", &message),
+            };
+            let _ = resp_tx.send(response);
+        }
+
         // -- system.* --
         SocketCommand::Ping { req_id, resp_tx } => {
             let _ = resp_tx.send(ok(req_id, json!({"pong": true})));
         }
 
-        SocketCommand::Identify { req_id, resp_tx } => {
+        SocketCommand::Identify {
+            req_id,
+            caller,
+            resp_tx,
+        } => {
             let socket_path = crate::socket::socket_path().to_string_lossy().to_string();
+            let s = state.borrow();
+            let focused = s.split_engines.get(s.active_index).and_then(|engine| {
+                let surface = engine
+                    .pane_info()
+                    .into_iter()
+                    .find(|pane| pane.id == engine.active_pane_id)
+                    .and_then(|pane| pane.selected_surface);
+                identify_location(&s, s.active_index, surface)
+            });
+            let caller = caller.and_then(|caller| {
+                let text = |key: &str| caller.get(key).and_then(Value::as_str);
+                let surface = text("surface_id").and_then(|id| uuid::Uuid::parse_str(id).ok());
+                let index = match (surface, text("workspace_id")) {
+                    (Some(surface), _) => s.split_engines.iter().position(|engine| {
+                        engine
+                            .pane_info()
+                            .iter()
+                            .any(|pane| pane.surface_ids.contains(&surface))
+                    }),
+                    (None, Some(workspace)) => s
+                        .workspaces
+                        .iter()
+                        .position(|candidate| candidate.uuid.to_string() == workspace),
+                    (None, None) => None,
+                }?;
+                identify_location(&s, index, surface)
+            });
             let _ = resp_tx.send(ok(
                 req_id,
                 json!({
                     "version": env!("CARGO_PKG_VERSION"),
                     "platform": "linux",
                     "socket_path": socket_path,
+                    "focused": focused,
+                    "caller": caller,
                 }),
             ));
         }
@@ -841,18 +946,23 @@ fn handle_socket_command_traced(
         // -- window.* --
         SocketCommand::WindowList { req_id, resp_tx } => {
             // SOCK-05: No focus side effects.
-            let workspace_count = state.borrow().workspaces.len();
+            let s = state.borrow();
             let _ = resp_tx.send(ok(
                 req_id,
                 json!({
-                    "windows": [{"id": "main", "workspaces": workspace_count}]
+                    "windows": [window_record(&s)]
                 }),
             ));
         }
 
         SocketCommand::WindowCurrent { req_id, resp_tx } => {
             // SOCK-05: No focus side effects.
-            let _ = resp_tx.send(ok(req_id, json!({"id": "main"})));
+            let s = state.borrow();
+            let window = window_record(&s);
+            let _ = resp_tx.send(ok(
+                req_id,
+                json!({"id": window["id"], "ref": window["ref"], "window_id": window["id"], "window_ref": window["ref"]}),
+            ));
         }
 
         // -- debug.* --
@@ -958,9 +1068,14 @@ fn handle_socket_command_traced(
                 s.workspaces.iter().zip(s.split_engines.iter()).enumerate()
             {
                 for (pane_uuid, _pane_id, active) in engine.all_panes() {
+                    let workspace = ws.uuid.to_string();
                     panes.push(json!({
                         "uuid": pane_uuid.to_string(),
-                        "workspace_uuid": ws.uuid.to_string(),
+                        "id": pane_uuid.to_string(),
+                        "ref": s.handles.ensure_ref(super::handles::HandleKind::Surface, &pane_uuid.to_string()),
+                        "workspace_uuid": workspace,
+                        "workspace_id": workspace,
+                        "workspace_ref": s.handles.ensure_ref(super::handles::HandleKind::Workspace, &workspace),
                         "active": active && ws_idx == s.active_index,
                     }));
                 }
@@ -1420,10 +1535,24 @@ fn handle_socket_command_traced(
                     .unwrap_or_default();
                 for pane in engine.pane_info() {
                     let realized = geometry.iter().find(|item| item.id == pane.id);
+                    let workspace = ws.uuid.to_string();
+                    let surface_refs: Vec<String> = pane
+                        .surface_ids
+                        .iter()
+                        .map(|id| {
+                            s.handles
+                                .ensure_ref(super::handles::HandleKind::Surface, &id.to_string())
+                        })
+                        .collect();
                     panes.push(json!({
                         "id": format!("pane:{}", pane.id),
+                        "ref": format!("pane:{}", pane.id),
                         "uuid": pane.selected_surface,
                         "workspace_uuid": ws.uuid,
+                        "workspace_id": workspace,
+                        "workspace_ref": s.handles.ensure_ref(super::handles::HandleKind::Workspace, &workspace),
+                        "surface_refs": surface_refs,
+                        "selected_surface_ref": pane.selected_surface.map(|id| s.handles.ensure_ref(super::handles::HandleKind::Surface, &id.to_string())),
                         "surface_ids": pane.surface_ids,
                         "active_surface_uuid": pane.selected_surface,
                         "focused": ws_idx == s.active_index && pane.id == engine.active_pane_id,
@@ -1930,9 +2059,10 @@ pub(super) fn start_browser_lifecycle(
                 if let Some(url) = &initial_url {
                     widgets.url_entry.set_text(url);
                 }
-                s.browser_surface_counter += 1;
-                let ref_id = s.browser_surface_counter;
                 let id = widgets.uuid;
+                let ref_id = s
+                    .handles
+                    .ordinal(super::handles::HandleKind::Surface, &id.to_string());
                 s.browser_surface_refs.insert(ref_id, id.to_string());
                 if let Some(fields) = result.as_object_mut() {
                     fields.insert("surface_ref".into(), json!(format!("surface:{ref_id}")));

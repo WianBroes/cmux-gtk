@@ -4,6 +4,7 @@ pub mod auth;
 pub mod commands;
 mod dispatch;
 mod framing;
+pub(crate) mod handles;
 pub(crate) mod project;
 mod response;
 use dispatch::dispatch_line;

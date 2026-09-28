@@ -160,8 +160,10 @@ pub(crate) fn wire_restored_browser_tabs(
                 .values()
                 .any(|value| value == &uuid.to_string())
             {
-                state.browser_surface_counter += 1;
-                let reference = state.browser_surface_counter;
+                let reference = state.handles.ordinal(
+                    crate::socket::handles::HandleKind::Surface,
+                    &uuid.to_string(),
+                );
                 state
                     .browser_surface_refs
                     .insert(reference, uuid.to_string());
@@ -367,8 +369,10 @@ pub(crate) fn wire_browser_tab(
             .values()
             .any(|id| id == &surface_uuid.to_string())
         {
-            s.browser_surface_counter += 1;
-            let reference = s.browser_surface_counter;
+            let reference = s.handles.ordinal(
+                crate::socket::handles::HandleKind::Surface,
+                &surface_uuid.to_string(),
+            );
             s.browser_surface_refs
                 .insert(reference, surface_uuid.to_string());
         }

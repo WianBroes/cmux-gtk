@@ -151,6 +151,29 @@ async fn dispatch_request(
         };
     }
 
+    // Short refs (`workspace:N`…) resolve on GTK against the live topology, then decode as UUIDs.
+    let refs = super::handles::refs_in(&mut params);
+    if !refs.is_empty() {
+        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+        let resolve = commands::SocketCommand::ResolveHandles {
+            req_id: req_id.clone(),
+            refs,
+            resp_tx,
+        };
+        if cmd_tx.try_send(resolve).is_err() {
+            return err(req_id, "overloaded", "GTK command queue is full");
+        }
+        let response = resp_rx
+            .await
+            .unwrap_or_else(|_| err(req_id.clone(), "internal_error", "handler dropped response"));
+        let Some(resolved) = response.get("result").and_then(|result| {
+            serde_json::from_value::<std::collections::HashMap<String, String>>(result.clone()).ok()
+        }) else {
+            return response;
+        };
+        super::handles::rewrite(&mut params, &resolved);
+    }
+
     let target = if matches!(
         method.as_str(),
         "surface.split"
@@ -238,6 +261,10 @@ async fn dispatch_request(
         },
         "system.identify" => commands::SocketCommand::Identify {
             req_id: req_id.clone(),
+            caller: params
+                .get_mut("caller")
+                .map(serde_json::Value::take)
+                .filter(|caller| caller.is_object()),
             resp_tx,
         },
         "system.capabilities" => commands::SocketCommand::Capabilities {

@@ -59,8 +59,8 @@ pub struct AppState {
     pub browser_sessions: std::collections::HashMap<uuid::Uuid, crate::browser::BrowserManager>,
     /// Retain asynchronous daemon-close tasks for the post-GTK shutdown drain.
     pub browser_shutdown_tasks: crate::browser::ShutdownTasks,
-    /// Next browser surface short-ref counter (monotonically increasing, per D-06).
-    pub browser_surface_counter: u32,
+    /// Short `window:N` / `workspace:N` / `surface:N` refs handed to socket clients.
+    pub handles: crate::socket::handles::HandleRegistry,
     /// Maps short-ref ID -> surface UUID (lost on restart, per D-06).
     pub browser_surface_refs: std::collections::HashMap<u32, String>,
 }
@@ -119,7 +119,7 @@ impl AppState {
             browser_sessions: std::collections::HashMap::new(),
             browser_restore_gate: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
             browser_shutdown_tasks: Default::default(),
-            browser_surface_counter: 0,
+            handles: Default::default(),
             browser_surface_refs: std::collections::HashMap::new(),
         };
         Rc::new(RefCell::new(state))

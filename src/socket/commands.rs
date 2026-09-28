@@ -20,6 +20,12 @@ pub enum SocketCommand {
         trace_id: uuid::Uuid,
         queued_at: std::time::Instant,
     },
+    /// Resolve `window:N` / `workspace:N` / `surface:N` refs to ids before a request is decoded.
+    ResolveHandles {
+        req_id: Value,
+        refs: Vec<String>,
+        resp_tx: RespTx,
+    },
     // -- system.* --
     Ping {
         req_id: Value,
@@ -27,6 +33,8 @@ pub enum SocketCommand {
     },
     Identify {
         req_id: Value,
+        /// Optional `{workspace_id, surface_id}` naming the calling terminal.
+        caller: Option<Value>,
         resp_tx: RespTx,
     },
     Capabilities {
