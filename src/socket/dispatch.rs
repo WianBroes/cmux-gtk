@@ -1105,7 +1105,10 @@ async fn dispatch_request(
         | "sidebar.set_progress"
         | "sidebar.clear_progress"
         | "sidebar.report_meta_block"
-        | "sidebar.clear_meta_block" => {
+        | "sidebar.clear_meta_block"
+        | "sidebar.log"
+        | "sidebar.clear_log"
+        | "sidebar.state" => {
             let workspace = match params.get("workspace_id").filter(|value| !value.is_null()) {
                 Some(value) => match value.as_str().and_then(|id| uuid::Uuid::parse_str(id).ok()) {
                     Some(id) => Some(id),

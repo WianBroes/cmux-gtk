@@ -1,4 +1,4 @@
-//! Bounded agent-owned sidebar status and progress, independent of terminal focus.
+//! Bounded agent-owned sidebar status, progress and log, independent of terminal focus.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -58,7 +58,40 @@ impl Block {
     }
 }
 
-/// At most 32 status entries, eight Markdown blocks and one progress record per workspace.
+/// Log severity, upstream `SidebarLogLevel`; the sidebar marks each with its own glyph and color.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    #[default]
+    Info,
+    Progress,
+    Success,
+    Warning,
+    Error,
+}
+
+/// One sidebar log line; the sidebar shows the latest, `list-log` the retained history.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct LogEntry {
+    pub message: String,
+    #[serde(default)]
+    pub level: LogLevel,
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+impl LogEntry {
+    fn valid(&self) -> bool {
+        valid_text(&self.message, 1024)
+            && !self.message.trim().is_empty()
+            && self.source.as_ref().is_none_or(|source| valid_text(source, 64))
+    }
+}
+
+/// Retained log entries per workspace, oldest dropped first (upstream default `sidebarMaxLogEntries`).
+pub const MAX_LOG_ENTRIES: usize = 50;
+
+/// At most 32 status entries, eight Markdown blocks, one progress record and 50 log lines per workspace.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Metadata {
     #[serde(default)]
@@ -67,6 +100,8 @@ pub struct Metadata {
     pub blocks: BTreeMap<String, Block>,
     #[serde(default)]
     pub progress: Option<Progress>,
+    #[serde(default)]
+    pub logs: Vec<LogEntry>,
 }
 
 /// Reject oversized/non-displayable metadata before crossing the GTK bridge.
@@ -106,6 +141,9 @@ impl Metadata {
                 p.value = p.value.clamp(0.0, 1.0);
                 p
             });
+        self.logs.retain(LogEntry::valid);
+        let excess = self.logs.len().saturating_sub(MAX_LOG_ENTRIES);
+        self.logs.drain(..excess);
         self
     }
 }
@@ -119,6 +157,8 @@ pub enum Action {
     ClearProgress,
     SetBlock(String, Block),
     ClearBlock(String),
+    AppendLog(LogEntry),
+    ClearLog,
 }
 
 /// Decode bounded command content; explicit workspace UUID parsing belongs to the transport boundary.
@@ -132,7 +172,7 @@ pub fn parse(method: &str, params: &serde_json::Value) -> Result<Action, &'stati
             .ok_or("invalid status key")
     };
     match method {
-        "sidebar.metadata" => Ok(Action::Get),
+        "sidebar.metadata" | "sidebar.state" => Ok(Action::Get),
         "sidebar.set_status" => {
             if params.get("panel").is_some() {
                 return Err("panel-owned status is not yet supported");
@@ -164,6 +204,17 @@ pub fn parse(method: &str, params: &serde_json::Value) -> Result<Action, &'stati
             Ok(Action::SetProgress(progress))
         }
         "sidebar.clear_progress" => Ok(Action::ClearProgress),
+        "sidebar.log" => {
+            let entry: LogEntry =
+                LogEntry::deserialize(params).map_err(|_| {
+                    "invalid log fields (level: info, progress, success, warning, error)"
+                })?;
+            if !entry.valid() {
+                return Err("log message must be nonempty and at most 1024 bytes");
+            }
+            Ok(Action::AppendLog(entry))
+        }
+        "sidebar.clear_log" => Ok(Action::ClearLog),
         _ => Err("unknown metadata operation"),
     }
 }
@@ -273,6 +324,18 @@ pub fn apply(metadata: &mut Metadata, action: Action) -> Result<bool, &'static s
         }
         Action::SetProgress(progress) => metadata.progress = Some(progress),
         Action::ClearProgress => metadata.progress = None,
+        Action::AppendLog(entry) => {
+            if metadata.logs.len() >= MAX_LOG_ENTRIES {
+                metadata.logs.remove(0);
+            }
+            metadata.logs.push(entry);
+        }
+        Action::ClearLog => {
+            if metadata.logs.is_empty() {
+                return Ok(false);
+            }
+            metadata.logs.clear();
+        }
     }
     Ok(true)
 }
@@ -327,6 +390,22 @@ pub fn render(container: &gtk4::Box, metadata: &Metadata) {
         expander.set_child(Some(&scroll));
         container.append(&expander);
     }
+    if let Some(entry) = metadata.logs.last() {
+        let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+        row.add_css_class("workspace-log");
+        let mark = gtk4::Label::new(None);
+        mark.set_markup(&log_mark_markup(entry.level));
+        row.append(&mark);
+        let label = gtk4::Label::new(Some(&entry.message));
+        label.set_xalign(0.0);
+        label.set_single_line_mode(true);
+        label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+        label.set_max_width_chars(28);
+        label.add_css_class("dim-label");
+        label.set_tooltip_text(Some(&entry.message));
+        row.append(&label);
+        container.append(&row);
+    }
     if let Some(progress) = &metadata.progress {
         let bar = gtk4::ProgressBar::new();
         bar.set_fraction(progress.value);
@@ -335,8 +414,23 @@ pub fn render(container: &gtk4::Box, metadata: &Metadata) {
         container.append(&bar);
     }
     container.set_visible(
-        !metadata.statuses.is_empty() || !metadata.blocks.is_empty() || metadata.progress.is_some(),
+        !metadata.statuses.is_empty()
+            || !metadata.blocks.is_empty()
+            || metadata.progress.is_some()
+            || !metadata.logs.is_empty(),
     );
+}
+
+/// Level glyph in upstream's per-level colors (`configureLog`: circle, triangle, check, warning, cross).
+fn log_mark_markup(level: LogLevel) -> String {
+    let (glyph, color) = match level {
+        LogLevel::Info => ("●", "#8e8e93"),
+        LogLevel::Progress => ("▶", "#0a84ff"),
+        LogLevel::Success => ("✔", "#30d158"),
+        LogLevel::Warning => ("▲", "#ff9f0a"),
+        LogLevel::Error => ("✖", "#ff453a"),
+    };
+    format!("<span foreground='{color}' size='small'>{glyph}</span>")
 }
 
 #[cfg(test)]
@@ -409,6 +503,33 @@ mod tests {
             },
         );
         assert!(!metadata.validated().blocks.contains_key("invalid"));
+    }
+
+    /// Log lines keep upstream's level names, drop the oldest past the cap and survive session load.
+    #[test]
+    fn log_is_bounded_and_validated() {
+        assert!(parse("sidebar.log", &serde_json::json!({"message":"x","level":"debug"})).is_err());
+        assert!(parse("sidebar.log", &serde_json::json!({"message":"  "})).is_err());
+        let mut metadata = Metadata::default();
+        for index in 0..MAX_LOG_ENTRIES + 3 {
+            let Ok(action) = parse(
+                "sidebar.log",
+                &serde_json::json!({"message":index.to_string(),"level":"success","source":"ci"}),
+            ) else {
+                panic!("valid log rejected");
+            };
+            apply(&mut metadata, action).unwrap();
+        }
+        assert_eq!(metadata.logs.len(), MAX_LOG_ENTRIES);
+        assert_eq!(metadata.logs[0].message, "3");
+        assert_eq!(metadata.logs.last().unwrap().level, LogLevel::Success);
+        let saved = serde_json::to_value(&metadata).unwrap();
+        let loaded: Metadata = serde_json::from_value(saved).unwrap();
+        assert_eq!(loaded.validated().logs.len(), MAX_LOG_ENTRIES);
+        let old: Metadata = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(old.logs.is_empty());
+        assert!(apply(&mut metadata, Action::ClearLog).unwrap());
+        assert!(!apply(&mut metadata, Action::ClearLog).unwrap());
     }
 
     /// Reject active non-web schemes, invalid formats and oversized destinations at the worker boundary.

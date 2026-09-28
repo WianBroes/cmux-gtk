@@ -386,6 +386,9 @@ pub fn format_response(method: &str, result: &Value, json_mode: bool, color: boo
         "system.identify" => format_identify(result),
         "system.capabilities" => format_capabilities(result, color),
         "notification.list" => format_notification_list(result, color),
+        "sidebar.log" | "sidebar.clear_log" => "OK".to_string(),
+        "sidebar.list_log" => format_log_list(result),
+        "sidebar.state" => format_sidebar_state(result),
         "debug.layout" => serde_json::to_string_pretty(result).unwrap_or_default(),
 
         // Mutation commands: show success message
@@ -413,6 +416,158 @@ pub fn format_response(method: &str, result: &Value, json_mode: bool, color: boo
         // Default: pretty-print JSON for uncommon commands
         _ => format_fallback(result),
     }
+}
+
+/// One log line as upstream `list_log` prints it: `[source] [level] message`.
+fn log_line(entry: &Value) -> String {
+    let field = |key| entry.get(key).and_then(|v| v.as_str()).unwrap_or("");
+    let line = format!("[{}] {}", field("level"), field("message"));
+    match field("source") {
+        "" => line,
+        source => format!("[{source}] {line}"),
+    }
+}
+
+/// `list-log`: one line per entry, oldest first.
+fn format_log_list(result: &Value) -> String {
+    match result.get("logs").and_then(|v| v.as_array()) {
+        Some(logs) if !logs.is_empty() => logs.iter().map(log_line).collect::<Vec<_>>().join("\n"),
+        _ => "No log entries".to_string(),
+    }
+}
+
+/// Entries of a keyed map, highest priority first then by key (the sidebar's order).
+fn by_priority(map: Option<&Value>) -> Vec<(&String, &Value)> {
+    let mut entries: Vec<_> = map
+        .and_then(|v| v.as_object())
+        .map(|map| map.iter().collect())
+        .unwrap_or_default();
+    let priority = |value: &Value| value.get("priority").and_then(|v| v.as_i64()).unwrap_or(0);
+    entries.sort_by(|(a, av), (b, bv)| priority(bv).cmp(&priority(av)).then_with(|| a.cmp(b)));
+    entries
+}
+
+/// `sidebar-state`: upstream's `key=value` lines (`sidebarState`), fields we do not track say `none`.
+fn format_sidebar_state(result: &Value) -> String {
+    let text = |value: Option<&Value>| value.and_then(|v| v.as_str()).map(str::to_owned);
+    let cwd = text(result.get("cwd"));
+    let mut lines = vec![
+        format!(
+            "tab={}",
+            text(result.get("workspace_id")).unwrap_or_default()
+        ),
+        format!(
+            "color={}",
+            text(result.get("color")).unwrap_or("none".into())
+        ),
+        format!("cwd={}", cwd.clone().unwrap_or_default()),
+        format!("focused_cwd={}", cwd.unwrap_or("unknown".into())),
+        format!(
+            "focused_panel={}",
+            text(result.get("focused_surface_id")).unwrap_or("unknown".into())
+        ),
+    ];
+    lines.push(match result.get("git").filter(|v| !v.is_null()) {
+        Some(git) => format!(
+            "git_branch={} {}",
+            text(git.get("branch")).unwrap_or_default(),
+            if git.get("dirty").and_then(|v| v.as_bool()).unwrap_or(false) {
+                "dirty"
+            } else {
+                "clean"
+            }
+        ),
+        None => "git_branch=none".into(),
+    });
+    lines.push("pr=none".into());
+    lines.push("pr_label=none".into());
+    let mut ports: Vec<u64> = result
+        .get("ports")
+        .and_then(|v| v.as_array())
+        .map(|ports| {
+            ports
+                .iter()
+                .filter_map(|p| p.get("port").and_then(|v| v.as_u64()))
+                .collect()
+        })
+        .unwrap_or_default();
+    ports.sort_unstable();
+    ports.dedup();
+    lines.push(if ports.is_empty() {
+        "ports=none".into()
+    } else {
+        format!(
+            "ports={}",
+            ports
+                .iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    });
+    lines.push(match result.get("progress").filter(|v| !v.is_null()) {
+        Some(progress) => format!(
+            "progress={:.2} {}",
+            progress
+                .get("value")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0),
+            text(progress.get("label")).unwrap_or_default()
+        )
+        .trim_end()
+        .to_string(),
+        None => "progress=none".into(),
+    });
+    let statuses = by_priority(result.get("statuses"));
+    lines.push(format!("status_count={}", statuses.len()));
+    for (key, status) in statuses {
+        let mut line = format!("  {key}={}", text(status.get("value")).unwrap_or_default());
+        for field in ["icon", "color", "url"] {
+            if let Some(value) = text(status.get(field)) {
+                line.push_str(&format!(" {field}={value}"));
+            }
+        }
+        if let Some(priority) = status
+            .get("priority")
+            .and_then(|v| v.as_i64())
+            .filter(|p| *p != 0)
+        {
+            line.push_str(&format!(" priority={priority}"));
+        }
+        if let Some(format) = text(status.get("format")).filter(|f| f != "plain") {
+            line.push_str(&format!(" format={format}"));
+        }
+        lines.push(line);
+    }
+    let blocks = by_priority(result.get("blocks"));
+    lines.push(format!("meta_block_count={}", blocks.len()));
+    for (key, block) in blocks {
+        let mut line = format!(
+            "  {key}={}",
+            text(block.get("markdown"))
+                .unwrap_or_default()
+                .replace('\n', "\\n")
+        );
+        if let Some(priority) = block
+            .get("priority")
+            .and_then(|v| v.as_i64())
+            .filter(|p| *p != 0)
+        {
+            line.push_str(&format!(" priority={priority}"));
+        }
+        lines.push(line);
+    }
+    let logs = result
+        .get("logs")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    lines.push(format!("log_count={}", logs.len()));
+    for entry in &logs[logs.len().saturating_sub(5)..] {
+        let field = |key| entry.get(key).and_then(|v| v.as_str()).unwrap_or("");
+        lines.push(format!("  [{}] {}", field("level"), field("message")));
+    }
+    lines.join("\n")
 }
 
 /// Format a browser surface list response.

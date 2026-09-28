@@ -769,6 +769,38 @@ pub enum Commands {
         #[arg(long, alias = "tab", env = "CMUX_WORKSPACE_ID")]
         workspace: Option<String>,
     },
+    /// Append a line to the workspace log; the sidebar shows the latest
+    Log {
+        /// info, progress, success, warning or error
+        #[arg(long, default_value = "info")]
+        level: String,
+        /// Label naming who wrote the line
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long, alias = "tab", env = "CMUX_WORKSPACE_ID")]
+        workspace: Option<String>,
+        /// Message (put it after `--` when it starts with a dash)
+        #[arg(required = true, num_args = 1.., allow_hyphen_values = true, trailing_var_arg = true)]
+        message: Vec<String>,
+    },
+    /// List the workspace log, oldest first
+    ListLog {
+        /// Only the last N entries
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long, alias = "tab", env = "CMUX_WORKSPACE_ID")]
+        workspace: Option<String>,
+    },
+    /// Clear the workspace log
+    ClearLog {
+        #[arg(long, alias = "tab", env = "CMUX_WORKSPACE_ID")]
+        workspace: Option<String>,
+    },
+    /// Show everything the sidebar knows about a workspace
+    SidebarState {
+        #[arg(long, alias = "tab", env = "CMUX_WORKSPACE_ID")]
+        workspace: Option<String>,
+    },
 
     // -- Notification commands --
     /// Deliver a notification to a terminal without changing focus
@@ -783,6 +815,12 @@ pub enum Commands {
         workspace: Option<String>,
         #[arg(long)]
         surface: Option<String>,
+        /// Clear this terminal's (or the given target's) notifications instead
+        #[arg(long, conflicts_with_all = ["title", "subtitle", "body", "message"])]
+        clear: bool,
+        /// Body text, when --body is not given
+        #[arg(conflicts_with = "body")]
+        message: Option<String>,
     },
     /// Inspect, read, dismiss and navigate notification history
     Notifications {
@@ -791,6 +829,24 @@ pub enum Commands {
     },
     /// List notifications
     ListNotifications,
+    /// Remove one notification, or all read ones (same as `notifications dismiss`)
+    DismissNotification {
+        #[arg(
+            long,
+            required_unless_present = "all_read",
+            conflicts_with = "all_read"
+        )]
+        id: Option<String>,
+        #[arg(long)]
+        all_read: bool,
+    },
+    /// Clear notifications of a workspace/surface, or all of them (same as `notifications clear`)
+    ClearNotifications {
+        #[arg(long, alias = "tab", env = "CMUX_WORKSPACE_ID")]
+        workspace: Option<String>,
+        #[arg(long, requires = "workspace")]
+        surface: Option<String>,
+    },
     /// Clear a notification
     ClearNotification {
         /// Workspace UUID (legacy alias; notifications clear supports explicit scopes)
@@ -909,7 +965,11 @@ pub enum HookCommands {
     /// Install supported hooks while preserving unrelated agent configuration
     Setup {
         /// Agent provider (currently claude); omitted discovers available supported providers
+        #[arg(conflicts_with = "agent_flag")]
         agent: Option<String>,
+        /// Same as the positional agent (upstream form)
+        #[arg(long = "agent", value_name = "AGENT")]
+        agent_flag: Option<String>,
     },
     /// Receive a Claude Code hook payload on stdin
     Claude {

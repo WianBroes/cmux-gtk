@@ -317,11 +317,7 @@ fn handle_socket_command_traced(
                             &state.sidebar_list,
                             state.workspaces[index].id,
                         ) {
-                            if let Some(vbox) = row
-                                .child()
-                                .and_then(|child| child.first_child())
-                                .and_downcast::<gtk4::Box>()
-                            {
+                            if let Some(vbox) = crate::sidebar::row_text(&row) {
                                 let mut child = vbox.first_child();
                                 while let Some(widget) = child {
                                     child = widget.next_sibling();
@@ -339,11 +335,19 @@ fn handle_socket_command_traced(
                         }
                         state.trigger_session_save();
                     }
-                    let metadata = &state.workspaces[index].metadata;
+                    let workspace = &state.workspaces[index];
+                    let metadata = &workspace.metadata;
+                    let focused_surface = state
+                        .split_engines
+                        .get(index)
+                        .and_then(|engine| engine.active_pane_uuid());
                     let _ = resp_tx.send(ok(
                         req_id,
-                        json!({"workspace_id":state.workspaces[index].uuid,
-                        "statuses":metadata.statuses,"blocks":metadata.blocks,"progress":metadata.progress}),
+                        json!({"workspace_id":workspace.uuid,
+                        "statuses":metadata.statuses,"blocks":metadata.blocks,"progress":metadata.progress,
+                        "logs":metadata.logs,"color":workspace.color,
+                        "cwd":state.local_workspace_directory(index),
+                        "focused_surface_id":focused_surface,"git":workspace.git,"ports":workspace.ports}),
                     ));
                 }
                 Err(message) => {
@@ -445,6 +449,9 @@ fn handle_socket_command_traced(
                 "sidebar.clear_status",
                 "sidebar.set_progress",
                 "sidebar.clear_progress",
+                "sidebar.log",
+                "sidebar.clear_log",
+                "sidebar.state",
                 "events.agent_hook",
                 "events.stream",
                 "system.diagnostics",

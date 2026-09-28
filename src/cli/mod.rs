@@ -171,10 +171,10 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
     }
 
     if let Commands::Hooks {
-        command: args::HookCommands::Setup { agent },
+        command: args::HookCommands::Setup { agent, agent_flag },
     } = &cli.command
     {
-        return hooks::setup(agent.as_deref());
+        return hooks::setup(agent.as_deref().or(agent_flag.as_deref()));
     }
     let agent_hook = matches!(
         &cli.command,
@@ -438,6 +438,15 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
     {
         let result = tree::build(&mut client, all, workspace.as_deref(), window.as_deref());
         ("tree".to_string(), result)
+    } else if let Commands::ListLog {
+        limit,
+        ref workspace,
+    } = cli.command
+    {
+        let result = client
+            .call("sidebar.metadata", serde_json::json!({"workspace_id":workspace}))
+            .map(|metadata| log_listing(&metadata, limit));
+        ("sidebar.list_log".to_string(), result)
     } else if let Commands::ListPaneSurfaces { ref pane } = cli.command {
         let result = tree::pane_surfaces(&mut client, pane.as_deref());
         ("pane.surfaces".to_string(), result)
@@ -1314,14 +1323,52 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
         Commands::ClearProgress { workspace } => {
             ("sidebar.clear_progress", json!({"workspace_id":workspace}))
         }
+        Commands::Log {
+            level,
+            source,
+            workspace,
+            message,
+        } => (
+            "sidebar.log",
+            json!({"message":message.join(" "),"level":level,"source":source,"workspace_id":workspace}),
+        ),
+        Commands::ListLog { workspace, .. } => {
+            ("sidebar.metadata", json!({"workspace_id":workspace}))
+        }
+        Commands::ClearLog { workspace } => {
+            ("sidebar.clear_log", json!({"workspace_id":workspace}))
+        }
+        Commands::SidebarState { workspace } => {
+            ("sidebar.state", json!({"workspace_id":workspace}))
+        }
         Commands::ListNotifications => ("notification.list", json!({})),
+        Commands::Notify {
+            workspace,
+            surface,
+            clear: true,
+            ..
+        } => {
+            if workspace.is_some() || surface.is_some() {
+                (
+                    "notification.clear",
+                    json!({"workspace_id":workspace,"surface_id":surface}),
+                )
+            } else {
+                let mut params = notification_caller_params();
+                params["caller"] = json!(true);
+                ("notification.clear", params)
+            }
+        }
         Commands::Notify {
             title,
             subtitle,
             body,
             workspace,
             surface,
+            message,
+            ..
         } => {
+            let body = message.as_ref().unwrap_or(body);
             if workspace.is_some() || surface.is_some() {
                 (
                     "notification.create",
@@ -1367,10 +1414,28 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             args::NotificationCommands::Open { id } => ("notification.open", json!({"id":id})),
             args::NotificationCommands::JumpToUnread => ("notification.jump_to_unread", json!({})),
         },
+        Commands::DismissNotification { id, all_read } => {
+            ("notification.dismiss", json!({"id":id,"all_read":all_read}))
+        }
+        Commands::ClearNotifications { workspace, surface } => (
+            "notification.clear",
+            json!({"workspace_id":workspace,"surface_id":surface}),
+        ),
         Commands::ClearNotification { id } => ("notification.clear", json!({"id": id})),
 
         Commands::Browser(cmd) => browser_command_to_rpc(cmd),
     }
+}
+
+/// Keep the last `limit` log entries of a `sidebar.metadata` reply (upstream `list_log --limit`).
+fn log_listing(metadata: &serde_json::Value, limit: Option<usize>) -> serde_json::Value {
+    let logs = metadata
+        .get("logs")
+        .and_then(|logs| logs.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let skip = limit.map_or(0, |limit| logs.len().saturating_sub(limit));
+    serde_json::json!({"workspace_id":metadata.get("workspace_id"),"logs":logs[skip..]})
 }
 
 /// Expand the `send` escape sequences: `\n` and `\r` become a carriage return,

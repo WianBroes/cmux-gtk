@@ -466,7 +466,8 @@ fn collect_targets<'a>(command: &'a mut Commands, targets: &mut Vec<Target<'a>>)
         }
         | Commands::Ports {
             workspace, surface, ..
-        } => {
+        }
+        | Commands::ClearNotifications { workspace, surface } => {
             targets.push(Target::Optional(HandleKind::Workspace, workspace));
             targets.push(Target::Optional(HandleKind::Surface, surface));
         }
@@ -477,7 +478,11 @@ fn collect_targets<'a>(command: &'a mut Commands, targets: &mut Vec<Target<'a>>)
         | Commands::ClearStatus { workspace, .. }
         | Commands::ListStatus { workspace, .. }
         | Commands::SetProgress { workspace, .. }
-        | Commands::ClearProgress { workspace, .. } => {
+        | Commands::ClearProgress { workspace, .. }
+        | Commands::Log { workspace, .. }
+        | Commands::ListLog { workspace, .. }
+        | Commands::ClearLog { workspace, .. }
+        | Commands::SidebarState { workspace, .. } => {
             targets.push(Target::Optional(HandleKind::Workspace, workspace))
         }
 
