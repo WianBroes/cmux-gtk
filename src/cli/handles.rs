@@ -676,6 +676,14 @@ fn collect_targets<'a>(command: &'a mut Commands, targets: &mut Vec<Target<'a>>)
             targets.push(Target::Optional(HandleKind::Window, window));
         }
 
+        Commands::MoveTabToNewWorkspace {
+            surface, workspace, window, ..
+        } => {
+            targets.push(Target::Optional(HandleKind::Surface, surface));
+            targets.push(Target::Optional(HandleKind::Workspace, workspace));
+            targets.push(Target::Optional(HandleKind::Window, window));
+        }
+
         Commands::ListPaneSurfaces { pane } => {
             targets.push(Target::Optional(HandleKind::Pane, pane));
         }

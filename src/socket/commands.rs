@@ -269,6 +269,8 @@ pub enum SocketCommand {
         surface: Option<String>,
         /// Workspace UUID when the caller names one instead of the surface's own.
         workspace: Option<String>,
+        /// `move-to-new-workspace` names the workspace it creates.
+        title: Option<String>,
         /// Move focus to the destination where the action supports it (creation only).
         focus: bool,
         resp_tx: RespTx,

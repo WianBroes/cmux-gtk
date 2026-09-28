@@ -396,6 +396,13 @@ pub fn format_mutation(command_name: &str, result: &Value) -> String {
             {
                 line.push_str(&format!(" created={created}"));
             }
+            if let Some(workspace) = result
+                .get("created_workspace_ref")
+                .or_else(|| result.get("created_workspace_id"))
+                .and_then(Value::as_str)
+            {
+                line.push_str(&format!(" created_workspace={workspace}"));
+            }
             line
         }
         // Upstream's action summary: `OK action=… workspace=… window=… [closed=…] [index=…] [color=…]`.

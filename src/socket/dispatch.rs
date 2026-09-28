@@ -1036,7 +1036,11 @@ async fn dispatch_request(
             if let Err(message) = only_main_window(&params) {
                 return err(req_id, "invalid_params", &message);
             }
-            // `title` and `url` only reach the upstream actions this build rejects first.
+            // `url` only reaches the upstream actions this build rejects first.
+            let title = match optional_text(&params, "title", "title") {
+                Ok(title) => title,
+                Err(message) => return err(req_id, "invalid_params", &message),
+            };
             let focus = match params.get("focus") {
                 None | Some(serde_json::Value::Null) => false,
                 Some(serde_json::Value::Bool(focus)) => *focus,
@@ -1047,6 +1051,7 @@ async fn dispatch_request(
                 action: action.to_owned(),
                 surface,
                 workspace,
+                title,
                 focus,
                 resp_tx,
             }

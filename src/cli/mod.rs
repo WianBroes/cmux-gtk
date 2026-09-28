@@ -943,6 +943,37 @@ fn expand_workspace_namespace(command: Commands) -> Commands {
 fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
     use args::{ResumeCommands, SurfaceCommands};
     use serde_json::{json, Value};
+
+    /// Assemble `tab.action` parameters: upstream's names, action always present, and an
+    /// omitted `--focus` left out so the server keeps the current focus.
+    fn tab_action_params(
+        action: &str,
+        surface: &Option<String>,
+        workspace: &Option<String>,
+        window: &Option<String>,
+        title: &Option<String>,
+        url: &Option<String>,
+        focus: Option<bool>,
+    ) -> Value {
+        let mut params = serde_json::Map::new();
+        params.insert("action".into(), json!(action));
+        for (key, value) in [
+            ("surface_id", surface),
+            ("workspace_id", workspace),
+            ("window_id", window),
+            ("title", title),
+            ("url", url),
+        ] {
+            if let Some(value) = value {
+                params.insert(key.into(), json!(value));
+            }
+        }
+        if let Some(focus) = focus {
+            params.insert("focus".into(), json!(focus));
+        }
+        Value::Object(params)
+    }
+
     match cmd {
         Commands::ProjectRun {
             action,
@@ -1118,27 +1149,37 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             url,
             focus,
             ..
-        } => {
-            let mut params = serde_json::Map::new();
-            // Canonicalization always fills the action; an empty one is refused upstream.
-            params.insert("action".into(), json!(action.clone().unwrap_or_default()));
-            for (key, value) in [
-                ("surface_id", surface),
-                ("workspace_id", workspace),
-                ("window_id", window),
-                ("title", title),
-                ("url", url),
-            ] {
-                if let Some(value) = value {
-                    params.insert(key.into(), json!(value));
-                }
-            }
-            // Omitted `--focus` keeps the current focus, as upstream's default.
-            if let Some(focus) = focus {
-                params.insert("focus".into(), json!(focus));
-            }
-            ("tab.action", Value::Object(params))
-        }
+        } => (
+            "tab.action",
+            tab_action_params(
+                action.as_deref().unwrap_or_default(),
+                surface,
+                workspace,
+                window,
+                title,
+                url,
+                *focus,
+            ),
+        ),
+        Commands::MoveTabToNewWorkspace {
+            surface,
+            workspace,
+            window,
+            title,
+            focus,
+        } => (
+            "tab.action",
+            // Upstream's wrapper: `move-tab-to-new-workspace` is this action with its flags.
+            tab_action_params(
+                "move_to_new_workspace",
+                surface,
+                workspace,
+                window,
+                title,
+                &None,
+                *focus,
+            ),
+        ),
         Commands::ListWorkspaceGroups => ("workspace.group.list", json!({})),
         Commands::CreateWorkspaceGroup { name, color } => {
             ("workspace.group.create", json!({"name":name,"color":color}))
@@ -1833,6 +1874,35 @@ mod tests {
         let (method, params) = command_to_rpc(&cli.command);
         assert_eq!(method, "tab.action");
         assert_eq!(params["action"], "close_right");
+        assert!(params.get("focus").is_none());
+    }
+
+    /// `move-tab-to-new-workspace` is upstream's move action on `tab.action` with its flags.
+    #[test]
+    fn move_tab_to_new_workspace_maps_to_tab_action() {
+        let mut cli = Cli::try_parse_from([
+            "cmux",
+            "move-tab-to-new-workspace",
+            "--surface",
+            "surface:4",
+            "--title",
+            "Detached",
+            "--focus",
+            "true",
+        ])
+        .expect("move-tab-to-new-workspace should parse");
+        handles::canonicalize(&mut cli).expect("canonicalize");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "tab.action");
+        assert_eq!(params["action"], "move_to_new_workspace");
+        assert_eq!(params["surface_id"], "surface:4");
+        assert_eq!(params["title"], "Detached");
+        assert_eq!(params["focus"], true);
+
+        let cli = Cli::try_parse_from(["cmux", "detach-tab"]).expect("alias should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "tab.action");
+        assert_eq!(params["action"], "move_to_new_workspace");
         assert!(params.get("focus").is_none());
     }
 

@@ -489,6 +489,29 @@ pub enum Commands {
         #[arg(num_args = 0.., value_name = "TEXT")]
         value_words: Vec<String>,
     },
+    /// Move a tab into a newly created workspace (upstream also spells it `detach-tab`)
+    #[command(visible_alias = "detach-tab")]
+    MoveTabToNewWorkspace {
+        /// Tab to move: surface UUID, ref (surface:N) or index; default is the focused tab
+        #[arg(long, visible_alias = "tab")]
+        surface: Option<String>,
+        /// Source workspace; defaults to the tab's workspace, else the active one
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Window context; this build has a single window (`window:1`)
+        #[arg(long)]
+        window: Option<String>,
+        /// Title of the workspace created to receive the tab
+        #[arg(long)]
+        title: Option<String>,
+        /// Select the new workspace and focus the moved tab (upstream defaults to false)
+        #[arg(
+            long,
+            value_name = "true|false",
+            value_parser = clap::builder::BoolishValueParser::new()
+        )]
+        focus: Option<bool>,
+    },
 
     // -- Surface commands --
     /// Reorder listed workspaces first, retaining the relative order of all others
@@ -2783,6 +2806,60 @@ mod handle_argument_tests {
             _ => panic!("wrong command variant"),
         }
         assert!(Cli::try_parse_from(["cmux", "tab-action", "--focus", "maybe"]).is_err());
+    }
+
+    /// `move-tab-to-new-workspace` parses its flags, with `detach-tab` as the alias.
+    #[test]
+    fn move_tab_to_new_workspace_forms_parse() {
+        match parse(&[
+            "move-tab-to-new-workspace",
+            "--surface",
+            "surface:2",
+            "--title",
+            "build logs",
+            "--focus",
+            "true",
+        ]) {
+            Commands::MoveTabToNewWorkspace {
+                surface,
+                title,
+                focus,
+                workspace,
+                window,
+            } => {
+                assert_eq!(surface.as_deref(), Some("surface:2"));
+                assert_eq!(title.as_deref(), Some("build logs"));
+                assert_eq!(focus, Some(true));
+                assert!(workspace.is_none() && window.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        // `--tab` is upstream's spelling of the same flag, `detach-tab` of the command.
+        match parse(&[
+            "detach-tab",
+            "--tab",
+            "surface:3",
+            "--workspace",
+            "workspace:2",
+        ]) {
+            Commands::MoveTabToNewWorkspace {
+                surface, workspace, ..
+            } => {
+                assert_eq!(surface.as_deref(), Some("surface:3"));
+                assert_eq!(workspace.as_deref(), Some("workspace:2"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["move-tab-to-new-workspace"]) {
+            Commands::MoveTabToNewWorkspace { focus, surface, .. } => {
+                assert!(focus.is_none() && surface.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        // Upstream's wrapper takes no `--action`.
+        assert!(
+            Cli::try_parse_from(["cmux", "move-tab-to-new-workspace", "--action", "pin"]).is_err()
+        );
     }
 
     /// `--id-format` is global, validates its value and leaves the default output untouched.

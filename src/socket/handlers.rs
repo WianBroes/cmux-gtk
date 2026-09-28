@@ -35,10 +35,11 @@ const TAB_ACTIONS: &[&str] = &[
     "mark_read",
     "mark_unread",
     "new_terminal_right",
+    "move_to_new_workspace",
 ];
 
-/// Upstream tab actions this build has no equivalent for, plus the one that arrives with
-/// its own command (point 4): they fail with the support note, not as unknown actions.
+/// Upstream tab actions this build has no equivalent for; they fail with the support
+/// note, not as unknown actions.
 const TAB_ACTIONS_UNSUPPORTED: &[&str] = &[
     "rename",
     "clear_name",
@@ -48,7 +49,6 @@ const TAB_ACTIONS_UNSUPPORTED: &[&str] = &[
     "reload",
     "duplicate",
     "new_browser_right",
-    "move_to_new_workspace",
 ];
 
 /// Lowercase, dash-free and reduced to the canonical action name upstream dispatches on.
@@ -1188,6 +1188,7 @@ fn handle_socket_command_traced(
             action,
             surface,
             workspace,
+            title,
             focus,
             resp_tx,
         } => {
@@ -1374,6 +1375,99 @@ fn handle_socket_command_traced(
                         .handles
                         .ensure_ref(super::handles::HandleKind::Surface, &created.to_string()));
                     s.trigger_session_save();
+                }
+                "move_to_new_workspace" => {
+                    // Upstream refuses to detach the workspace's only tab.
+                    let tabs: usize = s.split_engines[index]
+                        .pane_info()
+                        .iter()
+                        .map(|pane| pane.surface_ids.len())
+                        .sum();
+                    if tabs <= 1 {
+                        let _ = resp_tx.send(err(
+                            req_id,
+                            "invalid_state",
+                            "Tab cannot be moved to a new workspace because it is the only tab in its workspace",
+                        ));
+                        return;
+                    }
+                    let source_workspace = workspace_uuid;
+                    let previous = s.workspaces.get(s.active_index).map(|row| row.uuid);
+                    // Creation selects the new workspace; `focus` decides whether it stays.
+                    let created_id = s.create_workspace_with_input(None, None, None);
+                    let Some(new_index) = s.workspaces.iter().position(|row| row.id == created_id)
+                    else {
+                        let _ = resp_tx.send(err(
+                            req_id,
+                            "internal_error",
+                            "Failed to move tab to new workspace",
+                        ));
+                        return;
+                    };
+                    if let Some(title) = title
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                    {
+                        s.rename_workspace_at(new_index, title.to_owned());
+                    }
+                    let new_workspace = s.workspaces[new_index].uuid;
+                    let moved = s.move_surface_between_workspaces(
+                        surface_id,
+                        new_workspace,
+                        None,
+                        None,
+                        focus,
+                    );
+                    let result = match moved {
+                        Ok((result, _)) => result,
+                        Err(message) => {
+                            // The workspace never received its tab: drop it again.
+                            s.close_workspace(new_index);
+                            let _ = resp_tx.send(err(req_id, "internal_error", message));
+                            return;
+                        }
+                    };
+                    // The new workspace was born with a starter terminal; the moved tab is
+                    // the point of the command, so the starter goes.
+                    let starter = s.split_engines[new_index]
+                        .pane_info()
+                        .into_iter()
+                        .flat_map(|pane| pane.surface_ids)
+                        .find(|uuid| *uuid != surface_id);
+                    if let Some(starter) = starter {
+                        let _ = s.split_engines[new_index].close_surface_and_empty_pane(starter);
+                    }
+                    if !focus {
+                        if let Some(back) = previous
+                            .and_then(|uuid| s.workspaces.iter().position(|row| row.uuid == uuid))
+                        {
+                            s.switch_to_index(back);
+                        }
+                    }
+                    s.trigger_session_save();
+                    let destination_ref = s.handles.ensure_ref(
+                        super::handles::HandleKind::Workspace,
+                        &new_workspace.to_string(),
+                    );
+                    let source_ref = s.handles.ensure_ref(
+                        super::handles::HandleKind::Workspace,
+                        &source_workspace.to_string(),
+                    );
+                    let moved_ref = s
+                        .handles
+                        .ensure_ref(super::handles::HandleKind::Surface, &surface_uuid);
+                    extras["source_workspace_id"] = json!(source_workspace);
+                    extras["source_workspace_ref"] = json!(source_ref);
+                    // Upstream reports the destination as `workspace` / `created_workspace`.
+                    extras["workspace_id"] = json!(new_workspace);
+                    extras["workspace_ref"] = json!(destination_ref.clone());
+                    extras["created_workspace_id"] = json!(new_workspace);
+                    extras["created_workspace_ref"] = json!(destination_ref);
+                    extras["pane_id"] = json!(result.pane_id);
+                    extras["pane_ref"] = json!(format!("pane:{}", result.pane_id));
+                    extras["tab_id"] = json!(surface_uuid.clone());
+                    extras["tab_ref"] = json!(moved_ref);
                 }
                 _ => unreachable!("the action list is validated above"),
             }
