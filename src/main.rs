@@ -3,6 +3,7 @@ use gtk4::{gio, Application, ApplicationWindow, CssProvider};
 use std::ffi::CString;
 
 mod agent_activity;
+mod agent_icon;
 mod agent_resume;
 mod app_state;
 mod bounded_json;

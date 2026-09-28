@@ -186,6 +186,26 @@ fn request_surface_tab_close(widget: &impl IsA<gtk4::Widget>, uuid: Uuid) {
 /// Build a tab label and close affordance with weak widget captures to avoid ownership cycles.
 const TAB_UNREAD_DOT: &str = "tab-unread-dot";
 const TAB_TITLE: &str = "tab-title";
+const TAB_AGENT_ICON: &str = "tab-agent-icon";
+
+/// Show the mark of the agent recorded for a terminal (upstream `syncTerminalTabAgentIconAsset`):
+/// set by the agent's session-start hook, gone with its session-end hook.
+fn set_tab_agent_icon(tab: &gtk4::Widget, resume: Option<&crate::resume::ResumeBinding>) {
+    let mut child = tab.first_child();
+    while let Some(widget) = child {
+        if widget.widget_name() == TAB_AGENT_ICON {
+            let texture = resume
+                .and_then(|binding| binding.kind.as_deref())
+                .and_then(crate::agent_icon::texture);
+            if let Ok(image) = widget.downcast::<gtk4::Image>() {
+                image.set_visible(texture.is_some());
+                image.set_paintable(texture.as_ref());
+            }
+            return;
+        }
+        child = widget.next_sibling();
+    }
+}
 
 /// The named child of the tab label shown for a terminal page.
 fn tab_part(area: &gtk4::GLArea, name: &str) -> Option<gtk4::Widget> {
@@ -214,6 +234,11 @@ fn surface_tab_label(surface: &PaneSurface) -> gtk4::Box {
     dot.add_css_class("tab-unread-dot");
     dot.set_valign(gtk4::Align::Center);
     dot.set_visible(false);
+    let icon = gtk4::Image::new();
+    icon.set_widget_name(TAB_AGENT_ICON);
+    icon.set_pixel_size(14);
+    icon.set_valign(gtk4::Align::Center);
+    icon.set_visible(false);
     let label = gtk4::Label::new(Some(surface.tab_title()));
     label.set_widget_name(TAB_TITLE);
     let close = gtk4::Button::from_icon_name("window-close-symbolic");
@@ -229,8 +254,12 @@ fn surface_tab_label(surface: &PaneSurface) -> gtk4::Box {
         }
     });
     tab.append(&dot);
+    tab.append(&icon);
     tab.append(&label);
     tab.append(&close);
+    if let PaneSurface::Terminal { resume, .. } = surface {
+        set_tab_agent_icon(tab.upcast_ref(), resume.as_ref());
+    }
 
     let popover = gtk4::Popover::new();
     popover.set_parent(&tab);
@@ -1696,12 +1725,14 @@ impl SplitEngine {
         let pane_id = self
             .find_pane_id_by_uuid(surface_id)
             .ok_or("surface not found")?;
-        let (_, surfaces) = find_pane_tabs(&self.root, pane_id).ok_or("pane not found")?;
+        let (notebook, surfaces) =
+            find_pane_tabs(&self.root, pane_id).ok_or("pane not found")?;
         let mut surfaces = surfaces.borrow_mut();
         let surface = surfaces
             .iter_mut()
             .find(|surface| surface.uuid().to_string() == surface_id)
             .ok_or("surface not found")?;
+        let tab = notebook.tab_label(&surface.widget());
         let PaneSurface::Terminal { resume, .. } = surface else {
             return Err("resume bindings require a terminal");
         };
@@ -1723,6 +1754,9 @@ impl SplitEngine {
                 }
                 *resume = None;
             }
+        }
+        if let Some(tab) = tab {
+            set_tab_agent_icon(&tab, resume.as_ref());
         }
         Ok(resume.clone())
     }
