@@ -754,91 +754,80 @@ pub fn build_browser_context_menu() -> gio::Menu {
     menu
 }
 
+/// Shortcuts listed in the GtkShortcutsWindow (D-14), by group.
+const SHORTCUT_GROUPS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "Workspaces",
+        &[
+            ("<Ctrl>n", "New Workspace"),
+            ("<Ctrl><Shift>w", "Close Workspace"),
+            ("<Ctrl>bracketright", "Next Workspace"),
+            ("<Ctrl>bracketleft", "Previous Workspace"),
+            ("<Ctrl><Shift>r", "Rename Workspace"),
+            ("<Ctrl>1...9", "Switch to Workspace 1-9"),
+        ],
+    ),
+    (
+        "Panes",
+        &[
+            ("<Ctrl>d", "Split Right"),
+            ("<Ctrl><Shift>d", "Split Down"),
+            ("<Ctrl><Shift>x", "Close Pane"),
+            ("<Ctrl><Shift>Left", "Focus Left"),
+            ("<Ctrl><Shift>Right", "Focus Right"),
+            ("<Ctrl><Shift>Up", "Focus Up"),
+            ("<Ctrl><Shift>Down", "Focus Down"),
+        ],
+    ),
+    (
+        "Edit",
+        &[
+            ("<Ctrl><Shift>c", "Copy"),
+            ("<Ctrl><Shift>v", "Paste"),
+            ("<Ctrl>f", "Find"),
+        ],
+    ),
+    (
+        "View",
+        &[
+            ("<Ctrl>b", "Toggle Sidebar"),
+            ("<Ctrl><Shift>b", "Open Browser"),
+            ("<Ctrl><Shift>s", "New SSH Workspace"),
+        ],
+    ),
+    ("General", &[("<Ctrl>q", "Quit")]),
+];
+
 /// Build GtkShortcutsWindow (D-14) with all shortcuts grouped by category.
-/// Uses the GtkBox APIs inherited by shortcut containers for GTK 4.8 support.
+/// The window keeps its search bar and section stack as its own child: replacing that child
+/// (set_child) frees them, and GTK then crashes when the window is closed. Before GTK 4.14,
+/// sections can only be added through GtkBuildable, hence the UI description.
 fn build_shortcuts_window() -> gtk4::ShortcutsWindow {
-    let window = gtk4::ShortcutsWindow::builder().build();
-    let sections = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+    let escape = |text: &str| gtk4::glib::markup_escape_text(text).to_string();
+    let mut ui = String::from(
+        "<interface><object class=\"GtkShortcutsWindow\" id=\"window\"><child>\
+         <object class=\"GtkShortcutsSection\">\
+         <property name=\"section-name\">shortcuts</property>",
+    );
+    for (group, shortcuts) in SHORTCUT_GROUPS {
+        ui += &format!(
+            "<child><object class=\"GtkShortcutsGroup\"><property name=\"title\">{}</property>",
+            escape(group)
+        );
+        for (accel, title) in *shortcuts {
+            ui += &format!(
+                "<child><object class=\"GtkShortcutsShortcut\">\
+                 <property name=\"accelerator\">{}</property>\
+                 <property name=\"title\">{}</property></object></child>",
+                escape(accel),
+                escape(title)
+            );
+        }
+        ui += "</object></child>";
+    }
+    ui += "</object></child></object></interface>";
 
-    // Workspaces section
-    let ws_section = gtk4::ShortcutsSection::builder()
-        .section_name("workspaces")
-        .title("Workspaces")
-        .build();
-
-    let ws_group = gtk4::ShortcutsGroup::builder().title("Workspaces").build();
-    ws_group.append(&shortcut("<Ctrl>n", "New Workspace"));
-    ws_group.append(&shortcut("<Ctrl><Shift>w", "Close Workspace"));
-    ws_group.append(&shortcut("<Ctrl>bracketright", "Next Workspace"));
-    ws_group.append(&shortcut("<Ctrl>bracketleft", "Previous Workspace"));
-    ws_group.append(&shortcut("<Ctrl><Shift>r", "Rename Workspace"));
-    ws_group.append(&shortcut("<Ctrl>1..9", "Switch to Workspace 1-9"));
-    ws_section.append(&ws_group);
-    sections.append(&ws_section);
-
-    // Panes section
-    let pane_section = gtk4::ShortcutsSection::builder()
-        .section_name("panes")
-        .title("Panes")
-        .build();
-
-    let pane_group = gtk4::ShortcutsGroup::builder().title("Panes").build();
-    pane_group.append(&shortcut("<Ctrl>d", "Split Right"));
-    pane_group.append(&shortcut("<Ctrl><Shift>d", "Split Down"));
-    pane_group.append(&shortcut("<Ctrl><Shift>x", "Close Pane"));
-    pane_group.append(&shortcut("<Ctrl><Shift>Left", "Focus Left"));
-    pane_group.append(&shortcut("<Ctrl><Shift>Right", "Focus Right"));
-    pane_group.append(&shortcut("<Ctrl><Shift>Up", "Focus Up"));
-    pane_group.append(&shortcut("<Ctrl><Shift>Down", "Focus Down"));
-    pane_section.append(&pane_group);
-    sections.append(&pane_section);
-
-    // Edit section
-    let edit_section = gtk4::ShortcutsSection::builder()
-        .section_name("edit")
-        .title("Edit")
-        .build();
-
-    let edit_group = gtk4::ShortcutsGroup::builder().title("Edit").build();
-    edit_group.append(&shortcut("<Ctrl><Shift>c", "Copy"));
-    edit_group.append(&shortcut("<Ctrl><Shift>v", "Paste"));
-    edit_group.append(&shortcut("<Ctrl>f", "Find"));
-    edit_section.append(&edit_group);
-    sections.append(&edit_section);
-
-    // View section
-    let view_section = gtk4::ShortcutsSection::builder()
-        .section_name("view")
-        .title("View")
-        .build();
-
-    let view_group = gtk4::ShortcutsGroup::builder().title("View").build();
-    view_group.append(&shortcut("<Ctrl>b", "Toggle Sidebar"));
-    view_group.append(&shortcut("<Ctrl><Shift>b", "Open Browser"));
-    view_group.append(&shortcut("<Ctrl><Shift>s", "New SSH Workspace"));
-    view_section.append(&view_group);
-    sections.append(&view_section);
-
-    // General section
-    let general_section = gtk4::ShortcutsSection::builder()
-        .section_name("general")
-        .title("General")
-        .build();
-
-    let general_group = gtk4::ShortcutsGroup::builder().title("General").build();
-    general_group.append(&shortcut("<Ctrl>q", "Quit"));
-    general_section.append(&general_group);
-    sections.append(&general_section);
-
-    window.set_child(Some(&sections));
-
-    window
-}
-
-/// Helper to create a ShortcutsShortcut widget.
-fn shortcut(accel: &str, title: &str) -> gtk4::ShortcutsShortcut {
-    gtk4::ShortcutsShortcut::builder()
-        .accelerator(accel)
-        .title(title)
-        .build()
+    gtk4::Builder::from_string(&ui)
+        .object("window")
+        .expect("shortcuts window UI defines \"window\"")
 }
