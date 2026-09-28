@@ -35,6 +35,7 @@ pub use socket_client::CliError;
 
 mod args;
 mod diff;
+mod handles;
 pub use args::{BrowserCommand, Cli, Commands};
 use std::io::Write;
 use std::time::Duration;
@@ -104,19 +105,41 @@ fn restore_terminal(
     )))
 }
 
+/// Pick the first socket candidate that is not empty after trimming.
+fn first_non_blank<'a>(candidates: impl IntoIterator<Item = Option<&'a str>>) -> Option<String> {
+    candidates
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+/// Resolve the explicit socket override before discovery.
+///
+/// `--socket` wins, then `CMUX_SOCKET` (also read by the parser for `--help`), then
+/// `CMUX_SOCKET_PATH` for clients that only know the modern name. Blank exports fall
+/// through to discovery instead of failing to connect to an empty path.
+fn socket_override(cli: &Cli) -> Option<String> {
+    let modern = std::env::var("CMUX_SOCKET").ok();
+    let legacy = std::env::var("CMUX_SOCKET_PATH").ok();
+    first_non_blank([cli.socket.as_deref(), modern.as_deref(), legacy.as_deref()])
+}
+
 /// Run the CLI with the parsed arguments.
-pub fn run(cli: Cli) -> Result<(), CliError> {
+pub fn run(mut cli: Cli) -> Result<(), CliError> {
+    let explicit_socket = socket_override(&cli);
     if let Commands::ClaudeTeams { args } = &cli.command {
         return teams::launch(args);
     }
     if let Commands::TmuxCompat { args } = &cli.command {
-        return teams::tmux_compat(args, cli.socket.as_deref());
+        return teams::tmux_compat(args, explicit_socket.as_deref());
     }
     if let Commands::Comments { command } = &cli.command {
         return comments::run(command, cli.json);
     }
     if let Commands::LocalTmux { command } = &cli.command {
-        return local_tmux::run(command, cli.socket.as_deref());
+        return local_tmux::run(command, explicit_socket.as_deref());
     }
     if let Commands::Tmux {
         command: args::TmuxAliasCommands::Attach { name, headless },
@@ -126,7 +149,7 @@ pub fn run(cli: Cli) -> Result<(), CliError> {
             name: name.clone(),
             headless: *headless,
         };
-        return local_tmux::run(&command, cli.socket.as_deref());
+        return local_tmux::run(&command, explicit_socket.as_deref());
     }
     if let Commands::ProjectActions {
         directory,
@@ -177,7 +200,7 @@ pub fn run(cli: Cli) -> Result<(), CliError> {
                 | args::HookCommands::Rovodev { .. }
         }
     ) && std::env::var_os("CMUX_SURFACE_ID").is_none()
-        && cli.socket.is_none()
+        && explicit_socket.is_none()
     {
         return Ok(());
     }
@@ -224,9 +247,9 @@ pub fn run(cli: Cli) -> Result<(), CliError> {
         _ => None,
     };
 
-    // Resolve socket path: --socket flag > discovery > error
-    let socket_path = if let Some(ref path) = cli.socket {
-        path.clone()
+    // Resolve socket path: explicit override > discovery > error
+    let socket_path = if let Some(path) = explicit_socket {
+        path
     } else {
         discovery::discover_socket().ok_or_else(|| {
             CliError::Connection("no cmux socket found (is cmux-app running?)".into())
@@ -372,6 +395,10 @@ pub fn run(cli: Cli) -> Result<(), CliError> {
         eprintln!("Connected to {}", socket_path);
     }
 
+    // Canonicalize flag and positional targets, resolve indexes, and keep an
+    // invalid handle's rejection ready to replace the server error it provokes.
+    let invalid_handle = handles::normalize_command(&mut cli, &mut client)?;
+
     let use_color = format::use_color(cli.color.as_deref().unwrap_or("auto"));
 
     let started = std::time::Instant::now();
@@ -400,13 +427,20 @@ pub fn run(cli: Cli) -> Result<(), CliError> {
         }
     }
 
-    let result = result?;
+    let mut result = result.map_err(|error| invalid_handle.unwrap_or(error))?;
 
     // Browser commands default to JSON; everything else defaults to human-readable
     let json_mode = match &cli.command {
         Commands::Browser(_) => !cli.no_json,
         _ => cli.json,
     };
+
+    // `--id-format` shapes JSON output only, and only when it was requested.
+    if json_mode {
+        if let Some(mode) = cli.id_format {
+            format::format_ids(&mut result, mode);
+        }
+    }
 
     // Output formatted result
     let output = format::format_response(&method_name, &result, json_mode, use_color);
@@ -603,7 +637,30 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             unreachable!("team launch commands are handled before socket discovery")
         }
         Commands::Ping => ("system.ping", json!({})),
-        Commands::Identify => ("system.identify", json!({})),
+        Commands::Identify {
+            workspace,
+            surface,
+            window,
+            no_caller,
+        } => {
+            let mut params = serde_json::Map::new();
+            if let Some(window) = window {
+                params.insert("window_id".into(), json!(window));
+            }
+            if !no_caller {
+                let mut caller = serde_json::Map::new();
+                if let Some(workspace) = workspace {
+                    caller.insert("workspace_id".into(), json!(workspace));
+                }
+                if let Some(surface) = surface {
+                    caller.insert("surface_id".into(), json!(surface));
+                }
+                if !caller.is_empty() {
+                    params.insert("caller".into(), Value::Object(caller));
+                }
+            }
+            ("system.identify", Value::Object(params))
+        }
         Commands::Capabilities => ("system.capabilities", json!({})),
         Commands::Diagnostics => ("system.diagnostics", json!({})),
         Commands::Events { .. } => unreachable!("events stream on their own connection"),
@@ -652,20 +709,22 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
                 "terminal_profile":"tmux","terminal_tmux_session":session,
                 "name":name,"remote_directory":directory}),
         ),
-        Commands::SelectWorkspace { id } => ("workspace.select", json!({"id": id})),
-        Commands::CloseWorkspace { id } => ("workspace.close", json!({"id": id})),
-        Commands::RenameWorkspace { id, name } => {
+        Commands::SelectWorkspace { id, .. } => ("workspace.select", json!({"id": id})),
+        Commands::CloseWorkspace { id, .. } => ("workspace.close", json!({"id": id})),
+        Commands::RenameWorkspace { id, name, .. } => {
             ("workspace.rename", json!({"id": id, "name": name}))
         }
-        Commands::SetDescription { id, description } => (
+        Commands::SetDescription {
+            id, description, ..
+        } => (
             "workspace.set_description",
             json!({"id": id, "description": description}),
         ),
-        Commands::ClearDescription { id } => ("workspace.clear_description", json!({"id": id})),
+        Commands::ClearDescription { id, .. } => ("workspace.clear_description", json!({"id": id})),
         Commands::NextWorkspace => ("workspace.next", json!({})),
         Commands::PrevWorkspace => ("workspace.previous", json!({})),
         Commands::LastWorkspace => ("workspace.last", json!({})),
-        Commands::ReorderWorkspace { id, position } => {
+        Commands::ReorderWorkspace { id, position, .. } => {
             ("workspace.reorder", json!({"id": id, "position": position}))
         }
         Commands::ReorderWorkspaces { order, dry_run } => (
@@ -747,14 +806,15 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             }
             ("surface.split", Value::Object(p))
         }
-        Commands::FocusSurface { id } => ("surface.focus", json!({"id": id})),
-        Commands::CloseSurface { id } => ("surface.close", json!({"id": id})),
+        Commands::FocusSurface { id, .. } => ("surface.focus", json!({"id": id})),
+        Commands::CloseSurface { id, .. } => ("surface.close", json!({"id": id})),
         Commands::MoveSurface {
             id,
             pane,
             workspace,
             position,
             no_focus,
+            ..
         } => {
             let mut params = serde_json::Map::new();
             params.insert("id".into(), json!(id));
@@ -770,13 +830,14 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             }
             ("surface.move", Value::Object(params))
         }
-        Commands::ReorderSurface { id, position } => {
+        Commands::ReorderSurface { id, position, .. } => {
             ("surface.reorder", json!({"id": id, "position": position}))
         }
         Commands::DragSurfaceToSplit {
             id,
             pane,
             direction,
+            ..
         } => (
             "surface.drag_to_split",
             json!({"id": id, "pane": pane, "direction": direction}),
@@ -821,7 +882,7 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
         }
 
         Commands::ListPanes => ("pane.list", json!({})),
-        Commands::FocusPane { id } => {
+        Commands::FocusPane { id, .. } => {
             let mut p = serde_json::Map::new();
             if let Some(ref id) = id {
                 p.insert("id".into(), json!(id));
@@ -1022,5 +1083,63 @@ mod tests {
         let (method, params) = command_to_rpc(&cli.command);
         assert_eq!(method, "workspace.clear_description");
         assert!(params.get("description").is_none());
+    }
+
+    /// An explicit socket wins, then `CMUX_SOCKET`, then `CMUX_SOCKET_PATH`, ignoring blanks.
+    #[test]
+    fn socket_override_follows_flag_then_modern_then_legacy() {
+        assert_eq!(
+            first_non_blank([Some("/flag"), Some("/modern"), Some("/legacy")]).as_deref(),
+            Some("/flag")
+        );
+        assert_eq!(
+            first_non_blank([None, Some("/modern"), Some("/legacy")]).as_deref(),
+            Some("/modern")
+        );
+        assert_eq!(
+            first_non_blank([None, None, Some("/legacy")]).as_deref(),
+            Some("/legacy")
+        );
+        assert_eq!(first_non_blank([None, Some("  "), Some("")]), None);
+        assert_eq!(first_non_blank([None, None, None]), None);
+    }
+
+    /// Identify carries the caller anchors and the window the command named.
+    #[test]
+    fn identify_sends_window_and_caller() {
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "identify",
+            "--workspace",
+            "workspace:2",
+            "--surface",
+            "surface:8",
+            "--window",
+            "window:1",
+        ])
+        .expect("identify arguments should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "system.identify");
+        assert_eq!(params["window_id"], "window:1");
+        assert_eq!(params["caller"]["workspace_id"], "workspace:2");
+        assert_eq!(params["caller"]["surface_id"], "surface:8");
+    }
+
+    /// `--no-caller` keeps the window and drops the caller anchor entirely.
+    #[test]
+    fn identify_without_caller_keeps_only_the_window() {
+        let cli = Cli::try_parse_from(["cmux", "identify", "--window", "window:1", "--no-caller"])
+            .expect("identify arguments should parse");
+        let (_, params) = command_to_rpc(&cli.command);
+        assert_eq!(params["window_id"], "window:1");
+        assert!(params.get("caller").is_none());
+    }
+
+    /// An identification without any anchor asks only for the focused topology.
+    #[test]
+    fn identify_without_anchors_sends_no_caller() {
+        let cli = Cli::try_parse_from(["cmux", "identify"]).expect("identify should parse");
+        let (_, params) = command_to_rpc(&cli.command);
+        assert_eq!(params, serde_json::json!({}));
     }
 }

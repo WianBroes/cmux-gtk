@@ -17,6 +17,21 @@ pub(crate) enum DiffLayout {
     Split,
 }
 
+/// Identity shape requested for JSON output through `--id-format`.
+///
+/// `Refs` and `Uuids` drop the redundant counterpart from every identity field
+/// of a response; `Both` keeps `id` beside `ref`. Without the flag the response
+/// is left untouched, so scripts keep reading stable UUIDs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum IdFormat {
+    /// Short `kind:N` references only
+    Refs,
+    /// Stable UUIDs only
+    Uuids,
+    /// References and UUIDs side by side
+    Both,
+}
+
 #[derive(Subcommand)]
 pub enum CommentCommands {
     /// List pending review comments for a Git repository
@@ -64,13 +79,17 @@ pub enum CommentCommands {
 #[derive(Parser)]
 #[command(name = "cmux", version = env!("CMUX_VERSION"), about = "Control cmux terminal multiplexer")]
 pub struct Cli {
-    /// Path to the cmux socket (overrides discovery)
+    /// Path to the cmux socket (overrides discovery; CMUX_SOCKET, then CMUX_SOCKET_PATH)
     #[arg(long, global = true, env = "CMUX_SOCKET")]
     pub(super) socket: Option<String>,
 
     /// Output raw JSON responses
     #[arg(long, global = true)]
     pub(super) json: bool,
+
+    /// Shape identity fields in JSON output: refs, uuids or both
+    #[arg(long, global = true, value_name = "FORMAT")]
+    pub(super) id_format: Option<IdFormat>,
 
     /// Suppress JSON output for browser commands (browser defaults to JSON)
     #[arg(long, global = true)]
@@ -222,8 +241,21 @@ pub enum Commands {
     Update,
     /// Ping the running cmux instance
     Ping,
-    /// Show cmux instance identity (version, platform, pid)
-    Identify,
+    /// Show cmux instance identity (version, platform, pid) and focused topology
+    Identify {
+        /// Workspace handle used as the caller anchor
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Surface handle used as the caller anchor
+        #[arg(long)]
+        surface: Option<String>,
+        /// Window handle constraining the identification
+        #[arg(long)]
+        window: Option<String>,
+        /// Do not send a caller anchor (skips CMUX_WORKSPACE_ID / CMUX_SURFACE_ID)
+        #[arg(long)]
+        no_caller: bool,
+    },
     /// List supported socket commands
     Capabilities,
     /// Show process resources and diagnostic logging health
@@ -308,32 +340,52 @@ pub enum Commands {
     },
     /// Select a workspace by ID
     SelectWorkspace {
-        /// Workspace UUID
-        id: String,
+        /// Workspace UUID, ref (workspace:N) or index
+        #[arg(conflicts_with = "workspace")]
+        id: Option<String>,
+        /// Workspace UUID, ref (workspace:N) or index; alternative to the positional handle
+        #[arg(long, conflicts_with = "id", required_unless_present = "id")]
+        workspace: Option<String>,
     },
     /// Close a workspace by ID
     CloseWorkspace {
-        /// Workspace UUID
-        id: String,
+        /// Workspace UUID, ref (workspace:N) or index
+        #[arg(conflicts_with = "workspace")]
+        id: Option<String>,
+        /// Workspace UUID, ref (workspace:N) or index; alternative to the positional handle
+        #[arg(long, conflicts_with = "id", required_unless_present = "id")]
+        workspace: Option<String>,
     },
     /// Rename a workspace
     RenameWorkspace {
-        /// Workspace UUID
-        id: String,
+        /// Workspace UUID, ref (workspace:N) or index; with `--workspace` this slot holds the name
+        id: Option<String>,
         /// New name
-        name: String,
+        #[arg(conflicts_with = "workspace", required_unless_present = "workspace")]
+        name: Option<String>,
+        /// Workspace UUID, ref (workspace:N) or index; alternative to the positional handle
+        #[arg(long, required_unless_present = "id")]
+        workspace: Option<String>,
     },
     /// Set (or replace) a workspace description; blank text clears it
     SetDescription {
-        /// Workspace UUID
-        id: String,
+        /// Workspace UUID, ref (workspace:N) or index; with `--workspace` this slot holds the text
+        id: Option<String>,
         /// Markdown description shown under the workspace name
-        description: String,
+        #[arg(conflicts_with = "workspace", required_unless_present = "workspace")]
+        description: Option<String>,
+        /// Workspace UUID, ref (workspace:N) or index; alternative to the positional handle
+        #[arg(long, required_unless_present = "id")]
+        workspace: Option<String>,
     },
     /// Clear a workspace description
     ClearDescription {
-        /// Workspace UUID
-        id: String,
+        /// Workspace UUID, ref (workspace:N) or index
+        #[arg(conflicts_with = "workspace")]
+        id: Option<String>,
+        /// Workspace UUID, ref (workspace:N) or index; alternative to the positional handle
+        #[arg(long, conflicts_with = "id", required_unless_present = "id")]
+        workspace: Option<String>,
     },
     /// Switch to next workspace
     NextWorkspace,
@@ -343,10 +395,14 @@ pub enum Commands {
     LastWorkspace,
     /// Reorder a workspace
     ReorderWorkspace {
-        /// Workspace UUID
-        id: String,
+        /// Workspace UUID, ref (workspace:N) or index; with `--workspace` this slot holds the position
+        id: Option<String>,
         /// Target position (0-indexed)
-        position: usize,
+        #[arg(conflicts_with = "workspace", required_unless_present = "workspace")]
+        position: Option<usize>,
+        /// Workspace UUID, ref (workspace:N) or index; alternative to the positional handle
+        #[arg(long, required_unless_present = "id")]
+        workspace: Option<String>,
     },
 
     // -- Surface commands --
@@ -395,24 +451,36 @@ pub enum Commands {
         /// Split direction: horizontal or vertical
         #[arg(long, default_value = "horizontal")]
         direction: String,
-        /// Target surface ID (default: focused)
-        #[arg(long)]
+        /// Target surface ID, ref (surface:N) or index (default: focused)
+        #[arg(long, visible_alias = "surface")]
         id: Option<String>,
     },
     /// Focus a surface by ID
     FocusSurface {
-        /// Surface UUID
-        id: String,
+        /// Surface UUID, ref (surface:N) or index
+        #[arg(conflicts_with = "surface")]
+        id: Option<String>,
+        /// Surface UUID, ref (surface:N) or index; alternative to the positional handle
+        #[arg(long, conflicts_with = "id", required_unless_present = "id")]
+        surface: Option<String>,
     },
     /// Close a surface by ID
     CloseSurface {
-        /// Surface UUID
-        id: String,
+        /// Surface UUID, ref (surface:N) or index
+        #[arg(conflicts_with = "surface")]
+        id: Option<String>,
+        /// Surface UUID, ref (surface:N) or index; alternative to the positional handle
+        #[arg(long, conflicts_with = "id", required_unless_present = "id")]
+        surface: Option<String>,
     },
     /// Move a live surface tab into another pane in the same workspace
     MoveSurface {
-        /// Surface UUID
-        id: String,
+        /// Surface UUID, ref (surface:N) or index
+        #[arg(conflicts_with = "surface")]
+        id: Option<String>,
+        /// Surface UUID, ref (surface:N) or index; alternative to the positional handle
+        #[arg(long, conflicts_with = "id", required_unless_present = "id")]
+        surface: Option<String>,
         /// Destination pane reference (pane:N)
         #[arg(long)]
         pane: Option<String>,
@@ -427,10 +495,25 @@ pub enum Commands {
         no_focus: bool,
     },
     /// Reorder a surface tab inside its current pane
-    ReorderSurface { id: String, position: usize },
+    ReorderSurface {
+        /// Surface UUID, ref (surface:N) or index; with `--surface` this slot holds the position
+        id: Option<String>,
+        /// Target position (0-indexed)
+        #[arg(conflicts_with = "surface", required_unless_present = "surface")]
+        position: Option<usize>,
+        /// Surface UUID, ref (surface:N) or index; alternative to the positional handle
+        #[arg(long, required_unless_present = "id")]
+        surface: Option<String>,
+    },
     /// Move a surface into a newly split pane next to a target pane
     DragSurfaceToSplit {
-        id: String,
+        /// Surface UUID, ref (surface:N) or index
+        #[arg(conflicts_with = "surface")]
+        id: Option<String>,
+        /// Surface UUID, ref (surface:N) or index; alternative to the positional handle
+        #[arg(long, conflicts_with = "id", required_unless_present = "id")]
+        surface: Option<String>,
+        /// Destination pane reference (pane:N) or index
         #[arg(long)]
         pane: String,
         #[arg(long, value_parser = ["left", "right", "up", "down"])]
@@ -440,40 +523,40 @@ pub enum Commands {
     SendText {
         /// Text to send
         text: String,
-        /// Target surface ID (default: focused)
-        #[arg(long)]
+        /// Target surface ID, ref (surface:N) or index (default: focused)
+        #[arg(long, visible_alias = "surface")]
         id: Option<String>,
     },
     /// Send one literal character to a terminal surface
     SendKey {
         /// Literal character (named key combinations are not supported)
         key: String,
-        /// Target surface ID (default: focused)
-        #[arg(long)]
+        /// Target surface ID, ref (surface:N) or index (default: focused)
+        #[arg(long, visible_alias = "surface")]
         id: Option<String>,
     },
     /// Read current terminal viewport text (up to 256 KiB)
     ReadText {
-        /// Target surface ID (default: focused)
-        #[arg(long)]
+        /// Target surface ID, ref (surface:N) or index (default: focused)
+        #[arg(long, visible_alias = "surface")]
         id: Option<String>,
     },
     /// Capture recent terminal history as bounded VT text (up to 2,000 rows and 256 KiB)
     ReadScrollback {
-        /// Target surface ID (default: focused)
-        #[arg(long)]
+        /// Target surface ID, ref (surface:N) or index (default: focused)
+        #[arg(long, visible_alias = "surface")]
         id: Option<String>,
     },
     /// Check native terminal availability and pane attention
     Health {
-        /// Target surface ID (default: focused)
-        #[arg(long)]
+        /// Target surface ID, ref (surface:N) or index (default: focused)
+        #[arg(long, visible_alias = "surface")]
         id: Option<String>,
     },
     /// Refresh a surface
     Refresh {
-        /// Target surface ID (default: focused)
-        #[arg(long)]
+        /// Target surface ID, ref (surface:N) or index (default: focused)
+        #[arg(long, visible_alias = "surface")]
         id: Option<String>,
     },
 
@@ -482,8 +565,12 @@ pub enum Commands {
     ListPanes,
     /// Focus a pane
     FocusPane {
-        /// Pane reference (pane:N) or a surface UUID
+        /// Pane reference (pane:N), surface UUID or index
+        #[arg(conflicts_with = "pane")]
         id: Option<String>,
+        /// Pane reference (pane:N) or index; alternative to the positional handle
+        #[arg(long, conflicts_with = "id")]
+        pane: Option<String>,
     },
     /// Switch to last focused pane
     LastPane,
@@ -1096,5 +1183,432 @@ mod color_argument_tests {
         assert_eq!(color.as_deref(), Some("#123456"));
         let cli = Cli::try_parse_from(["cmux", "list-workspaces", "--color", "never"]).unwrap();
         assert_eq!(cli.color.as_deref(), Some("never"));
+    }
+}
+
+#[cfg(test)]
+mod handle_argument_tests {
+    use super::*;
+
+    const WORKSPACE: &str = "20000000-0000-4000-8000-000000000002";
+    const SURFACE: &str = "30000000-0000-4000-8000-000000000003";
+    const PANE: &str = "40000000-0000-4000-8000-000000000004";
+
+    /// Parse one invocation and return its command, reporting the parser diagnostics on failure.
+    fn parse(arguments: &[&str]) -> Commands {
+        let mut invocation = vec!["cmux"];
+        invocation.extend_from_slice(arguments);
+        Cli::try_parse_from(invocation)
+            .unwrap_or_else(|error| panic!("{arguments:?} should parse: {error}"))
+            .command
+    }
+
+    /// Every previously supported target spelling keeps parsing to the same handle.
+    #[test]
+    fn legacy_target_forms_still_parse() {
+        match parse(&["select-workspace", WORKSPACE]) {
+            Commands::SelectWorkspace { id, workspace } => {
+                assert_eq!(id.as_deref(), Some(WORKSPACE));
+                assert!(workspace.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["close-workspace", WORKSPACE]) {
+            Commands::CloseWorkspace { id, .. } => assert_eq!(id.as_deref(), Some(WORKSPACE)),
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["rename-workspace", WORKSPACE, "New name"]) {
+            Commands::RenameWorkspace {
+                id,
+                name,
+                workspace,
+            } => {
+                assert_eq!(id.as_deref(), Some(WORKSPACE));
+                assert_eq!(name.as_deref(), Some("New name"));
+                assert!(workspace.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["set-description", WORKSPACE, "Shipping list"]) {
+            Commands::SetDescription {
+                id, description, ..
+            } => {
+                assert_eq!(id.as_deref(), Some(WORKSPACE));
+                assert_eq!(description.as_deref(), Some("Shipping list"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["clear-description", WORKSPACE]) {
+            Commands::ClearDescription { id, .. } => assert_eq!(id.as_deref(), Some(WORKSPACE)),
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["reorder-workspace", WORKSPACE, "3"]) {
+            Commands::ReorderWorkspace { id, position, .. } => {
+                assert_eq!(id.as_deref(), Some(WORKSPACE));
+                assert_eq!(position, Some(3));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["focus-surface", SURFACE]) {
+            Commands::FocusSurface { id, surface } => {
+                assert_eq!(id.as_deref(), Some(SURFACE));
+                assert!(surface.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["close-surface", SURFACE]) {
+            Commands::CloseSurface { id, .. } => assert_eq!(id.as_deref(), Some(SURFACE)),
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["reorder-surface", SURFACE, "2"]) {
+            Commands::ReorderSurface {
+                id,
+                position,
+                surface,
+            } => {
+                assert_eq!(id.as_deref(), Some(SURFACE));
+                assert_eq!(position, Some(2));
+                assert!(surface.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["move-surface", SURFACE, "--pane", "pane:2"]) {
+            Commands::MoveSurface { id, pane, .. } => {
+                assert_eq!(id.as_deref(), Some(SURFACE));
+                assert_eq!(pane.as_deref(), Some("pane:2"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&[
+            "drag-surface-to-split",
+            SURFACE,
+            "--pane",
+            PANE,
+            "--direction",
+            "down",
+        ]) {
+            Commands::DragSurfaceToSplit { id, pane, .. } => {
+                assert_eq!(id.as_deref(), Some(SURFACE));
+                assert_eq!(pane, PANE);
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["focus-pane", "pane:1"]) {
+            Commands::FocusPane { id, pane } => {
+                assert_eq!(id.as_deref(), Some("pane:1"));
+                assert!(pane.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["send-text", "hello", "--id", SURFACE]) {
+            Commands::SendText { text, id } => {
+                assert_eq!(text, "hello");
+                assert_eq!(id.as_deref(), Some(SURFACE));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["split", "--id", SURFACE]) {
+            Commands::Split { id, .. } => assert_eq!(id.as_deref(), Some(SURFACE)),
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["health", "--id", SURFACE]) {
+            Commands::Health { id } => assert_eq!(id.as_deref(), Some(SURFACE)),
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["notify", "--workspace", WORKSPACE]) {
+            Commands::Notify { workspace, .. } => assert_eq!(workspace.as_deref(), Some(WORKSPACE)),
+            _ => panic!("wrong command variant"),
+        }
+    }
+
+    /// Flag forms accept handles wherever a positional handle was required before.
+    #[test]
+    fn flagged_target_forms_parse() {
+        match parse(&["select-workspace", "--workspace", "workspace:2"]) {
+            Commands::SelectWorkspace { id, workspace } => {
+                assert!(id.is_none());
+                assert_eq!(workspace.as_deref(), Some("workspace:2"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["close-workspace", "--workspace", "workspace:2"]) {
+            Commands::CloseWorkspace { workspace, .. } => {
+                assert_eq!(workspace.as_deref(), Some("workspace:2"))
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["clear-description", "--workspace", "workspace:2"]) {
+            Commands::ClearDescription { workspace, .. } => {
+                assert_eq!(workspace.as_deref(), Some("workspace:2"))
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["focus-surface", "--surface", "surface:1"]) {
+            Commands::FocusSurface { id, surface } => {
+                assert!(id.is_none());
+                assert_eq!(surface.as_deref(), Some("surface:1"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["close-surface", "--surface", "surface:1"]) {
+            Commands::CloseSurface { surface, .. } => {
+                assert_eq!(surface.as_deref(), Some("surface:1"))
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&[
+            "move-surface",
+            "--surface",
+            SURFACE,
+            "--workspace",
+            WORKSPACE,
+        ]) {
+            Commands::MoveSurface {
+                id,
+                surface,
+                workspace,
+                ..
+            } => {
+                assert!(id.is_none());
+                assert_eq!(surface.as_deref(), Some(SURFACE));
+                assert_eq!(workspace.as_deref(), Some(WORKSPACE));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&[
+            "drag-surface-to-split",
+            "--surface",
+            SURFACE,
+            "--pane",
+            "2",
+            "--direction",
+            "up",
+        ]) {
+            Commands::DragSurfaceToSplit {
+                id, surface, pane, ..
+            } => {
+                assert!(id.is_none());
+                assert_eq!(surface.as_deref(), Some(SURFACE));
+                assert_eq!(pane, "2");
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["focus-pane", "--pane", "pane:3"]) {
+            Commands::FocusPane { id, pane } => {
+                assert!(id.is_none());
+                assert_eq!(pane.as_deref(), Some("pane:3"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        // `--surface` is an alias of `--id` on the surface readers and writers.
+        for command in [
+            vec!["send-text", "hello", "--surface", SURFACE],
+            vec!["send-key", "q", "--surface", SURFACE],
+            vec!["read-text", "--surface", SURFACE],
+            vec!["read-scrollback", "--surface", SURFACE],
+            vec!["split", "--surface", SURFACE],
+            vec!["health", "--surface", SURFACE],
+            vec!["refresh", "--surface", SURFACE],
+        ] {
+            let parsed = parse(&command);
+            let id = match &parsed {
+                Commands::SendText { id, .. }
+                | Commands::SendKey { id, .. }
+                | Commands::ReadText { id }
+                | Commands::ReadScrollback { id }
+                | Commands::Split { id, .. }
+                | Commands::Health { id }
+                | Commands::Refresh { id } => id.as_deref(),
+                _ => panic!("wrong command for {command:?}"),
+            };
+            assert_eq!(id, Some(SURFACE), "{command:?}");
+        }
+        match parse(&["identify", "--workspace", "workspace:2", "--no-caller"]) {
+            Commands::Identify {
+                workspace,
+                surface,
+                window,
+                no_caller,
+            } => {
+                assert_eq!(workspace.as_deref(), Some("workspace:2"));
+                assert!(surface.is_none() && window.is_none());
+                assert!(no_caller);
+            }
+            _ => panic!("wrong command variant"),
+        }
+    }
+
+    /// A handle flag leaves the trailing positional for the value that follows it.
+    #[test]
+    fn trailing_positional_follows_the_flag() {
+        match parse(&[
+            "rename-workspace",
+            "--workspace",
+            "workspace:2",
+            "--",
+            "New name",
+        ]) {
+            Commands::RenameWorkspace {
+                id,
+                name,
+                workspace,
+            } => {
+                assert_eq!(workspace.as_deref(), Some("workspace:2"));
+                assert_eq!(id.as_deref(), Some("New name"));
+                assert!(name.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["set-description", "--workspace", "workspace:2", "Shipping"]) {
+            Commands::SetDescription {
+                id,
+                description,
+                workspace,
+            } => {
+                assert_eq!(workspace.as_deref(), Some("workspace:2"));
+                assert_eq!(id.as_deref(), Some("Shipping"));
+                assert!(description.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["reorder-workspace", "--workspace", "workspace:2", "4"]) {
+            Commands::ReorderWorkspace {
+                id,
+                position,
+                workspace,
+            } => {
+                assert_eq!(workspace.as_deref(), Some("workspace:2"));
+                assert_eq!(id.as_deref(), Some("4"));
+                assert_eq!(position, None);
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["reorder-surface", "--surface", "surface:1", "3"]) {
+            Commands::ReorderSurface {
+                id,
+                position,
+                surface,
+            } => {
+                assert_eq!(surface.as_deref(), Some("surface:1"));
+                assert_eq!(id.as_deref(), Some("3"));
+                assert_eq!(position, None);
+            }
+            _ => panic!("wrong command variant"),
+        }
+    }
+
+    /// A positional handle and its flag describe the same target, so both together are refused.
+    #[test]
+    fn positional_and_flag_target_conflict() {
+        for arguments in [
+            vec!["select-workspace", WORKSPACE, "--workspace", "workspace:2"],
+            vec!["close-workspace", WORKSPACE, "--workspace", "workspace:2"],
+            vec!["clear-description", WORKSPACE, "--workspace", "workspace:2"],
+            vec![
+                "rename-workspace",
+                WORKSPACE,
+                "New name",
+                "--workspace",
+                "workspace:2",
+            ],
+            vec![
+                "set-description",
+                WORKSPACE,
+                "Shipping",
+                "--workspace",
+                "workspace:2",
+            ],
+            vec![
+                "reorder-workspace",
+                WORKSPACE,
+                "2",
+                "--workspace",
+                "workspace:2",
+            ],
+            vec!["focus-surface", SURFACE, "--surface", "surface:1"],
+            vec!["close-surface", SURFACE, "--surface", "surface:1"],
+            vec!["reorder-surface", SURFACE, "2", "--surface", "surface:1"],
+            vec!["move-surface", SURFACE, "--surface", "surface:1"],
+            vec![
+                "drag-surface-to-split",
+                SURFACE,
+                "--surface",
+                "surface:1",
+                "--pane",
+                PANE,
+                "--direction",
+                "down",
+            ],
+            vec!["focus-pane", "pane:1", "--pane", "pane:2"],
+        ] {
+            assert!(
+                Cli::try_parse_from(arguments.iter().collect::<Vec<_>>()).is_err(),
+                "{arguments:?} must be refused"
+            );
+        }
+    }
+
+    /// Commands that always needed a target still refuse an invocation without one.
+    #[test]
+    fn missing_target_is_rejected() {
+        for arguments in [
+            vec!["select-workspace"],
+            vec!["close-workspace"],
+            vec!["clear-description"],
+            vec!["rename-workspace"],
+            vec!["rename-workspace", "--workspace", "workspace:2"],
+            vec!["set-description"],
+            vec!["reorder-workspace"],
+            vec!["reorder-workspace", "--workspace", "workspace:2"],
+            vec!["focus-surface"],
+            vec!["close-surface"],
+            vec!["reorder-surface"],
+            vec!["move-surface"],
+            vec![
+                "drag-surface-to-split",
+                "--pane",
+                PANE,
+                "--direction",
+                "down",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(arguments.iter().collect::<Vec<_>>()).is_err(),
+                "{arguments:?} must be refused"
+            );
+        }
+        // `focus-pane` without a target still means "the current pane".
+        assert!(matches!(
+            parse(&["focus-pane"]),
+            Commands::FocusPane {
+                id: None,
+                pane: None
+            }
+        ));
+    }
+
+    /// `--id-format` is global, validates its value and leaves the default output untouched.
+    #[test]
+    fn id_format_is_global_and_validated() {
+        match Cli::try_parse_from(["cmux", "--id-format", "both", "identify"])
+            .expect("leading --id-format should parse")
+            .command
+        {
+            Commands::Identify { .. } => {}
+            _ => panic!("wrong command variant"),
+        }
+        let cli =
+            Cli::try_parse_from(["cmux", "notify", "--title", "Done", "--id-format", "uuids"])
+                .expect("trailing --id-format should parse");
+        assert!(matches!(cli.id_format, Some(IdFormat::Uuids)));
+        assert!(matches!(
+            Cli::try_parse_from(["cmux", "list-workspaces", "--id-format", "refs"])
+                .expect("refs mode should parse")
+                .id_format,
+            Some(IdFormat::Refs)
+        ));
+        assert!(Cli::try_parse_from(["cmux", "--id-format", "short", "identify"]).is_err());
+        let cli = Cli::try_parse_from(["cmux", "ping"]).expect("plain ping should parse");
+        assert!(cli.id_format.is_none());
     }
 }
