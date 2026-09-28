@@ -1710,10 +1710,16 @@ pub fn claude_event(client: &mut SocketClient, event: ClaudeHookEvent) -> Result
                 };
             let title = notification_text(&payload, title_key, title_default, 512)?;
             let body = notification_text(&payload, body_key, body_default, 8192)?;
-            let subtitle = if matches!(event, ClaudeHookEvent::Notification) {
-                notification_text(&payload, "notification_type", "", 1024)?
+            let (subtitle, body) = if matches!(event, ClaudeHookEvent::Notification) {
+                (
+                    notification_text(&payload, "notification_type", "", 1024)?,
+                    summary_line(&body, ATTENTION_SUMMARY_CHARS),
+                )
             } else {
-                String::new()
+                (
+                    completed_subtitle(&payload),
+                    summary_line(&body, COMPLETION_SUMMARY_CHARS),
+                )
             };
             create_agent_notification(client, &surface, title, subtitle, body)?;
         }
@@ -1755,8 +1761,12 @@ pub fn codex_event(client: &mut SocketClient, event: CodexHookEvent) -> Result<(
                 .iter()
                 .find_map(|key| payload.get(*key).and_then(Value::as_str))
                 .unwrap_or("Codex has finished responding.");
-            let body = bounded_notification_text(body, 8192)?;
-            create_agent_notification(client, &surface, title, String::new(), body)?;
+            let body = summary_line(
+                &bounded_notification_text(body, 8192)?,
+                COMPLETION_SUMMARY_CHARS,
+            );
+            let subtitle = completed_subtitle(&payload);
+            create_agent_notification(client, &surface, title, subtitle, body)?;
         }
     }
     Ok(())
@@ -1847,16 +1857,21 @@ pub fn json_provider_event(
             } else {
                 "The agent has finished responding."
             });
-            let subtitle = hook_string(&payload, &["notification_type", "notificationType"])
-                .map(|text| bounded_notification_text(text, 1024))
-                .transpose()?
-                .unwrap_or_default();
+            let (subtitle, limit) = if attention {
+                let subtitle = hook_string(&payload, &["notification_type", "notificationType"])
+                    .map(|text| bounded_notification_text(text, 1024))
+                    .transpose()?
+                    .unwrap_or_default();
+                (subtitle, ATTENTION_SUMMARY_CHARS)
+            } else {
+                (completed_subtitle(&payload), COMPLETION_SUMMARY_CHARS)
+            };
             create_agent_notification(
                 client,
                 &surface,
                 title,
                 subtitle,
-                bounded_notification_text(body, 8192)?,
+                summary_line(&bounded_notification_text(body, 8192)?, limit),
             )?;
         }
     }
@@ -2048,8 +2063,11 @@ pub fn rovodev_event(client: &mut SocketClient, event: RovoHookEvent) -> Result<
             client,
             &surface,
             "Rovo Dev response ready".into(),
-            String::new(),
-            bounded_notification_text(body, 8192)?,
+            completed_subtitle(&payload),
+            summary_line(
+                &bounded_notification_text(body, 8192)?,
+                COMPLETION_SUMMARY_CHARS,
+            ),
         )?;
     }
     Ok(())
@@ -2258,9 +2276,51 @@ fn notification_text(
     bounded_notification_text(text, limit)
 }
 
+/// Upstream bounds: a completed turn shows 200 characters of the reply, an attention request 180.
+const COMPLETION_SUMMARY_CHARS: usize = 200;
+const ATTENTION_SUMMARY_CHARS: usize = 180;
+
+/// A reply as one line, like upstream's `normalizedSingleLine` then `truncate`: whitespace runs
+/// collapse to one space, and a longer text is cut to `max_chars` ending in "…".
+fn summary_line(text: &str, max_chars: usize) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() <= max_chars {
+        return line;
+    }
+    let mut cut: String = line.chars().take(max_chars.saturating_sub(1)).collect();
+    cut.push('…');
+    cut
+}
+
+/// Upstream's completion subtitle: "Completed in <folder>", or "Completed" without a folder.
+fn completed_subtitle(payload: &Value) -> String {
+    hook_string(payload, &["cwd", "working_directory", "workingDirectory"])
+        .map(|cwd| cwd.trim_end_matches('/'))
+        .and_then(|cwd| cwd.rsplit('/').next())
+        .filter(|name| !name.is_empty())
+        .map_or_else(|| "Completed".into(), |name| format!("Completed in {name}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A long multi-line reply becomes one bounded line, and the subtitle names the folder.
+    #[test]
+    fn completion_is_summarized_like_upstream() {
+        let reply = format!("Done.\n\n**Checked**\n- tests {}", "x".repeat(300));
+        let line = summary_line(&reply, COMPLETION_SUMMARY_CHARS);
+        assert!(!line.contains('\n'));
+        assert!(line.starts_with("Done. **Checked** - tests x"));
+        assert_eq!(line.chars().count(), COMPLETION_SUMMARY_CHARS);
+        assert!(line.ends_with('…'));
+        assert_eq!(summary_line("  short  reply ", 200), "short reply");
+        assert_eq!(
+            completed_subtitle(&json!({"cwd": "/home/raw/Documents/Continuum/"})),
+            "Completed in Continuum"
+        );
+        assert_eq!(completed_subtitle(&json!({})), "Completed");
+    }
 
     /// The automatic-resume trust table matches the command shapes these hooks write.
     #[test]
