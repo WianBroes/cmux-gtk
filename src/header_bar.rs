@@ -32,8 +32,32 @@ pub fn build_header_bar(
         "Focus Forward (Ctrl+Alt+Right)",
         "win.focus-forward",
     );
-    header.pack_start(&back);
-    header.pack_start(&forward);
+    // A disabled arrow no longer takes clicks, so GTK hands them to the titlebar, where the
+    // window manager reads them as a titlebar double-click or drag and moves the window. The
+    // arrows' own box claims presses on a disabled arrow only; an enabled one keeps its click.
+    let arrows = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+    arrows.append(&back);
+    arrows.append(&forward);
+    let absorb = gtk4::GestureClick::new();
+    absorb.set_button(0);
+    absorb.connect_pressed(|gesture, _, x, y| {
+        let disabled = gesture
+            .widget()
+            .and_then(|arrows| arrows.pick(x, y, gtk4::PickFlags::INSENSITIVE))
+            .and_then(|widget| {
+                if widget.is::<gtk4::Button>() {
+                    Some(widget)
+                } else {
+                    widget.ancestor(gtk4::Button::static_type())
+                }
+            })
+            .is_some_and(|button| !button.is_sensitive());
+        if disabled {
+            gesture.set_state(gtk4::EventSequenceState::Claimed);
+        }
+    });
+    arrows.add_controller(absorb);
+    header.pack_start(&arrows);
     let menu = gtk4::MenuButton::new();
     menu.set_icon_name("open-menu-symbolic");
     menu.set_tooltip_text(Some("Menu"));

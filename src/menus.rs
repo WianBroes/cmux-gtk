@@ -475,6 +475,20 @@ pub fn register_actions(
         window.add_action(action);
     }
     state.borrow_mut().focus_history_actions = Some((back, forward));
+    // The launch terminal took focus before `win.terminal-focused` existed: record it now, so the
+    // first move away can come back to it.
+    {
+        let mut s = state.borrow_mut();
+        let index = s.active_index;
+        let surface = s
+            .split_engines
+            .get(index)
+            .and_then(|engine| engine.active_pane_uuid())
+            .and_then(|uuid| uuid::Uuid::parse_str(&uuid).ok());
+        if let Some(surface) = surface {
+            s.record_focus(index, surface);
+        }
+    }
 
     // win.focus-history-go(u64) — a row of an arrow's right-click menu, by history position.
     let action = gio::SimpleAction::new("focus-history-go", Some(&u64::static_variant_type()));
