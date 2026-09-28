@@ -25,6 +25,7 @@ pub struct ShortcutConfig {
     pub toggle_workspace_group: Option<String>,
     pub rename_workspace: Option<String>,
     pub toggle_sidebar: Option<String>,
+    pub toggle_right_sidebar: Option<String>,
     pub split_right: Option<String>,
     pub split_down: Option<String>,
     pub close_pane: Option<String>,
@@ -90,6 +91,7 @@ pub enum ShortcutAction {
     ToggleWorkspaceGroup,
     RenameWorkspace,
     ToggleSidebar,
+    ToggleRightSidebar,
     SplitRight,
     SplitDown,
     ClosePane,
@@ -129,6 +131,7 @@ const KNOWN_SHORTCUTS: &[&str] = &[
     "toggle_workspace_group",
     "rename_workspace",
     "toggle_sidebar",
+    "toggle_right_sidebar",
     "split_right",
     "split_down",
     "close_pane",
@@ -257,6 +260,12 @@ impl ShortcutMap {
                 ShortcutAction::ToggleSidebar,
                 &config.toggle_sidebar,
                 "<Ctrl>b",
+            ),
+            // Upstream ⌘⌥B: toggle the right sidebar (the Files panel).
+            (
+                ShortcutAction::ToggleRightSidebar,
+                &config.toggle_right_sidebar,
+                "<Ctrl><Alt>b",
             ),
             (ShortcutAction::SplitRight, &config.split_right, "<Ctrl>d"),
             (
@@ -476,6 +485,11 @@ buttons_right = ["split_right", "toggle_sidebar"]
         // Ctrl+N should map to NewWorkspace
         let result = smap.lookup(ModifierType::CONTROL_MASK, Key::n);
         assert_eq!(result, Some(ShortcutAction::NewWorkspace));
+        // Upstream ⌘⌥B becomes Ctrl+Alt+B and must collide with no other default.
+        assert_eq!(
+            smap.lookup(ModifierType::CONTROL_MASK | ModifierType::ALT_MASK, Key::b),
+            Some(ShortcutAction::ToggleRightSidebar)
+        );
     }
 
     /// Replace the default accelerator when a configured shortcut overrides it.

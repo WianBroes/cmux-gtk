@@ -452,6 +452,7 @@ fn handle_socket_command_traced(
                 "sidebar.log",
                 "sidebar.clear_log",
                 "sidebar.state",
+                "right_sidebar.apply",
                 "events.agent_hook",
                 "events.stream",
                 "system.diagnostics",
@@ -1924,6 +1925,25 @@ fn handle_socket_command_traced(
                 }
             }
             let _ = resp_tx.send(ok(req_id, json!({})));
+        }
+
+        // -- right_sidebar.* (right sidebar / Files panel) --
+        // SOCK-05: visibility is a layout mutation, never a focus mutation.
+        SocketCommand::RightSidebarApply {
+            req_id,
+            action,
+            mode,
+            resp_tx,
+        } => {
+            let s = state.borrow();
+            match action.as_str() {
+                "show" | "set" => s.set_right_sidebar_visible(true),
+                "hide" => s.set_right_sidebar_visible(false),
+                _ => s.toggle_right_sidebar(),
+            }
+            let visible = s.right_sidebar_visible();
+            let mode = mode.unwrap_or_else(|| "files".to_owned());
+            let _ = resp_tx.send(ok(req_id, json!({"visible": visible, "mode": mode})));
         }
 
         // -- notification.* (Phase 4) --

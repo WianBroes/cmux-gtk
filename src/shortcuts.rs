@@ -116,6 +116,15 @@ pub fn install_shortcuts(
                     }
                     gtk4::glib::Propagation::Stop
                 }
+                Some(ShortcutAction::ToggleRightSidebar) => {
+                    // Upstream ⌘⌥B: toggling never moves focus into the panel; the panel
+                    // keeps its own focus shortcut (⌘⇧E upstream) in a later step.
+                    state.borrow().toggle_right_sidebar();
+                    if let Some(engine) = state.borrow_mut().active_split_engine_mut() {
+                        engine.focus_active_surface();
+                    }
+                    gtk4::glib::Propagation::Stop
+                }
                 // -- Pane split shortcuts --
                 Some(ShortcutAction::SplitRight) => {
                     handle_split(&state, false);

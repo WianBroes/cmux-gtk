@@ -919,6 +919,13 @@ pub enum Commands {
         id: String,
     },
 
+    // -- Right sidebar (Files panel) --
+    /// Show, hide or toggle the right sidebar (Files panel)
+    RightSidebar {
+        #[command(subcommand)]
+        command: RightSidebarCommands,
+    },
+
     // -- Browser subcommand group (agent primary interface) --
     /// Browser automation (agent primary interface)
     #[command(subcommand)]
@@ -973,6 +980,19 @@ pub enum WorkspaceCommands {
         #[arg(long, required_unless_present = "id")]
         workspace: Option<String>,
     },
+}
+
+/// Right sidebar operations; only the Files mode exists on Linux so far.
+#[derive(Subcommand)]
+pub enum RightSidebarCommands {
+    /// Show or hide the right sidebar
+    Toggle,
+    /// Show the right sidebar
+    Show,
+    /// Hide the right sidebar
+    Hide,
+    /// Show the right sidebar and select a mode (only `files` exists for now)
+    Set { mode: String },
 }
 
 /// Inbox operations share the socket's exact notification and target identities.

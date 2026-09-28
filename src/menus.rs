@@ -432,6 +432,19 @@ pub fn register_actions(
     });
     window.add_action(&action);
 
+    // win.toggle-right-sidebar — the right sidebar (Files panel), upstream ⌘⌥B.
+    let action = gio::SimpleAction::new("toggle-right-sidebar", None);
+    action.connect_activate({
+        let state = state.clone();
+        move |_, _| {
+            state.borrow().toggle_right_sidebar();
+            if let Some(engine) = state.borrow_mut().active_split_engine_mut() {
+                engine.focus_active_surface();
+            }
+        }
+    });
+    window.add_action(&action);
+
     // win.split-right
     let action = gio::SimpleAction::new("split-right", None);
     action.connect_activate({
@@ -647,6 +660,7 @@ pub fn register_accels(app: &gtk4::Application, shortcuts: &crate::config::Short
         (ShortcutAction::BrowserOpen, "win.browser-open"),
         (ShortcutAction::ClosePane, "win.close-pane"),
         (ShortcutAction::ToggleSidebar, "win.toggle-sidebar"),
+        (ShortcutAction::ToggleRightSidebar, "win.toggle-right-sidebar"),
         (ShortcutAction::SplitRight, "win.split-right"),
         (ShortcutAction::SplitDown, "win.split-down"),
         (ShortcutAction::RenameWorkspace, "win.rename-workspace"),
@@ -696,6 +710,7 @@ pub fn build_hamburger_menu() -> gio::Menu {
     // View section (D-12)
     let view_section = gio::Menu::new();
     view_section.append(Some("Toggle Sidebar"), Some("win.toggle-sidebar"));
+    view_section.append(Some("Toggle Right Sidebar"), Some("win.toggle-right-sidebar"));
     view_section.append(Some("Notifications"), Some("win.notifications"));
     view_section.append(Some("Split Right"), Some("win.split-right"));
     view_section.append(Some("Split Down"), Some("win.split-down"));

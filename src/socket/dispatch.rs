@@ -1248,6 +1248,54 @@ async fn dispatch_request(
                 resp_tx,
             }
         }
+        "right_sidebar.apply" => {
+            let action = params
+                .get("action")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            match action {
+                "toggle" | "show" | "hide" => commands::SocketCommand::RightSidebarApply {
+                    req_id: req_id.clone(),
+                    action: action.to_owned(),
+                    mode: None,
+                    resp_tx,
+                },
+                "set" => {
+                    // The upstream mode bar (find, vault, sessions…) is out of scope: only Files.
+                    let mode = params.get("mode").and_then(|value| value.as_str());
+                    match mode {
+                        Some("files") => {}
+                        Some(other) => {
+                            return err(
+                                req_id,
+                                "invalid_params",
+                                &format!("Unknown right-sidebar mode '{other}' (supported: files)"),
+                            );
+                        }
+                        None => {
+                            return err(
+                                req_id,
+                                "invalid_params",
+                                "right-sidebar set requires a mode: files",
+                            );
+                        }
+                    }
+                    commands::SocketCommand::RightSidebarApply {
+                        req_id: req_id.clone(),
+                        action: action.to_owned(),
+                        mode: Some("files".to_owned()),
+                        resp_tx,
+                    }
+                }
+                other => {
+                    return err(
+                        req_id,
+                        "invalid_params",
+                        &format!("right-sidebar requires toggle, show, hide or set (got '{other}')"),
+                    );
+                }
+            }
+        }
         "notification.list" => commands::SocketCommand::NotificationList {
             req_id: req_id.clone(),
             resp_tx,

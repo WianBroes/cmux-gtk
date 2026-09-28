@@ -1507,6 +1507,17 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
         ),
         Commands::ClearNotification { id } => ("notification.clear", json!({"id": id})),
 
+        Commands::RightSidebar { command } => match command {
+            args::RightSidebarCommands::Toggle => {
+                ("right_sidebar.apply", json!({"action":"toggle"}))
+            }
+            args::RightSidebarCommands::Show => ("right_sidebar.apply", json!({"action":"show"})),
+            args::RightSidebarCommands::Hide => ("right_sidebar.apply", json!({"action":"hide"})),
+            args::RightSidebarCommands::Set { mode } => (
+                "right_sidebar.apply",
+                json!({"action":"set","mode":mode}),
+            ),
+        },
         Commands::Browser(cmd) => browser_command_to_rpc(cmd),
     }
 }
@@ -1777,6 +1788,29 @@ mod tests {
         let (method, params) = command_to_rpc(&cli.command);
         assert_eq!(method, "workspace.clear_description");
         assert!(params.get("description").is_none());
+    }
+
+    /// Every right sidebar subcommand maps onto the one `right_sidebar.apply` socket method.
+    #[test]
+    fn right_sidebar_subcommands_map_to_parameters() {
+        for (argv, action, mode) in [
+            (
+                vec!["right-sidebar", "toggle"],
+                "toggle",
+                None,
+            ),
+            (vec!["right-sidebar", "show"], "show", None),
+            (vec!["right-sidebar", "hide"], "hide", None),
+            (vec!["right-sidebar", "set", "files"], "set", Some("files")),
+        ] {
+            let mut full = vec!["cmux"];
+            full.extend(argv);
+            let cli = Cli::try_parse_from(&full).expect("right-sidebar arguments should parse");
+            let (method, params) = command_to_rpc(&cli.command);
+            assert_eq!(method, "right_sidebar.apply");
+            assert_eq!(params["action"], action);
+            assert_eq!(params.get("mode").and_then(|value| value.as_str()), mode);
+        }
     }
 
     /// An explicit socket wins, then `CMUX_SOCKET`, then `CMUX_SOCKET_PATH`, ignoring blanks.

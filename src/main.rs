@@ -41,6 +41,7 @@ mod resume_review;
     reason = "the GUI uses only insertion; the CLI binary owns query mutations"
 )]
 mod review_comments;
+mod right_sidebar;
 mod scrollback;
 mod selection;
 mod session;
@@ -396,7 +397,10 @@ fn build_ui(
     let split = gtk4::Paned::new(gtk4::Orientation::Horizontal);
     split.set_wide_handle(true);
     split.set_start_child(Some(&sidebar_box));
-    split.set_end_child(Some(&stack));
+    // Workspaces and the right sidebar (Files panel) share their own divider so the panel
+    // sits to the right of the content without touching the left sidebar's layout.
+    let (content_paned, right_sidebar) = crate::right_sidebar::RightSidebar::build(&stack);
+    split.set_end_child(Some(&content_paned));
     crate::preferences::attach_sidebar_resize(&split);
     // Make the stack expand to fill remaining width.
     stack.set_hexpand(true);
@@ -418,6 +422,8 @@ fn build_ui(
         ghostty_app,
         app.clone(),
     );
+    // The right sidebar is driven from shortcuts, the menu and the socket through AppState.
+    state.borrow_mut().right_sidebar = Some(right_sidebar);
 
     // Wire sidebar click-to-switch.
     crate::sidebar::wire_sidebar_clicks(&sidebar_list, state.clone());

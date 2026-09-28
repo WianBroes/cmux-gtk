@@ -21,6 +21,8 @@ pub struct AppState {
     pub stack: gtk4::Stack,
     /// GtkListBox in the sidebar showing workspace names.
     pub sidebar_list: gtk4::ListBox,
+    /// Right sidebar panel (Files); None only in widget tests building a bare AppState.
+    pub right_sidebar: Option<crate::right_sidebar::RightSidebar>,
     /// Ghostty app handle — used by create_surface() for new panes.
     pub ghostty_app: ffi::ghostty_app_t,
     /// Next workspace ID (monotonically increasing).
@@ -84,6 +86,27 @@ impl AppState {
             .or_else(|| workspace.working_directory.clone())
     }
 
+    /// Whether the right sidebar is on screen; false when no panel was built (widget tests).
+    pub fn right_sidebar_visible(&self) -> bool {
+        self.right_sidebar
+            .as_ref()
+            .is_some_and(|sidebar| sidebar.is_visible())
+    }
+
+    /// Show or hide the right sidebar (upstream `right-sidebar` CLI), persisting the choice.
+    pub fn set_right_sidebar_visible(&self, visible: bool) {
+        if let Some(sidebar) = &self.right_sidebar {
+            sidebar.set_visible(visible);
+        }
+    }
+
+    /// Toggle the right sidebar (upstream ⌘⌥B, here `Ctrl+Alt+B`).
+    pub fn toggle_right_sidebar(&self) {
+        if let Some(sidebar) = &self.right_sidebar {
+            sidebar.toggle();
+        }
+    }
+
     /// Create a new AppState. Does NOT create the first workspace — caller must call
     /// create_workspace() after constructing the GTK widget tree (Plan 04 wires this).
     pub fn new(
@@ -99,6 +122,7 @@ impl AppState {
             active_index: 0,
             stack,
             sidebar_list,
+            right_sidebar: None,
             ghostty_app,
             gtk_app,
             next_id: 1,
