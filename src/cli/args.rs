@@ -1098,7 +1098,7 @@ pub enum BrowserCommand {
         /// Surface reference (surface:N or UUID)
         surface: String,
         /// Include interactive element annotations
-        #[arg(long)]
+        #[arg(long, short = 'i')]
         interactive: bool,
         /// Compact output
         #[arg(long)]
@@ -1123,7 +1123,8 @@ pub enum BrowserCommand {
         surface: String,
         /// Target element (CSS selector)
         target: String,
-        /// Value to fill
+        /// Value to fill (empty clears the field)
+        #[arg(default_value = "")]
         text: String,
         /// Take snapshot after action
         #[arg(long)]
@@ -1140,6 +1141,7 @@ pub enum BrowserCommand {
         text: String,
     },
     /// Press a key (e.g. "Enter", "Tab", "Escape")
+    #[command(alias = "key")]
     Press {
         /// Surface reference (surface:N or UUID)
         surface: String,
@@ -1154,14 +1156,25 @@ pub enum BrowserCommand {
         selector: String,
     },
     /// Scroll the page
+    // `allow_negative_numbers` lets the bare integer form (`scroll S -120`) parse as `direction`.
+    #[command(allow_negative_numbers = true)]
     Scroll {
         /// Surface reference (surface:N or UUID)
         surface: String,
-        /// Direction: up, down, left, right
-        direction: String,
+        /// Direction: up, down, left, right (an integer scrolls vertically by that many pixels)
+        direction: Option<String>,
         /// Amount in pixels
         #[arg(long, default_value = "300")]
         amount: i32,
+        /// Scroll relative to an element instead of the page
+        #[arg(long)]
+        selector: Option<String>,
+        /// Horizontal offset in pixels
+        #[arg(long, allow_hyphen_values = true)]
+        dx: Option<i32>,
+        /// Vertical offset in pixels
+        #[arg(long, allow_hyphen_values = true)]
+        dy: Option<i32>,
     },
     /// Select an option from a dropdown
     #[command(name = "select")]
@@ -1204,6 +1217,7 @@ pub enum BrowserCommand {
         timeout_ms: u64,
     },
     /// Navigate to a URL
+    #[command(alias = "navigate")]
     Goto {
         /// Surface reference (surface:N or UUID)
         surface: String,
@@ -1226,7 +1240,7 @@ pub enum BrowserCommand {
         surface: String,
     },
     /// Get the current page URL
-    #[command(name = "get-url")]
+    #[command(name = "get-url", alias = "url")]
     GetUrl {
         /// Surface reference (surface:N or UUID)
         surface: String,
@@ -1257,6 +1271,9 @@ pub enum BrowserCommand {
     Screenshot {
         /// Surface reference (surface:N or UUID)
         surface: String,
+        /// Write the PNG to this path instead of printing it
+        #[arg(long)]
+        out: Option<String>,
     },
     /// Enable browser streaming
     #[command(name = "stream-enable")]
@@ -1264,6 +1281,240 @@ pub enum BrowserCommand {
     /// Disable browser streaming
     #[command(name = "stream-disable")]
     StreamDisable,
+
+    // -- Upstream verbs and grouped readers --
+    /// Identify the browser and read the page of one surface
+    Identify {
+        /// Surface reference (surface:N or UUID)
+        #[arg(long)]
+        surface: Option<String>,
+    },
+    /// Double-click an element
+    Dblclick {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Target element (CSS selector)
+        selector: String,
+    },
+    /// Focus an element
+    Focus {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Target element (CSS selector)
+        selector: String,
+    },
+    /// Tick a checkbox
+    Check {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Target element (CSS selector)
+        selector: String,
+    },
+    /// Untick a checkbox
+    Uncheck {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Target element (CSS selector)
+        selector: String,
+    },
+    /// Hold a key down
+    Keydown {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Key name
+        key: String,
+    },
+    /// Release a key
+    Keyup {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Key name
+        key: String,
+    },
+    /// Outline matching elements
+    Highlight {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Target element (CSS selector)
+        selector: String,
+    },
+    /// Switch to the main frame or a matching frame
+    Frame {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Frame to select ("main" or a CSS selector)
+        target: String,
+    },
+    /// List or clear browser console messages
+    Console {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Action: list (default) or clear
+        #[arg(default_value = "list", value_parser = ["list", "clear"])]
+        action: String,
+    },
+    /// List or clear captured page errors
+    Errors {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Action: list (default) or clear
+        #[arg(default_value = "list", value_parser = ["list", "clear"])]
+        action: String,
+    },
+    /// Read a value from the page
+    Get {
+        #[command(subcommand)]
+        command: BrowserGetCommand,
+    },
+    /// Probe element state
+    Is {
+        #[command(subcommand)]
+        command: BrowserIsCommand,
+    },
+    /// Answer the open dialog
+    Dialog {
+        #[command(subcommand)]
+        command: BrowserDialogCommand,
+    },
+    /// Save or restore page state
+    State {
+        #[command(subcommand)]
+        command: BrowserStateCommand,
+    },
+}
+
+/// Page values readable through `cmux browser get <what> <surface>`.
+#[derive(Subcommand)]
+pub enum BrowserGetCommand {
+    /// Get the current page URL
+    Url {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+    },
+    /// Get the current page title
+    Title {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+    },
+    /// Get text content of an element
+    Text {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// CSS selector of the element
+        selector: String,
+    },
+    /// Get HTML content of an element
+    Html {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// CSS selector of the element
+        selector: String,
+    },
+    /// Get the value of an input element
+    Value {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// CSS selector of the element
+        selector: String,
+    },
+    /// Get an attribute of an element
+    Attr {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// CSS selector of the element
+        selector: String,
+        /// Attribute name (alternative to --attr)
+        name: Option<String>,
+        /// Attribute name, winning over the positional one
+        #[arg(long)]
+        attr: Option<String>,
+    },
+    /// Count matching elements
+    Count {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// CSS selector of the elements
+        selector: String,
+    },
+    /// Get the bounding box of an element
+    Box {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// CSS selector of the element
+        selector: String,
+    },
+    /// Get computed styles of an element
+    Styles {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// CSS selector of the element
+        selector: String,
+        /// CSS property to read (every property if omitted)
+        #[arg(long)]
+        property: Option<String>,
+    },
+}
+
+/// Element probes readable through `cmux browser is <what> <surface>`.
+#[derive(Subcommand)]
+pub enum BrowserIsCommand {
+    /// Whether an element is visible
+    Visible {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// CSS selector of the element
+        selector: String,
+    },
+    /// Whether an element is enabled
+    Enabled {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// CSS selector of the element
+        selector: String,
+    },
+    /// Whether an element is checked
+    Checked {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// CSS selector of the element
+        selector: String,
+    },
+}
+
+/// Dialog answers through `cmux browser dialog <action> <surface>`.
+#[derive(Subcommand)]
+pub enum BrowserDialogCommand {
+    /// Accept the dialog, optionally with prompt text
+    Accept {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Words of the response, joined with a space
+        text: Vec<String>,
+    },
+    /// Dismiss the dialog
+    Dismiss {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+    },
+}
+
+/// Page state persistence through `cmux browser state <action> <surface>`.
+#[derive(Subcommand)]
+pub enum BrowserStateCommand {
+    /// Save page state to a file
+    Save {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// File the state is written to
+        path: String,
+    },
+    /// Load page state from a file
+    Load {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// File the state is read from
+        path: String,
+    },
 }
 
 /// Accept `read-screen --lines N` only for a positive line count.
