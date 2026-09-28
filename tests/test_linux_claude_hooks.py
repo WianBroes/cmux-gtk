@@ -81,7 +81,10 @@ def main():
             event("SessionStart", "", valid=False)
             missing = subprocess.run([executable, "--socket", str(root / "missing.sock"), "hooks", "claude", "session-start"],
                                      env=hook_env, input="{}", text=True, capture_output=True, timeout=10)
-            assert missing.returncode != 0
+            assert missing.returncode == 0, missing.stderr  # fails open like macOS: a closed app never blocks Claude
+            closed = subprocess.run(["/bin/sh", "-c", commands["UserPromptSubmit"]], input="{}", text=True, capture_output=True,
+                                    env=dict(hook_env, CMUX_SOCKET=str(root / "missing.sock")), timeout=10)
+            assert closed.returncode == 0, closed.stderr
     print("installed Claude hooks preserved configuration and routed native checkpoint lifecycle")
 
 

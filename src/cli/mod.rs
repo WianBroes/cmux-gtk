@@ -174,9 +174,7 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
     {
         return hooks::setup(agent.as_deref());
     }
-    // Global agent settings also run outside cmux; only implicit, context-free hooks are skipped.
-    // An explicit socket still gets ordinary connection errors instead of silent success.
-    if matches!(
+    let agent_hook = matches!(
         &cli.command,
         Commands::Hooks {
             command: args::HookCommands::Claude { .. }
@@ -199,9 +197,10 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
                 | args::HookCommands::Amp { .. }
                 | args::HookCommands::Rovodev { .. }
         }
-    ) && std::env::var_os("CMUX_SURFACE_ID").is_none()
-        && explicit_socket.is_none()
-    {
+    );
+    // Global agent settings also run outside cmux; only implicit, context-free hooks are skipped.
+    // An explicit socket is still contacted; a dead one fails open at connect time below.
+    if agent_hook && std::env::var_os("CMUX_SURFACE_ID").is_none() && explicit_socket.is_none() {
         return Ok(());
     }
     if matches!(cli.command, Commands::Update) {
@@ -295,7 +294,12 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
         );
     }
 
-    let mut client = socket_client::SocketClient::connect(&socket_path, timeout)?;
+    let mut client = match socket_client::SocketClient::connect(&socket_path, timeout) {
+        // Like macOS, an installed hook fails open when the app is gone: a closed cmux never
+        // blocks the agent (Claude treats exit code 2 from UserPromptSubmit as a refusal).
+        Err(CliError::Connection(_)) if agent_hook => return Ok(()),
+        result => result?,
+    };
     if let (
         Some(prepared),
         Commands::Diff {
