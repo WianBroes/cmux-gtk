@@ -209,6 +209,13 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
         return Ok(());
     }
 
+    // `send` joins its words, so an empty payload is a usage error, not an RPC.
+    if let Commands::Send { text, .. } = &cli.command {
+        if send_text(text).is_empty() {
+            return Err(CliError::Command("send requires text".into()));
+        }
+    }
+
     let prepared_diff = match &cli.command {
         Commands::Diff {
             input,
@@ -444,6 +451,14 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
     }
 
     let mut result = result.map_err(|error| invalid_handle.unwrap_or(error))?;
+
+    // `read-screen --lines N` trims the rows it just read, on the CLI side.
+    if let Commands::ReadScreen {
+        lines: Some(lines), ..
+    } = &cli.command
+    {
+        keep_last_lines(&mut result, *lines);
+    }
 
     // Browser commands default to JSON; everything else defaults to human-readable
     let json_mode = match &cli.command {
@@ -871,6 +886,14 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             }
             ("surface.send_text", Value::Object(p))
         }
+        Commands::Send { text, id } => {
+            let mut p = serde_json::Map::new();
+            p.insert("text".into(), json!(send_text(text)));
+            if let Some(ref id) = id {
+                p.insert("id".into(), json!(id));
+            }
+            ("surface.send_text", Value::Object(p))
+        }
         Commands::SendKey { key, id } => {
             let mut p = serde_json::Map::new();
             p.insert("key".into(), json!(key));
@@ -885,6 +908,23 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
                 p.insert("id".into(), json!(id));
             }
             ("surface.read_text", Value::Object(p))
+        }
+        Commands::ReadScreen {
+            id,
+            scrollback,
+            lines,
+        } => {
+            let mut p = serde_json::Map::new();
+            if let Some(ref id) = id {
+                p.insert("id".into(), json!(id));
+            }
+            // `--lines` reads the scrollback too; the trailing rows are trimmed after the read.
+            let method = if *scrollback || lines.is_some() {
+                "surface.read_scrollback"
+            } else {
+                "surface.read_text"
+            };
+            (method, Value::Object(p))
         }
         Commands::ReadScrollback { id } => ("surface.read_scrollback", json!({"id": id})),
         Commands::Health { id } => {
@@ -1028,6 +1068,46 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
     }
 }
 
+/// Expand the `send` escape sequences: `\n` and `\r` become a carriage return,
+/// `\t` a tabulation, and any other backslash sequence stays literal.
+fn unescape_send_text(text: &str) -> String {
+    let mut expanded = String::with_capacity(text.len());
+    let mut characters = text.chars();
+    while let Some(character) = characters.next() {
+        if character != '\\' {
+            expanded.push(character);
+            continue;
+        }
+        match characters.next() {
+            Some('n') | Some('r') => expanded.push('\r'),
+            Some('t') => expanded.push('\t'),
+            Some(other) => {
+                expanded.push('\\');
+                expanded.push(other);
+            }
+            None => expanded.push('\\'),
+        }
+    }
+    expanded
+}
+
+/// Join `send`'s positional words and expand their escapes into terminal text.
+fn send_text(text: &[String]) -> String {
+    unescape_send_text(&text.join(" "))
+}
+
+/// Keep only the trailing `lines` rows of a `read-screen --lines` text field.
+fn keep_last_lines(result: &mut serde_json::Value, lines: usize) {
+    let Some(text) = result.get("text").and_then(serde_json::Value::as_str) else {
+        return;
+    };
+    let rows: Vec<&str> = text.split('\n').collect();
+    let trimmed = rows[rows.len().saturating_sub(lines)..].join("\n");
+    if let Some(field) = result.get_mut("text") {
+        *field = serde_json::Value::String(trimmed);
+    }
+}
+
 /// Preserve ambient caller identity separately from explicit command flags; pipes provide no TTY claim.
 fn notification_caller_params() -> serde_json::Value {
     serde_json::json!({
@@ -1162,5 +1242,64 @@ mod tests {
         let cli = Cli::try_parse_from(["cmux", "identify"]).expect("identify should parse");
         let (_, params) = command_to_rpc(&cli.command);
         assert_eq!(params, serde_json::json!({}));
+    }
+
+    /// `send` joins its words and expands only `\n`, `\r` and `\t`.
+    #[test]
+    fn send_joins_words_and_expands_escapes() {
+        assert_eq!(unescape_send_text("a\\nb"), "a\rb");
+        assert_eq!(unescape_send_text("a\\rb"), "a\rb");
+        assert_eq!(unescape_send_text("x\\ty"), "x\ty");
+        assert_eq!(unescape_send_text("no escapes"), "no escapes");
+        assert_eq!(
+            send_text(&["echo".to_string(), "hi\\n".to_string()]),
+            "echo hi\r"
+        );
+    }
+
+    /// `send` and `read-screen` reach the socket methods their options select.
+    #[test]
+    fn send_and_read_screen_map_to_their_socket_methods() {
+        let cli = Cli::try_parse_from(["cmux", "send", "--surface", "surface:2", "echo", "hi\\n"])
+            .expect("send arguments should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "surface.send_text");
+        assert_eq!(params["text"], "echo hi\r");
+        assert_eq!(params["id"], "surface:2");
+
+        let cli = Cli::try_parse_from(["cmux", "read-screen"]).expect("read-screen should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "surface.read_text");
+        assert_eq!(params, serde_json::json!({}));
+
+        for arguments in [
+            &["cmux", "read-screen", "--scrollback"][..],
+            &["cmux", "read-screen", "--lines", "20"][..],
+            &[
+                "cmux",
+                "read-screen",
+                "--surface",
+                "surface:3",
+                "--lines",
+                "5",
+            ][..],
+        ] {
+            let cli = Cli::try_parse_from(arguments).expect("read-screen should parse");
+            let (method, params) = command_to_rpc(&cli.command);
+            assert_eq!(method, "surface.read_scrollback", "{arguments:?}");
+            let _ = params;
+        }
+    }
+
+    /// `--lines N` keeps the trailing rows of the text field it was given.
+    #[test]
+    fn read_screen_lines_keep_the_tail() {
+        let mut result = serde_json::json!({"text": "a\nb\nc"});
+        keep_last_lines(&mut result, 2);
+        assert_eq!(result["text"], "b\nc");
+        // A response without a text field is left untouched.
+        let mut empty = serde_json::json!({"id": "surface:3"});
+        keep_last_lines(&mut empty, 1);
+        assert_eq!(empty, serde_json::json!({"id": "surface:3"}));
     }
 }

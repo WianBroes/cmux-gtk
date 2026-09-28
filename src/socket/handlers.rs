@@ -1434,10 +1434,16 @@ fn handle_socket_command_traced(
             key,
             resp_tx,
         } => {
-            // Literal characters use typed input. Named key combinations require
-            // native key translation; never report them as successfully delivered.
+            // Named keys are synthesized as a press/release pair, literal
+            // characters use typed input; an unknown key is never reported as delivered.
             let mut characters = key.chars();
-            let result = if let (Some(character), None) = (characters.next(), characters.next()) {
+            let result = if let Some(named) = crate::ghostty::named_key::parse(&key) {
+                terminal_target(state, id.as_deref()).map(|surface| {
+                    // SAFETY: resolution releases the model borrow and returns a
+                    // live GTK-owned terminal; no teardown occurs before input.
+                    unsafe { crate::ghostty::named_key::send(surface, named) }
+                })
+            } else if let (Some(character), None) = (characters.next(), characters.next()) {
                 terminal_target(state, id.as_deref()).and_then(|surface| {
                     // SAFETY: resolution releases the model borrow and returns a
                     // live GTK-owned terminal; no teardown occurs before input.
@@ -1447,7 +1453,7 @@ fn handle_socket_command_traced(
             } else {
                 Err((
                     "not_supported",
-                    "send-key currently accepts one literal character",
+                    "send-key accepts a key name (enter, tab, escape, up, ctrl-c…) or one literal character",
                 ))
             };
             let response = match result {

@@ -550,9 +550,17 @@ pub enum Commands {
         #[arg(long, visible_alias = "surface")]
         id: Option<String>,
     },
-    /// Send one literal character to a terminal surface
+    /// Send text to a surface, expanding `\n`, `\r` and `\t` escapes
+    Send {
+        /// Text to send; the remaining arguments are joined with a space
+        text: Vec<String>,
+        /// Target surface ID, ref (surface:N) or index (default: focused)
+        #[arg(long, visible_alias = "surface")]
+        id: Option<String>,
+    },
+    /// Send a key name or one literal character to a terminal surface
     SendKey {
-        /// Literal character (named key combinations are not supported)
+        /// Key name (enter, tab, escape, up, ctrl-c…) or one literal character
         key: String,
         /// Target surface ID, ref (surface:N) or index (default: focused)
         #[arg(long, visible_alias = "surface")]
@@ -563,6 +571,18 @@ pub enum Commands {
         /// Target surface ID, ref (surface:N) or index (default: focused)
         #[arg(long, visible_alias = "surface")]
         id: Option<String>,
+    },
+    /// Read the screen: the viewport, or the last lines of the scrollback with `--lines`
+    ReadScreen {
+        /// Target surface ID, ref (surface:N) or index (default: focused)
+        #[arg(long, visible_alias = "surface")]
+        id: Option<String>,
+        /// Read the scrollback instead of the visible viewport
+        #[arg(long)]
+        scrollback: bool,
+        /// Keep only the last N lines of the scrollback (implies `--scrollback`)
+        #[arg(long, value_name = "N", allow_hyphen_values = true, value_parser = parse_line_count)]
+        lines: Option<usize>,
     },
     /// Capture recent terminal history as bounded VT text (up to 2,000 rows and 256 KiB)
     ReadScrollback {
@@ -1182,6 +1202,17 @@ pub enum BrowserCommand {
     StreamDisable,
 }
 
+/// Accept `read-screen --lines N` only for a positive line count.
+fn parse_line_count(value: &str) -> Result<usize, String> {
+    let lines: i64 = value
+        .parse()
+        .map_err(|_| format!("line count must be a number: {value}"))?;
+    if lines <= 0 {
+        return Err("--lines must be greater than 0".to_string());
+    }
+    Ok(lines as usize)
+}
+
 #[cfg(test)]
 mod color_argument_tests {
     use super::*;
@@ -1463,6 +1494,60 @@ mod handle_argument_tests {
             }
             _ => panic!("wrong command variant"),
         }
+    }
+
+    /// macOS-style `send`, the `read-screen` options and a named `send-key` all parse.
+    #[test]
+    fn send_read_screen_and_named_key_forms_parse() {
+        match parse(&["send", "--surface", "surface:2", "echo", "hi\\n"]) {
+            Commands::Send { text, id } => {
+                assert_eq!(text, vec!["echo", "hi\\n"]);
+                assert_eq!(id.as_deref(), Some("surface:2"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["send", "--", "-n"]) {
+            Commands::Send { text, id } => {
+                assert_eq!(text, vec!["-n"]);
+                assert!(id.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["read-screen", "--lines", "20"]) {
+            Commands::ReadScreen {
+                id,
+                scrollback,
+                lines,
+            } => {
+                assert!(id.is_none());
+                assert!(!scrollback);
+                assert_eq!(lines, Some(20));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["read-screen", "--scrollback"]) {
+            Commands::ReadScreen {
+                scrollback, lines, ..
+            } => {
+                assert!(scrollback);
+                assert!(lines.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&["send-key", "--surface", "surface:1", "enter"]) {
+            Commands::SendKey { key, id } => {
+                assert_eq!(key, "enter");
+                assert_eq!(id.as_deref(), Some("surface:1"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+
+        // A non-positive line count is refused before any read is issued.
+        let error = Cli::try_parse_from(["cmux", "read-screen", "--lines", "0"])
+            .err()
+            .expect("--lines 0 must be refused");
+        assert!(error.to_string().contains("--lines must be greater than 0"));
+        assert!(Cli::try_parse_from(["cmux", "read-screen", "--lines", "-1"]).is_err());
     }
 
     /// A handle flag leaves the trailing positional for the value that follows it.

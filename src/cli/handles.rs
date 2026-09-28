@@ -421,8 +421,10 @@ fn collect_targets<'a>(command: &'a mut Commands, targets: &mut Vec<Target<'a>>)
         | Commands::ReorderSurface { id, .. }
         | Commands::Split { id, .. }
         | Commands::SendText { id, .. }
+        | Commands::Send { id, .. }
         | Commands::SendKey { id, .. }
         | Commands::ReadText { id }
+        | Commands::ReadScreen { id, .. }
         | Commands::ReadScrollback { id }
         | Commands::Health { id }
         | Commands::Refresh { id } => targets.push(Target::Optional(HandleKind::Surface, id)),
