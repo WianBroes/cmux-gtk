@@ -1575,6 +1575,19 @@ fn handle_socket_command_traced(
         } => {
             let focused = {
                 let mut s = state.borrow_mut();
+                // A pane in another workspace selects that workspace first, as on macOS.
+                let owner = id.as_deref().and_then(|reference| {
+                    let number = reference
+                        .strip_prefix("pane:")
+                        .and_then(|value| value.parse::<u64>().ok());
+                    s.split_engines.iter().position(|engine| match number {
+                        Some(number) => engine.pane_info().iter().any(|pane| pane.id == number),
+                        None => engine.find_pane_id_by_uuid(reference).is_some(),
+                    })
+                });
+                if let Some(owner) = owner.filter(|owner| *owner != s.active_index) {
+                    s.switch_to_index(owner);
+                }
                 let idx = s.active_index;
                 s.split_engines.get_mut(idx).is_some_and(|engine| {
                     id.as_deref()
