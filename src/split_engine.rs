@@ -1250,6 +1250,7 @@ impl SplitEngine {
             }
 
             recovery::install(&paned);
+            install_divider_bounds(&paned);
 
             let (start, end) = if before {
                 (Box::new(new_leaf), Box::new(old_leaf))
@@ -2097,6 +2098,43 @@ fn find_adjacent(root: &SplitNode, active_id: u64, direction: FocusDirection) ->
     }
 }
 
+/// Pane minimum and divider range, from upstream's Bonsplit defaults (`minimumPaneWidth`/`Height`
+/// 100, `dividerPositionRange` 0.1...0.9).
+const MIN_PANE_SIZE: f64 = 100.0;
+const DIVIDER_RANGE: (f64, f64) = (0.1, 0.9);
+
+/// Clamp a divider position like Bonsplit's `clampedDividerPosition`: both panes keep the
+/// minimum, and when the split is too small for two minimums both get half.
+fn clamped_divider_position(position: i32, available: i32) -> i32 {
+    if available <= 0 {
+        return position;
+    }
+    let available = available as f64;
+    let min_ratio = (MIN_PANE_SIZE.min(available / 2.0) / available).min(0.5);
+    let lower = min_ratio.max(DIVIDER_RANGE.0);
+    let upper = (1.0 - min_ratio).min(DIVIDER_RANGE.1);
+    let (lower, upper) = if lower <= upper {
+        (lower, upper)
+    } else {
+        (0.5, 0.5)
+    };
+    (position as f64)
+        .clamp(available * lower, available * upper)
+        .round() as i32
+}
+
+/// Keep a split divider within `clamped_divider_position`, on drag and on every resize.
+/// With both children shrinkable, GTK's `max-position` is the space the two panes share.
+fn install_divider_bounds(paned: &gtk4::Paned) {
+    paned.connect_position_notify(|paned| {
+        let position = paned.position();
+        let clamped = clamped_divider_position(position, paned.max_position());
+        if clamped != position {
+            paned.set_position(clamped);
+        }
+    });
+}
+
 /// Remove `widget` from its current GTK parent so it can be reparented.
 /// GTK4 requires `gtk_widget_get_parent(child) == NULL` before set_start/end_child.
 fn remove_widget_from_parent(widget: &gtk4::Widget) {
@@ -2385,6 +2423,22 @@ impl SplitNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verify dividers keep both panes at the minimum, within 10-90 %, or split evenly when small.
+    #[test]
+    fn divider_positions_keep_both_panes_visible() {
+        // Wide split: the 10-90 % range binds before the 100 px minimum.
+        assert_eq!(clamped_divider_position(5, 2000), 200);
+        assert_eq!(clamped_divider_position(1995, 2000), 1800);
+        assert_eq!(clamped_divider_position(700, 2000), 700);
+        // Narrow split: the 100 px minimum binds.
+        assert_eq!(clamped_divider_position(3, 500), 100);
+        assert_eq!(clamped_divider_position(497, 500), 400);
+        // Too small for two minimums: both panes get half.
+        assert_eq!(clamped_divider_position(10, 150), 75);
+        // Not allocated yet: left alone.
+        assert_eq!(clamped_divider_position(42, 0), 42);
+    }
 
     /// Verify a tab dropped on the tab strip joins the pane instead of splitting its top quarter.
     #[test]

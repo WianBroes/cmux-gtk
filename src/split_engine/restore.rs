@@ -286,6 +286,7 @@ impl SplitEngine {
                 paned.set_shrink_start_child(true);
                 paned.set_shrink_end_child(true);
                 paned.set_wide_handle(true);
+                super::install_divider_bounds(&paned);
                 paned.set_start_child(Some(&start_node.widget()));
                 paned.set_end_child(Some(&end_node.widget()));
                 // D-03: restore ratio after layout pass

@@ -97,7 +97,17 @@ pub fn attach_sidebar_resize(paned: &gtk4::Paned) {
     if let Some(sidebar) = paned.start_child() {
         sidebar.set_size_request(SIDEBAR_WIDTH_MIN as i32, -1);
     }
+    // Upstream keeps the sidebar width when the window resizes. GTK's defaults scale it with the
+    // window and let it fall below its minimum, where it is allocated anyway and clipped.
+    paned.set_resize_start_child(false);
+    paned.set_shrink_start_child(false);
     paned.set_position(sidebar_width() as i32);
+    // The window shrinking lowers the third-of-the-window cap without moving the divider.
+    // `max-position` changes during allocation, so the divider is moved afterwards.
+    paned.connect_max_position_notify(|paned| {
+        let paned = paned.clone();
+        gtk4::glib::idle_add_local_once(move || paned.notify("position"));
+    });
     let scheduled = Rc::new(Cell::new(false));
     paned.connect_position_notify(move |paned| {
         let position = paned.position() as f64;
