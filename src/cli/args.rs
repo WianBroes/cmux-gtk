@@ -153,6 +153,23 @@ pub enum Commands {
         #[arg(long, conflicts_with = "focus")]
         no_focus: bool,
     },
+    /// Render a Markdown file in a browser surface right of the calling terminal
+    Markdown {
+        /// Markdown file to render
+        file: std::path::PathBuf,
+        /// Destination workspace UUID; defaults to the caller or selected workspace
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Place the viewer immediately to the right of this surface UUID
+        #[arg(long)]
+        surface: Option<String>,
+        /// Focus the new viewer after it opens
+        #[arg(long)]
+        focus: bool,
+        /// Preserve the currently focused surface (the default)
+        #[arg(long, conflicts_with = "focus")]
+        no_focus: bool,
+    },
     /// Keep terminal processes alive across cmux quit, crash and update with a private tmux server
     #[command(name = "local-tmux")]
     LocalTmux {
@@ -3464,5 +3481,85 @@ mod browser_verb_tests {
             Cli::try_parse_from(["cmux", "browser", "download-wait", "surface:3", "--timeout"])
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod markdown_argument_tests {
+    use super::*;
+
+    /// Parse one markdown invocation and return its command.
+    fn parse_markdown(arguments: &[&str]) -> Commands {
+        let mut invocation = vec!["cmux"];
+        invocation.extend_from_slice(arguments);
+        Cli::try_parse_from(invocation)
+            .unwrap_or_else(|error| panic!("{arguments:?} should parse: {error}"))
+            .command
+    }
+
+    /// A bare file parses with the viewer defaults (no workspace, kept focus).
+    #[test]
+    fn markdown_file_parses_with_defaults() {
+        match parse_markdown(&["markdown", "notes.md"]) {
+            Commands::Markdown {
+                file,
+                workspace,
+                surface,
+                focus,
+                no_focus,
+            } => {
+                assert_eq!(file, std::path::PathBuf::from("notes.md"));
+                assert!(workspace.is_none());
+                assert!(surface.is_none());
+                assert!(!focus);
+                assert!(!no_focus);
+            }
+            _ => panic!("wrong command variant"),
+        }
+    }
+
+    /// Workspace, surface and focus flags reach the markdown viewer.
+    #[test]
+    fn markdown_options_parse() {
+        match parse_markdown(&[
+            "markdown",
+            "notes.md",
+            "--workspace",
+            "workspace:2",
+            "--surface",
+            "surface:3",
+            "--focus",
+        ]) {
+            Commands::Markdown {
+                file,
+                workspace,
+                surface,
+                focus,
+                no_focus,
+            } => {
+                assert_eq!(file, std::path::PathBuf::from("notes.md"));
+                assert_eq!(workspace.as_deref(), Some("workspace:2"));
+                assert_eq!(surface.as_deref(), Some("surface:3"));
+                assert!(focus);
+                assert!(!no_focus);
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse_markdown(&["markdown", "notes.md", "--no-focus"]) {
+            Commands::Markdown {
+                focus, no_focus, ..
+            } => {
+                assert!(!focus);
+                assert!(no_focus);
+            }
+            _ => panic!("wrong command variant"),
+        }
+    }
+
+    /// The file is required, and focus flags contradict each other.
+    #[test]
+    fn markdown_rejects_missing_file_and_conflicting_focus() {
+        assert!(Cli::try_parse_from(["cmux", "markdown"]).is_err());
+        assert!(Cli::try_parse_from(["cmux", "markdown", "a.md", "--focus", "--no-focus"]).is_err());
     }
 }

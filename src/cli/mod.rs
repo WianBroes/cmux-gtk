@@ -40,6 +40,7 @@ mod args;
 pub mod browser_argv;
 mod diff;
 mod handles;
+mod markdown;
 pub use args::{BrowserCommand, Cli, Commands};
 impl From<args::ScopeArg> for settings_json::Scope {
     fn from(argument: args::ScopeArg) -> Self {
@@ -275,6 +276,10 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
         })?),
         _ => None,
     };
+    let prepared_markdown = match &cli.command {
+        Commands::Markdown { file, .. } => Some(markdown::prepare(file)?),
+        _ => None,
+    };
     let prepared_project = match &cli.command {
         Commands::Project { path, .. } => Some(project::prepare(path)?),
         _ => None,
@@ -357,6 +362,27 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
             surface.as_deref(),
             *focus && !*no_focus,
             cli.json,
+        );
+    }
+    if let (
+        Some(prepared),
+        Commands::Markdown {
+            workspace,
+            surface,
+            focus,
+            no_focus,
+            ..
+        },
+    ) = (prepared_markdown, &cli.command)
+    {
+        return diff::open_document(
+            &mut client,
+            prepared,
+            workspace.as_deref(),
+            surface.as_deref(),
+            *focus && !*no_focus,
+            cli.json,
+            "markdown",
         );
     }
     if let (
@@ -1387,6 +1413,7 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
         Commands::Update => unreachable!("update is handled before socket discovery"),
         Commands::Workspace(_) => unreachable!("the workspace namespace expands before dispatch"),
         Commands::Diff { .. } => unreachable!("diff is prepared before socket dispatch"),
+        Commands::Markdown { .. } => unreachable!("markdown is prepared before socket dispatch"),
         Commands::Project { .. } => unreachable!("project is prepared before socket dispatch"),
         Commands::Comments { .. } => unreachable!("comments run without socket dispatch"),
         Commands::Config(_) => unreachable!("config runs without socket dispatch"),

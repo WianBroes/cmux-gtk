@@ -570,14 +570,18 @@ impl Drop for TemporaryGitOutput {
     }
 }
 
-fn prune_viewers(directory: &Path, incoming: u64) -> Result<(), CliError> {
+/// Drop the oldest viewer pages when the shared viewer directory grows past
+/// its entry or byte budget. Shared with the Markdown viewer, which writes
+/// `markdown-*.html` next to the `diff-*.html` pages of this module.
+pub(super) fn prune_viewers(directory: &Path, incoming: u64) -> Result<(), CliError> {
     let mut entries = std::fs::read_dir(directory)
         .map_err(|error| CliError::Command(format!("scan diff directory: {error}")))?
         .flatten()
         .filter_map(|entry| {
             let metadata = entry.metadata().ok()?;
+            let name = entry.file_name().to_string_lossy().into_owned();
             (metadata.is_file()
-                && entry.file_name().to_string_lossy().starts_with("diff-")
+                && (name.starts_with("diff-") || name.starts_with("markdown-"))
                 && entry
                     .path()
                     .extension()
