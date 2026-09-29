@@ -1907,6 +1907,63 @@ pub enum BrowserCommand {
         #[arg(long)]
         path: Option<String>,
     },
+    /// Toggle offline mode for a browser surface
+    Offline {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// State: on (default) or off
+        #[arg(default_value = "on", value_parser = ["on", "off"])]
+        state: String,
+    },
+    /// Set the geolocation of a browser surface
+    #[command(allow_negative_numbers = true)]
+    Geolocation {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Latitude in degrees (-90 to 90)
+        latitude: f64,
+        /// Longitude in degrees (-180 to 180)
+        longitude: f64,
+    },
+    /// Record a Chrome DevTools trace
+    Trace {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Action: start or stop
+        #[arg(value_parser = ["start", "stop"])]
+        action: String,
+        /// File the trace is written to (stop only)
+        path: Option<String>,
+    },
+    /// Record network activity as HAR
+    Har {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Action: start or stop
+        #[arg(value_parser = ["start", "stop"])]
+        action: String,
+        /// File the HAR is written to (stop only)
+        path: Option<String>,
+    },
+    /// Route, unroute or list network requests
+    Network {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Action: route, unroute or requests
+        #[arg(default_value = "requests", value_parser = ["route", "unroute", "requests"])]
+        action: String,
+        /// URL pattern to route or unroute
+        url: Option<String>,
+        /// Abort matching requests instead of fulfilling them
+        #[arg(long)]
+        abort: bool,
+        /// JSON body served for matching requests, as a JSON string
+        #[arg(long)]
+        body: Option<String>,
+        /// Comma-separated resource types the route applies to
+        #[arg(long = "resource-type")]
+        resource_type: Option<String>,
+    },
 }
 
 /// Page values readable through `cmux browser get <what> <surface>`.
@@ -3501,6 +3558,184 @@ mod browser_verb_tests {
         assert!(
             Cli::try_parse_from(["cmux", "browser", "download-wait", "surface:3", "--timeout"])
                 .is_err()
+        );
+    }
+
+    /// The offline and geolocation verbs parse with the surface first.
+    #[test]
+    fn offline_and_geolocation_parse_with_the_surface_first() {
+        match parse_browser(&["browser", "offline", "surface:3"]) {
+            Commands::Browser(BrowserCommand::Offline { surface, state }) => {
+                assert_eq!(surface, "surface:3");
+                assert_eq!(state, "on");
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse_browser(&["browser", "offline", "surface:3", "off"]) {
+            Commands::Browser(BrowserCommand::Offline { surface, state }) => {
+                assert_eq!(surface, "surface:3");
+                assert_eq!(state, "off");
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse_browser(&["browser", "geolocation", "surface:3", "1.0", "2.0"]) {
+            Commands::Browser(BrowserCommand::Geolocation {
+                surface,
+                latitude,
+                longitude,
+            }) => {
+                assert_eq!(surface, "surface:3");
+                assert_eq!(latitude, 1.0);
+                assert_eq!(longitude, 2.0);
+            }
+            _ => panic!("wrong command variant"),
+        }
+        // Unknown states and missing coordinates never parse.
+        assert!(Cli::try_parse_from(["cmux", "browser", "offline", "surface:3", "maybe"]).is_err());
+        assert!(Cli::try_parse_from(["cmux", "browser", "geolocation", "surface:3", "1.0"]).is_err());
+        assert!(
+            Cli::try_parse_from(["cmux", "browser", "geolocation", "surface:3", "north", "2.0"])
+                .is_err()
+        );
+    }
+
+    /// The trace and HAR verbs parse start/stop with the surface first.
+    #[test]
+    fn trace_and_har_parse_with_the_surface_first() {
+        match parse_browser(&["browser", "trace", "surface:3", "start"]) {
+            Commands::Browser(BrowserCommand::Trace {
+                surface,
+                action,
+                path,
+            }) => {
+                assert_eq!(surface, "surface:3");
+                assert_eq!(action, "start");
+                assert!(path.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse_browser(&["browser", "trace", "surface:3", "stop", "/tmp/trace.json"]) {
+            Commands::Browser(BrowserCommand::Trace {
+                surface,
+                action,
+                path,
+            }) => {
+                assert_eq!(surface, "surface:3");
+                assert_eq!(action, "stop");
+                assert_eq!(path.as_deref(), Some("/tmp/trace.json"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse_browser(&["browser", "har", "surface:3", "start"]) {
+            Commands::Browser(BrowserCommand::Har {
+                surface,
+                action,
+                path,
+            }) => {
+                assert_eq!(surface, "surface:3");
+                assert_eq!(action, "start");
+                assert!(path.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse_browser(&["browser", "har", "surface:3", "stop", "/tmp/n.har"]) {
+            Commands::Browser(BrowserCommand::Har {
+                surface,
+                action,
+                path,
+            }) => {
+                assert_eq!(surface, "surface:3");
+                assert_eq!(action, "stop");
+                assert_eq!(path.as_deref(), Some("/tmp/n.har"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        // Unknown recorder actions never parse.
+        assert!(Cli::try_parse_from(["cmux", "browser", "trace", "surface:3", "freeze"]).is_err());
+        assert!(Cli::try_parse_from(["cmux", "browser", "har", "surface:3", "freeze"]).is_err());
+    }
+
+    /// The network verb parses route, unroute and requests with the surface first.
+    #[test]
+    fn network_parses_route_unroute_requests_with_the_surface_first() {
+        match parse_browser(&[
+            "browser",
+            "network",
+            "surface:3",
+            "route",
+            "**/api/*",
+            "--abort",
+        ]) {
+            Commands::Browser(BrowserCommand::Network {
+                surface,
+                action,
+                url,
+                abort,
+                ..
+            }) => {
+                assert_eq!(surface, "surface:3");
+                assert_eq!(action, "route");
+                assert_eq!(url.as_deref(), Some("**/api/*"));
+                assert!(abort);
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse_browser(&[
+            "browser",
+            "network",
+            "surface:3",
+            "route",
+            "**/api/*",
+            "--body",
+            "{\"ok\":true}",
+            "--resource-type",
+            "xhr,fetch",
+        ]) {
+            Commands::Browser(BrowserCommand::Network {
+                surface,
+                action,
+                url,
+                body,
+                resource_type,
+                ..
+            }) => {
+                assert_eq!(surface, "surface:3");
+                assert_eq!(action, "route");
+                assert_eq!(url.as_deref(), Some("**/api/*"));
+                assert_eq!(body.as_deref(), Some("{\"ok\":true}"));
+                assert_eq!(resource_type.as_deref(), Some("xhr,fetch"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse_browser(&["browser", "network", "surface:3", "unroute", "**/api/*"]) {
+            Commands::Browser(BrowserCommand::Network {
+                surface,
+                action,
+                url,
+                ..
+            }) => {
+                assert_eq!(surface, "surface:3");
+                assert_eq!(action, "unroute");
+                assert_eq!(url.as_deref(), Some("**/api/*"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse_browser(&["browser", "network", "surface:3", "requests"]) {
+            Commands::Browser(BrowserCommand::Network {
+                surface,
+                action,
+                url,
+                ..
+            }) => {
+                assert_eq!(surface, "surface:3");
+                assert_eq!(action, "requests");
+                assert!(url.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        // An unknown network action never parses.
+        assert!(
+            Cli::try_parse_from(["cmux", "browser", "network", "surface:3", "freeze"]).is_err()
         );
     }
 }

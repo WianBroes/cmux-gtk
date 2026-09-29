@@ -925,6 +925,18 @@ pub(crate) fn daemon_action(
         "download" => "download",
         // The CLI spells the wait `download-wait`; the socket carries it dotted.
         "download.wait" => "waitfordownload",
+        // Offline and geolocation already use the daemon's own names.
+        "offline" => "offline",
+        "geolocation" => "geolocation",
+        // Trace and HAR recorders follow the `state.save` underscore convention.
+        "trace.start" => "trace_start",
+        "trace.stop" => "trace_stop",
+        "har.start" => "har_start",
+        "har.stop" => "har_stop",
+        // The network verb groups the daemon's route actions under one prefix.
+        "network.route" => "route",
+        "network.unroute" => "unroute",
+        "network.requests" => "requests",
         _ if action.starts_with("find.") => {
             return Err("browser find is not supported: agent-browser locators always act on the element; use snapshot refs or CSS selectors".into())
         }
@@ -1108,6 +1120,127 @@ mod manager_tests {
         assert_eq!(
             translate("download.wait", serde_json::json!({})).unwrap().0,
             "waitfordownload"
+        );
+    }
+
+    /// Offline and geolocation reach the daemon under its own action names.
+    #[test]
+    fn offline_and_geolocation_translate_to_daemon_actions() {
+        let translate = |action: &str, params: Value| {
+            let mut params = params.as_object().cloned().unwrap();
+            daemon_action(action, &mut params).map(|daemon| (daemon, Value::Object(params)))
+        };
+        assert_eq!(
+            translate("offline", serde_json::json!({"offline": true})).unwrap(),
+            ("offline".into(), serde_json::json!({"offline": true}))
+        );
+        assert_eq!(
+            translate("offline", serde_json::json!({"offline": false})).unwrap(),
+            ("offline".into(), serde_json::json!({"offline": false}))
+        );
+        assert_eq!(
+            translate(
+                "geolocation",
+                serde_json::json!({"latitude": 1.0, "longitude": 2.0})
+            )
+            .unwrap(),
+            (
+                "geolocation".into(),
+                serde_json::json!({"latitude": 1.0, "longitude": 2.0})
+            )
+        );
+    }
+
+    /// Trace and HAR recorders reach the daemon under its underscore action names.
+    #[test]
+    fn trace_and_har_translate_to_daemon_actions() {
+        let translate = |action: &str, params: Value| {
+            let mut params = params.as_object().cloned().unwrap();
+            daemon_action(action, &mut params).map(|daemon| (daemon, Value::Object(params)))
+        };
+        assert_eq!(
+            translate("trace.start", serde_json::json!({})).unwrap(),
+            ("trace_start".into(), serde_json::json!({}))
+        );
+        assert_eq!(
+            translate(
+                "trace.stop",
+                serde_json::json!({"path": "/tmp/trace.json"})
+            )
+            .unwrap(),
+            (
+                "trace_stop".into(),
+                serde_json::json!({"path": "/tmp/trace.json"})
+            )
+        );
+        assert_eq!(
+            translate("har.start", serde_json::json!({})).unwrap(),
+            ("har_start".into(), serde_json::json!({}))
+        );
+        assert_eq!(
+            translate("har.stop", serde_json::json!({"path": "/tmp/network.har"})).unwrap(),
+            (
+                "har_stop".into(),
+                serde_json::json!({"path": "/tmp/network.har"})
+            )
+        );
+    }
+
+    /// Network routes reach the daemon under its own action names with exact params.
+    #[test]
+    fn network_verbs_translate_to_daemon_actions() {
+        let translate = |action: &str, params: Value| {
+            let mut params = params.as_object().cloned().unwrap();
+            daemon_action(action, &mut params).map(|daemon| (daemon, Value::Object(params)))
+        };
+        assert_eq!(
+            translate(
+                "network.route",
+                serde_json::json!({"url": "**/api/*", "abort": true})
+            )
+            .unwrap(),
+            (
+                "route".into(),
+                serde_json::json!({"url": "**/api/*", "abort": true})
+            )
+        );
+        assert_eq!(
+            translate(
+                "network.route",
+                serde_json::json!({
+                    "url": "**/api/*",
+                    "body": "{\"ok\":true}",
+                    "resourceType": "xhr,fetch"
+                })
+            )
+            .unwrap(),
+            (
+                "route".into(),
+                serde_json::json!({
+                    "url": "**/api/*",
+                    "body": "{\"ok\":true}",
+                    "resourceType": "xhr,fetch"
+                })
+            )
+        );
+        assert_eq!(
+            translate(
+                "network.unroute",
+                serde_json::json!({"url": "**/api/*"})
+            )
+            .unwrap(),
+            (
+                "unroute".into(),
+                serde_json::json!({"url": "**/api/*"})
+            )
+        );
+        assert_eq!(
+            translate("network.unroute", serde_json::json!({})).unwrap(),
+            ("unroute".into(), serde_json::json!({}))
+        );
+        assert_eq!(
+            translate("network.requests", serde_json::json!({})).unwrap(),
+            ("requests".into(), serde_json::json!({}))
         );
     }
 

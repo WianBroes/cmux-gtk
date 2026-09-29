@@ -68,6 +68,11 @@ const KNOWN_VERBS: &[&str] = &[
     "addscript",
     "download",
     "download-wait",
+    "offline",
+    "geolocation",
+    "trace",
+    "har",
+    "network",
     "stream-enable",
     "stream-disable",
     "help",
@@ -236,6 +241,74 @@ mod tests {
         assert_eq!(
             rewritten(&["cmux", "browser", "surface:2", "viewport", "800", "600"]),
             ["cmux", "browser", "viewport", "surface:2", "800", "600"]
+        );
+    }
+
+    /// The new verbs keep the clap spelling and move a bare upstream handle behind them.
+    #[test]
+    fn new_verbs_keep_their_clap_spelling() {
+        for line in [
+            ["cmux", "browser", "offline", "surface:2", "off"].as_slice(),
+            ["cmux", "browser", "geolocation", "surface:2", "1.0", "2.0"].as_slice(),
+            ["cmux", "browser", "trace", "surface:2", "start"].as_slice(),
+            ["cmux", "browser", "trace", "surface:2", "stop", "/tmp/t.json"].as_slice(),
+            ["cmux", "browser", "har", "surface:2", "start"].as_slice(),
+            ["cmux", "browser", "har", "surface:2", "stop", "/tmp/n.har"].as_slice(),
+            ["cmux", "browser", "network", "surface:2", "requests"].as_slice(),
+            [
+                "cmux",
+                "browser",
+                "network",
+                "surface:2",
+                "route",
+                "**/api/*",
+                "--abort",
+            ]
+            .as_slice(),
+            ["cmux", "browser", "network", "surface:2", "unroute"].as_slice(),
+        ] {
+            assert_eq!(rewritten(line), line);
+        }
+        assert_eq!(
+            rewritten(&["cmux", "browser", "surface:2", "offline", "off"]),
+            ["cmux", "browser", "offline", "surface:2", "off"]
+        );
+        assert_eq!(
+            rewritten(&["cmux", "browser", "surface:2", "geolocation", "1.0", "2.0"]),
+            ["cmux", "browser", "geolocation", "surface:2", "1.0", "2.0"]
+        );
+        assert_eq!(
+            rewritten(&["cmux", "browser", "surface:2", "trace", "start"]),
+            ["cmux", "browser", "trace", "surface:2", "start"]
+        );
+        assert_eq!(
+            rewritten(&["cmux", "browser", "surface:2", "har", "stop", "/tmp/n.har"]),
+            ["cmux", "browser", "har", "surface:2", "stop", "/tmp/n.har"]
+        );
+        assert_eq!(
+            rewritten(&["cmux", "browser", "surface:2", "network", "requests"]),
+            ["cmux", "browser", "network", "surface:2", "requests"]
+        );
+        assert_eq!(
+            rewritten(&[
+                "cmux",
+                "browser",
+                "--surface",
+                "surface:2",
+                "network",
+                "route",
+                "**/api/*",
+                "--abort"
+            ]),
+            [
+                "cmux",
+                "browser",
+                "network",
+                "surface:2",
+                "route",
+                "**/api/*",
+                "--abort"
+            ]
         );
     }
 

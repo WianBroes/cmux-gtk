@@ -898,6 +898,56 @@ fn validate_browser_command(command: &BrowserCommand) -> Result<(), CliError> {
                 "browser addscript requires a non-empty <script>".into(),
             ))
         }
+        BrowserCommand::Geolocation {
+            latitude,
+            longitude,
+            ..
+        } if !(-90.0..=90.0).contains(latitude) || !(-180.0..=180.0).contains(longitude) => {
+            Err(CliError::Command(
+                "browser geolocation requires <lat> in [-90, 90] and <lng> in [-180, 180]".into(),
+            ))
+        }
+        BrowserCommand::Trace { action, path, .. } if action == "start" && path.is_some() => {
+            Err(CliError::Command(
+                "browser trace start takes no [path]".into(),
+            ))
+        }
+        BrowserCommand::Har { action, path, .. } if action == "start" && path.is_some() => {
+            Err(CliError::Command("browser har start takes no [path]".into()))
+        }
+        BrowserCommand::Network {
+            action, url, abort, body, resource_type, ..
+        } if action == "route" && url.is_none() => Err(CliError::Command(
+            "browser network route requires <url>".into(),
+        )),
+        BrowserCommand::Network { abort, body, .. } if *abort && body.is_some() => {
+            Err(CliError::Command(
+                "browser network route refuses --abort with --body together".into(),
+            ))
+        }
+        BrowserCommand::Network {
+            action,
+            url,
+            abort,
+            body,
+            resource_type,
+            ..
+        } if action != "route"
+            && (url.is_some() && action == "requests"
+                || *abort
+                || body.is_some()
+                || resource_type.is_some()) =>
+        {
+            if action == "requests" && url.is_some() {
+                Err(CliError::Command(
+                    "browser network requests takes no <url>".into(),
+                ))
+            } else {
+                Err(CliError::Command(
+                    format!("browser network {action} takes no --abort/--body/--resource-type"),
+                ))
+            }
+        }
         _ => Ok(()),
     }
 }
@@ -1340,6 +1390,80 @@ fn browser_command_to_rpc(cmd: &BrowserCommand) -> (&'static str, serde_json::Va
                 "path": path.as_deref().map(absolute_path)
             }),
         ),
+        BrowserCommand::Offline { surface, state } => (
+            "browser.offline",
+            json!({"surface_ref": surface, "offline": state == "on"}),
+        ),
+        BrowserCommand::Geolocation {
+            surface,
+            latitude,
+            longitude,
+        } => (
+            "browser.geolocation",
+            json!({
+                "surface_ref": surface,
+                "latitude": latitude,
+                "longitude": longitude
+            }),
+        ),
+        BrowserCommand::Trace {
+            surface,
+            action,
+            path,
+        } => {
+            if action == "start" {
+                ("browser.trace.start", json!({"surface_ref": surface}))
+            } else {
+                (
+                    "browser.trace.stop",
+                    json!({
+                        "surface_ref": surface,
+                        "path": path.as_deref().map(absolute_path)
+                    }),
+                )
+            }
+        }
+        BrowserCommand::Har {
+            surface,
+            action,
+            path,
+        } => {
+            if action == "start" {
+                ("browser.har.start", json!({"surface_ref": surface}))
+            } else {
+                (
+                    "browser.har.stop",
+                    json!({
+                        "surface_ref": surface,
+                        "path": path.as_deref().map(absolute_path)
+                    }),
+                )
+            }
+        }
+        BrowserCommand::Network {
+            surface,
+            action,
+            url,
+            abort,
+            body,
+            resource_type,
+        } => match action.as_str() {
+            "route" => (
+                "browser.network.route",
+                json!({
+                    "surface_ref": surface,
+                    "url": url,
+                    "abort": abort,
+                    "body": body,
+                    "resourceType": resource_type
+                }),
+            ),
+            "unroute" => (
+                "browser.network.unroute",
+                json!({"surface_ref": surface, "url": url}),
+            ),
+            _ => ("browser.network.requests", json!({"surface_ref": surface})),
+        },
     }
 }
 
@@ -3018,6 +3142,173 @@ mod tests {
         // A missing download path never parses.
         assert!(
             Cli::try_parse_from(["cmux", "browser", "download", "surface:3", "#dl"]).is_err()
+        );
+    }
+
+    /// `offline` toggles the flag, defaulting to on.
+    #[test]
+    fn browser_offline_maps_state() {
+        let cli = Cli::try_parse_from(["cmux", "browser", "offline", "surface:3"])
+            .expect("offline should default to on");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.offline");
+        assert_eq!(params["surface_ref"], "surface:3");
+        assert_eq!(params["offline"], true);
+
+        let cli = Cli::try_parse_from(["cmux", "browser", "offline", "surface:3", "off"])
+            .expect("offline off should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.offline");
+        assert_eq!(params["offline"], false);
+
+        assert!(Cli::try_parse_from(["cmux", "browser", "offline", "surface:3", "maybe"]).is_err());
+    }
+
+    /// `geolocation` sends coordinates; out-of-range pairs fail before connecting.
+    #[test]
+    fn browser_geolocation_maps_coords_and_rejects_out_of_bounds() {
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "browser",
+            "geolocation",
+            "surface:3",
+            "1.0",
+            "2.0",
+        ])
+        .expect("geolocation should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.geolocation");
+        assert_eq!(params["surface_ref"], "surface:3");
+        assert_eq!(params["latitude"], 1.0);
+        assert_eq!(params["longitude"], 2.0);
+
+        for (lat, lng) in [("91.0", "2.0"), ("-91.0", "2.0"), ("1.0", "181.0"), ("1.0", "-181.0")] {
+            let cli = Cli::try_parse_from(["cmux", "browser", "geolocation", "surface:3", lat, lng])
+                .expect("out-of-range coords should parse");
+            let message = match run(cli) {
+                Err(CliError::Command(message)) => message,
+                _ => panic!("geolocation {lat},{lng} must fail"),
+            };
+            assert_eq!(
+                message,
+                "browser geolocation requires <lat> in [-90, 90] and <lng> in [-180, 180]"
+            );
+        }
+    }
+
+    /// `trace` and `har` start empty and stop into a file; start with a path fails.
+    #[test]
+    fn browser_trace_and_har_map_start_stop() {
+        for (verb, start, stop) in [
+            ("trace", "browser.trace.start", "browser.trace.stop"),
+            ("har", "browser.har.start", "browser.har.stop"),
+        ] {
+            let cli = Cli::try_parse_from(["cmux", "browser", verb, "surface:3", "start"])
+                .expect("recorder start should parse");
+            let (method, params) = command_to_rpc(&cli.command);
+            assert_eq!(method, start, "{verb}");
+            assert_eq!(params["surface_ref"], "surface:3");
+
+            let cli = Cli::try_parse_from(["cmux", "browser", verb, "surface:3", "stop", "/tmp/x"])
+                .expect("recorder stop should parse");
+            let (method, params) = command_to_rpc(&cli.command);
+            assert_eq!(method, stop, "{verb}");
+            assert_eq!(params["path"], "/tmp/x");
+
+            let cli = Cli::try_parse_from(["cmux", "browser", verb, "surface:3", "start", "/tmp/x"])
+                .expect("recorder start with path should parse");
+            let message = match run(cli) {
+                Err(CliError::Command(message)) => message,
+                _ => panic!("{verb} start with a path must fail"),
+            };
+            assert_eq!(message, format!("browser {verb} start takes no [path]"), "{verb}");
+            assert!(
+                Cli::try_parse_from(["cmux", "browser", verb, "surface:3", "freeze"]).is_err()
+            );
+        }
+    }
+
+    /// `network` routes, unroutes or lists; `--abort` with `--body` fails.
+    #[test]
+    fn browser_network_maps_route_unroute_requests() {
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "browser",
+            "network",
+            "surface:3",
+            "route",
+            "**/api/*",
+            "--abort",
+        ])
+        .expect("network route should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.network.route");
+        assert_eq!(params["surface_ref"], "surface:3");
+        assert_eq!(params["url"], "**/api/*");
+        assert_eq!(params["abort"], true);
+
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "browser",
+            "network",
+            "surface:3",
+            "route",
+            "**/api/*",
+            "--body",
+            "{\"ok\":true}",
+            "--resource-type",
+            "xhr,fetch",
+        ])
+        .expect("network route with body should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.network.route");
+        assert_eq!(params["body"], "{\"ok\":true}");
+        assert_eq!(params["resourceType"], "xhr,fetch");
+
+        let cli = Cli::try_parse_from(["cmux", "browser", "network", "surface:3", "unroute"])
+            .expect("network unroute should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.network.unroute");
+        assert!(params["url"].is_null());
+
+        let cli = Cli::try_parse_from(["cmux", "browser", "network", "surface:3", "requests"])
+            .expect("network requests should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.network.requests");
+        assert_eq!(params["surface_ref"], "surface:3");
+
+        // `--abort` with `--body` is refused before any connection.
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "browser",
+            "network",
+            "surface:3",
+            "route",
+            "**/api/*",
+            "--abort",
+            "--body",
+            "{}",
+        ])
+        .expect("conflicting route should parse");
+        let message = match run(cli) {
+            Err(CliError::Command(message)) => message,
+            _ => panic!("network route with --abort and --body must fail"),
+        };
+        assert_eq!(
+            message,
+            "browser network route refuses --abort with --body together"
+        );
+
+        // Route without a URL is refused, and an unknown action never parses.
+        let cli = Cli::try_parse_from(["cmux", "browser", "network", "surface:3", "route"])
+            .expect("route without url should parse");
+        let message = match run(cli) {
+            Err(CliError::Command(message)) => message,
+            _ => panic!("network route without a url must fail"),
+        };
+        assert_eq!(message, "browser network route requires <url>");
+        assert!(
+            Cli::try_parse_from(["cmux", "browser", "network", "surface:3", "freeze"]).is_err()
         );
     }
 
