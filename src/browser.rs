@@ -877,6 +877,29 @@ pub(crate) fn daemon_action(
         "errors.clear" => return Err("agent-browser cannot clear page errors".into()),
         "state.save" => "state_save",
         "state.load" => "state_load",
+        // agent-browser documents `set viewport <w> <h>` and no reset verb.
+        "viewport" => {
+            if params
+                .get("width")
+                .and_then(Value::as_str)
+                .is_some_and(|width| width == "reset")
+            {
+                return Err(
+                    "agent-browser has no viewport reset; specify <width> <height>".into(),
+                );
+            }
+            "viewport"
+        }
+        // Dotted cookie and storage actions follow the `state.save` underscore convention.
+        "cookies.get" => "cookies_get",
+        "cookies.set" => "cookies_set",
+        "cookies.clear" => "cookies_clear",
+        // The daemon has one `storage_get` action; the area travels as `type`.
+        "storage.local" | "storage.session" => {
+            let area = action.trim_start_matches("storage.");
+            params.insert("type".into(), Value::String(area.into()));
+            "storage_get"
+        }
         _ if action.starts_with("find.") => {
             return Err("browser find is not supported: agent-browser locators always act on the element; use snapshot refs or CSS selectors".into())
         }
@@ -956,6 +979,57 @@ mod manager_tests {
         );
         assert!(translate("find.role", serde_json::json!({})).is_err());
         assert!(translate("errors.clear", serde_json::json!({})).is_err());
+    }
+
+    /// Viewport, cookies and storage reach the daemon under its own action names.
+    #[test]
+    fn advanced_browser_verbs_translate_to_daemon_actions() {
+        let translate = |action: &str, params: Value| {
+            let mut params = params.as_object().cloned().unwrap();
+            daemon_action(action, &mut params).map(|daemon| (daemon, Value::Object(params)))
+        };
+        // agent-browser documents `set viewport <w> <h>` and no reset verb.
+        assert_eq!(
+            translate(
+                "viewport",
+                serde_json::json!({"width": 800, "height": 600})
+            )
+            .unwrap(),
+            (
+                "viewport".into(),
+                serde_json::json!({"width": 800, "height": 600})
+            )
+        );
+        assert!(translate("viewport", serde_json::json!({"width": "reset"})).is_err());
+        for (upstream, daemon) in [
+            ("cookies.get", "cookies_get"),
+            ("cookies.set", "cookies_set"),
+            ("cookies.clear", "cookies_clear"),
+        ] {
+            assert_eq!(
+                translate(upstream, serde_json::json!({})).unwrap().0,
+                daemon
+            );
+        }
+        // Storage areas map onto the daemon's single `storage_get` action.
+        for area in ["local", "session"] {
+            assert_eq!(
+                translate(&format!("storage.{area}"), serde_json::json!({})).unwrap(),
+                ("storage_get".into(), serde_json::json!({"type": area}))
+            );
+        }
+        // Cookie set options survive translation untouched.
+        assert_eq!(
+            translate(
+                "cookies.set",
+                serde_json::json!({"name": "id", "value": "7", "httpOnly": true})
+            )
+            .unwrap(),
+            (
+                "cookies_set".into(),
+                serde_json::json!({"name": "id", "value": "7", "httpOnly": true})
+            )
+        );
     }
 
     /// `--property` keeps one computed style, `null` when the page has none.

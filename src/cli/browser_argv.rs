@@ -60,6 +60,9 @@ const KNOWN_VERBS: &[&str] = &[
     "highlight",
     "state",
     "screenshot",
+    "viewport",
+    "cookies",
+    "storage",
     "stream-enable",
     "stream-disable",
     "help",
@@ -214,5 +217,20 @@ mod tests {
         assert_eq!(rewritten(&clap_line), clap_line);
         let other_line = ["cmux", "list-surfaces", "--workspace", "workspace:2"];
         assert_eq!(rewritten(&other_line), other_line);
+    }
+
+    /// The new verbs keep the clap spelling and move a bare upstream handle behind them.
+    #[test]
+    fn advanced_verbs_keep_their_clap_spelling() {
+        let viewport = ["cmux", "browser", "viewport", "surface:2", "800", "600"];
+        assert_eq!(rewritten(&viewport), viewport);
+        let cookies = ["cmux", "browser", "cookies", "surface:2", "get"];
+        assert_eq!(rewritten(&cookies), cookies);
+        let storage = ["cmux", "browser", "storage", "surface:2", "local"];
+        assert_eq!(rewritten(&storage), storage);
+        assert_eq!(
+            rewritten(&["cmux", "browser", "surface:2", "viewport", "800", "600"]),
+            ["cmux", "browser", "viewport", "surface:2", "800", "600"]
+        );
     }
 }

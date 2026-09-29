@@ -1772,6 +1772,58 @@ pub enum BrowserCommand {
         #[command(subcommand)]
         command: BrowserStateCommand,
     },
+    /// Resize the browser viewport
+    // `allow_negative_numbers` lets a negative size parse so validation reports it clearly.
+    #[command(allow_negative_numbers = true)]
+    Viewport {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Width in pixels, or `reset` (agent-browser documents no reset)
+        width: String,
+        /// Height in pixels
+        height: Option<i32>,
+    },
+    /// Manage browser cookies
+    Cookies {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Action: get (default), set or clear
+        #[arg(default_value = "get", value_parser = ["get", "set", "clear"])]
+        action: String,
+        /// Cookie name (set only)
+        name: Option<String>,
+        /// Cookie value (set only)
+        value: Option<String>,
+        /// URL to set the cookie for
+        #[arg(long)]
+        url: Option<String>,
+        /// Cookie domain
+        #[arg(long)]
+        domain: Option<String>,
+        /// Cookie path
+        #[arg(long)]
+        path: Option<String>,
+        /// HttpOnly flag
+        #[arg(long = "httpOnly")]
+        http_only: bool,
+        /// Secure flag
+        #[arg(long)]
+        secure: bool,
+        /// SameSite attribute
+        #[arg(long = "sameSite")]
+        same_site: Option<String>,
+        /// Expiration as a Unix timestamp in seconds (the daemon rejects a string)
+        #[arg(long)]
+        expires: Option<i64>,
+    },
+    /// Read browser web storage
+    Storage {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Store to read: local or session
+        #[arg(value_parser = ["local", "session"])]
+        store: String,
+    },
 }
 
 /// Page values readable through `cmux browser get <what> <surface>`.
@@ -3186,5 +3238,105 @@ mod config_argument_tests {
             );
         }
         assert!(Cli::try_parse_from(["cmux", "config", "docs", "extra"]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod browser_verb_tests {
+    use super::*;
+
+    /// Parse one browser invocation and return its command.
+    fn parse_browser(arguments: &[&str]) -> Commands {
+        let mut invocation = vec!["cmux"];
+        invocation.extend_from_slice(arguments);
+        Cli::try_parse_from(invocation)
+            .unwrap_or_else(|error| panic!("{arguments:?} should parse: {error}"))
+            .command
+    }
+
+    /// The viewport, cookies and storage verbs parse with the surface first.
+    #[test]
+    fn advanced_browser_verbs_parse_with_the_surface_first() {
+        match parse_browser(&["browser", "viewport", "surface:3", "800", "600"]) {
+            Commands::Browser(BrowserCommand::Viewport {
+                surface,
+                width,
+                height,
+            }) => {
+                assert_eq!(surface, "surface:3");
+                assert_eq!(width, "800");
+                assert_eq!(height, Some(600));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse_browser(&["browser", "viewport", "surface:3", "reset"]) {
+            Commands::Browser(BrowserCommand::Viewport {
+                surface,
+                width,
+                height,
+            }) => {
+                assert_eq!(surface, "surface:3");
+                assert_eq!(width, "reset");
+                assert!(height.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse_browser(&["browser", "cookies", "surface:3"]) {
+            Commands::Browser(BrowserCommand::Cookies { action, .. }) => {
+                assert_eq!(action, "get");
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse_browser(&[
+            "browser",
+            "cookies",
+            "surface:3",
+            "set",
+            "id",
+            "7",
+            "--domain",
+            "example.com",
+        ]) {
+            Commands::Browser(BrowserCommand::Cookies {
+                action,
+                name,
+                value,
+                domain,
+                ..
+            }) => {
+                assert_eq!(action, "set");
+                assert_eq!(name.as_deref(), Some("id"));
+                assert_eq!(value.as_deref(), Some("7"));
+                assert_eq!(domain.as_deref(), Some("example.com"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse_browser(&["browser", "storage", "surface:3", "session"]) {
+            Commands::Browser(BrowserCommand::Storage { surface, store }) => {
+                assert_eq!(surface, "surface:3");
+                assert_eq!(store, "session");
+            }
+            _ => panic!("wrong command variant"),
+        }
+        // Unknown cookie actions and stores never parse.
+        assert!(
+            Cli::try_parse_from(["cmux", "browser", "cookies", "surface:3", "freeze"]).is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["cmux", "browser", "storage", "surface:3", "disk"]).is_err()
+        );
+    }
+
+    /// `--expires` is a Unix timestamp: the daemon rejects it as a string.
+    #[test]
+    fn browser_cookie_expires_must_be_a_number() {
+        assert!(Cli::try_parse_from([
+            "cmux", "browser", "cookies", "surface:1", "set", "k", "v", "--expires", "2999999999",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "cmux", "browser", "cookies", "surface:1", "set", "k", "v", "--expires", "demain",
+        ])
+        .is_err());
     }
 }

@@ -819,6 +819,35 @@ fn validate_browser_command(command: &BrowserCommand) -> Result<(), CliError> {
                 "browser scroll requires a direction (up/down/left/right) or --dx/--dy".into(),
             ))
         }
+        BrowserCommand::Viewport { width, height, .. } if width == "reset" => {
+            Err(CliError::Command(
+                "agent-browser has no viewport reset; specify <width> <height>".into(),
+            ))
+        }
+        BrowserCommand::Viewport { width, height, .. }
+            if width.parse::<i32>().map_or(true, |size| size <= 0)
+                || height.is_none_or(|size| size <= 0) =>
+        {
+            Err(CliError::Command(
+                "browser viewport requires <width> <height> (positive pixels)".into(),
+            ))
+        }
+        BrowserCommand::Cookies {
+            action,
+            name,
+            value,
+            ..
+        } if action == "set" && (name.is_none() || value.is_none()) => Err(CliError::Command(
+            "browser cookies set requires <name> <value>".into(),
+        )),
+        BrowserCommand::Cookies {
+            action,
+            name,
+            value,
+            ..
+        } if action != "set" && (name.is_some() || value.is_some()) => Err(CliError::Command(
+            format!("browser cookies {action} takes no <name> <value>"),
+        )),
         _ => Ok(()),
     }
 }
@@ -1166,6 +1195,65 @@ fn browser_command_to_rpc(cmd: &BrowserCommand) -> (&'static str, serde_json::Va
                 json!({"surface_ref": surface, "path": absolute_path(path)}),
             ),
         },
+        BrowserCommand::Viewport {
+            surface,
+            width,
+            height,
+        } => {
+            // Validated before dispatch: the width parses and the height is present.
+            let width: i32 = width
+                .parse()
+                .expect("browser viewport is validated before dispatch");
+            let height = (*height).expect("browser viewport is validated before dispatch");
+            (
+                "browser.viewport",
+                json!({"surface_ref": surface, "width": width, "height": height}),
+            )
+        }
+        BrowserCommand::Cookies {
+            surface,
+            action,
+            name,
+            value,
+            url,
+            domain,
+            path,
+            http_only,
+            secure,
+            same_site,
+            expires,
+        } => {
+            let method = match action.as_str() {
+                "set" => "browser.cookies.set",
+                "clear" => "browser.cookies.clear",
+                _ => "browser.cookies.get",
+            };
+            (
+                method,
+                json!({
+                    "surface_ref": surface,
+                    "name": name,
+                    "value": value,
+                    "url": url,
+                    "domain": domain,
+                    "path": path,
+                    "httpOnly": http_only,
+                    "secure": secure,
+                    "sameSite": same_site,
+                    "expires": expires
+                }),
+            )
+        }
+        BrowserCommand::Storage { surface, store } => {
+            if store == "session" {
+                (
+                    "browser.storage.session",
+                    json!({"surface_ref": surface}),
+                )
+            } else {
+                ("browser.storage.local", json!({"surface_ref": surface}))
+            }
+        }
     }
 }
 
@@ -2657,6 +2745,107 @@ mod tests {
         assert_eq!(method, "browser.scroll");
         assert_eq!(params["direction"], "down");
         assert_eq!(params["amount"], 300);
+    }
+
+    /// `viewport` maps sizes to its method; reset and missing numbers fail before connecting.
+    #[test]
+    fn browser_viewport_maps_sizes_and_rejects_reset() {
+        let cli = Cli::try_parse_from(["cmux", "browser", "viewport", "surface:3", "800", "600"])
+            .expect("viewport sizes should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.viewport");
+        assert_eq!(params["surface_ref"], "surface:3");
+        assert_eq!(params["width"], 800);
+        assert_eq!(params["height"], 600);
+
+        // agent-browser documents no reset verb, so it parses but is refused clearly.
+        let cli = Cli::try_parse_from(["cmux", "browser", "viewport", "surface:3", "reset"])
+            .expect("viewport reset should parse");
+        let message = match run(cli) {
+            Err(CliError::Command(message)) => message,
+            _ => panic!("viewport reset must fail"),
+        };
+        assert_eq!(
+            message,
+            "agent-browser has no viewport reset; specify <width> <height>"
+        );
+
+        // A missing height parses but is refused before any connection.
+        let cli = Cli::try_parse_from(["cmux", "browser", "viewport", "surface:3", "800"])
+            .expect("viewport width should parse");
+        let message = match run(cli) {
+            Err(CliError::Command(message)) => message,
+            _ => panic!("viewport without a height must fail"),
+        };
+        assert_eq!(
+            message,
+            "browser viewport requires <width> <height> (positive pixels)"
+        );
+    }
+
+    /// `cookies` picks get, set or clear; set needs a name and value, the rest takes none.
+    #[test]
+    fn browser_cookies_pick_their_action() {
+        let cli = Cli::try_parse_from(["cmux", "browser", "cookies", "surface:3"])
+            .expect("cookies should default to get");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.cookies.get");
+        assert_eq!(params["surface_ref"], "surface:3");
+
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "browser",
+            "cookies",
+            "surface:3",
+            "set",
+            "id",
+            "7",
+            "--httpOnly",
+            "--sameSite",
+            "Lax",
+        ])
+        .expect("cookies set should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.cookies.set");
+        assert_eq!(params["name"], "id");
+        assert_eq!(params["value"], "7");
+        assert_eq!(params["httpOnly"], true);
+        assert_eq!(params["sameSite"], "Lax");
+
+        let cli = Cli::try_parse_from(["cmux", "browser", "cookies", "surface:3", "clear"])
+            .expect("cookies clear should parse");
+        let (method, _) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.cookies.clear");
+
+        // Set without a value is refused, and an unknown action never parses.
+        let cli = Cli::try_parse_from(["cmux", "browser", "cookies", "surface:3", "set", "id"])
+            .expect("cookies set should parse");
+        let message = match run(cli) {
+            Err(CliError::Command(message)) => message,
+            _ => panic!("cookies set without a value must fail"),
+        };
+        assert_eq!(message, "browser cookies set requires <name> <value>");
+        assert!(
+            Cli::try_parse_from(["cmux", "browser", "cookies", "surface:3", "freeze"]).is_err()
+        );
+    }
+
+    /// `storage` reads the local or session store; anything else never parses.
+    #[test]
+    fn browser_storage_reads_either_store() {
+        for (store, method) in [
+            ("local", "browser.storage.local"),
+            ("session", "browser.storage.session"),
+        ] {
+            let cli = Cli::try_parse_from(["cmux", "browser", "storage", "surface:3", store])
+                .expect("storage store should parse");
+            let (actual, params) = command_to_rpc(&cli.command);
+            assert_eq!(actual, method, "{store}");
+            assert_eq!(params["surface_ref"], "surface:3");
+        }
+        assert!(
+            Cli::try_parse_from(["cmux", "browser", "storage", "surface:3", "disk"]).is_err()
+        );
     }
 
     /// `fill` without text clears the field instead of failing to parse.
