@@ -388,6 +388,8 @@ pub fn show(parent: &gtk4::ApplicationWindow, state: &crate::app_state::AppState
     notebook.set_vexpand(true);
     let app = page(&notebook, "App");
     let terminal = page(&notebook, "Terminal");
+    let shortcuts = page(&notebook, "Shortcuts");
+    crate::shortcut_settings::append(&shortcuts, &dialog);
     content.append(&notebook);
     let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
     let label = gtk4::Label::new(Some("Terminal font size (pt)"));

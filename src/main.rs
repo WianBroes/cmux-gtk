@@ -49,6 +49,8 @@ mod session;
 #[path = "settings_json.rs"]
 #[allow(dead_code)]
 mod settings_json;
+mod shortcut_rules;
+mod shortcut_settings;
 mod shortcuts;
 mod sidebar;
 mod socket;

@@ -144,6 +144,86 @@ pub fn reload_shortcuts() -> bool {
     true
 }
 
+/// The action bound to a key combination in the live map, if any (for conflict checks).
+pub fn live_lookup(mods: ModifierType, key: Key) -> Option<ShortcutAction> {
+    let live = LIVE_MAP.with(|live| live.borrow().clone())?;
+    let action = live.borrow().lookup(mods, key);
+    action
+}
+
+/// GTK spelling of the key the live map gives an action; `None` when unbound.
+pub fn live_accelerator(action: ShortcutAction) -> Option<String> {
+    let live = LIVE_MAP.with(|live| live.borrow().clone())?;
+    let accelerator = live.borrow().accelerator_for(action);
+    accelerator
+}
+
+/// Shortcuts editable from the settings page: `cmux.json` action id, label, section, action.
+/// This is the table behind [`shortcut_slot`]; other actions are still set in `config.toml`.
+pub const EDITABLE_SHORTCUTS: &[(&str, &str, &str, ShortcutAction)] = &[
+    ("newTab", "New workspace", "Workspaces", ShortcutAction::NewWorkspace),
+    ("closeWorkspace", "Close workspace", "Workspaces", ShortcutAction::CloseWorkspace),
+    ("nextSidebarTab", "Next workspace", "Workspaces", ShortcutAction::NextWorkspace),
+    ("prevSidebarTab", "Previous workspace", "Workspaces", ShortcutAction::PrevWorkspace),
+    ("moveWorkspaceUp", "Move workspace up", "Workspaces", ShortcutAction::MoveWorkspaceUp),
+    ("moveWorkspaceDown", "Move workspace down", "Workspaces", ShortcutAction::MoveWorkspaceDown),
+    (
+        "toggleFocusedWorkspaceGroupCollapsed",
+        "Collapse / expand workspace group",
+        "Workspaces",
+        ShortcutAction::ToggleWorkspaceGroup,
+    ),
+    ("renameWorkspace", "Rename workspace", "Workspaces", ShortcutAction::RenameWorkspace),
+    ("splitRight", "Split right", "Panes", ShortcutAction::SplitRight),
+    ("splitDown", "Split down", "Panes", ShortcutAction::SplitDown),
+    ("focusLeft", "Focus pane left", "Panes", ShortcutAction::FocusLeft),
+    ("focusRight", "Focus pane right", "Panes", ShortcutAction::FocusRight),
+    ("focusUp", "Focus pane up", "Panes", ShortcutAction::FocusUp),
+    ("focusDown", "Focus pane down", "Panes", ShortcutAction::FocusDown),
+    ("focusHistoryBack", "Focus history back", "Panes", ShortcutAction::FocusBack),
+    ("focusHistoryForward", "Focus history forward", "Panes", ShortcutAction::FocusForward),
+    ("toggleSidebar", "Toggle sidebar", "Sidebars", ShortcutAction::ToggleSidebar),
+    ("focusRightSidebar", "Focus file explorer", "Sidebars", ShortcutAction::FocusRightSidebar),
+    ("openBrowser", "Open browser", "Browser", ShortcutAction::BrowserOpen),
+];
+
+/// Combinations wired directly to menu actions, not editable, that a new shortcut must not take.
+pub const FIXED_SHORTCUTS: &[(&str, &str)] = &[
+    ("<Ctrl>t", "New terminal tab"),
+    ("<Ctrl><Shift>l", "New browser tab"),
+    ("<Ctrl><Shift>c", "Copy"),
+    ("<Ctrl><Shift>v", "Paste"),
+    ("<Ctrl>f", "Find"),
+    ("<Ctrl>comma", "Preferences"),
+    ("<Ctrl><Shift>i", "Notifications"),
+    ("<Ctrl>q", "Quit"),
+];
+
+/// Spell a captured key as a `cmux.json` shortcut ("ctrl+shift+pageup"); the exact inverse of
+/// [`to_gtk_accelerator`] for the keys the settings page accepts.
+pub fn accelerator_to_text(mods: ModifierType, key: Key) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if mods.contains(ModifierType::CONTROL_MASK) {
+        parts.push("ctrl".into());
+    }
+    if mods.contains(ModifierType::SHIFT_MASK) {
+        parts.push("shift".into());
+    }
+    if mods.contains(ModifierType::ALT_MASK) {
+        parts.push("alt".into());
+    }
+    let name = key.name().map(|n| n.to_string()).unwrap_or_default();
+    parts.push(match name.as_str() {
+        "bracketleft" => "[".into(),
+        "bracketright" => "]".into(),
+        "Page_Up" => "pageup".into(),
+        "Page_Down" => "pagedown".into(),
+        "Return" | "KP_Enter" => "enter".into(),
+        other => other.to_ascii_lowercase(),
+    });
+    parts.join("+")
+}
+
 /// HashMap-based shortcut lookup table built from config + defaults.
 pub struct ShortcutMap {
     map: HashMap<(ModifierType, Key), ShortcutAction>,
@@ -242,7 +322,7 @@ fn overlay_cmux_json(config: &mut Config) {
 /// Map the `cmux.json` keys the Linux app honors onto `Config`.
 ///
 /// Only `shortcuts.bindings.<actionId>` with a single shortcut string is mapped (table in
-/// [`shortcut_slot`]); chords, `null`/`""` unbinding and ids without a Linux action are ignored.
+/// [`shortcut_slot`]); chords and ids without a Linux action are ignored; `null`/`""`/`none`/… unbind.
 /// Other sections stay CLI-only (`cmux config get|set`) until the app has a setting for them.
 fn apply_cmux_json(config: &mut Config, value: &serde_json::Value) {
     let Some(bindings) = value
@@ -255,7 +335,20 @@ fn apply_cmux_json(config: &mut Config, value: &serde_json::Value) {
         let Some(slot) = shortcut_slot(&mut config.shortcuts, id) else {
             continue;
         };
-        let Some(text) = binding.as_str().filter(|s| !s.trim().is_empty()) else {
+        // Unbinding spellings from the schema: null, "", none, clear, unbound, disabled. An
+        // empty accelerator in `ShortcutConfig` means "no key for this action".
+        if binding.is_null()
+            || binding.as_str().is_some_and(|s| {
+                matches!(
+                    s.trim().to_ascii_lowercase().as_str(),
+                    "" | "none" | "clear" | "unbound" | "disabled"
+                )
+            })
+        {
+            *slot = Some(String::new());
+            continue;
+        }
+        let Some(text) = binding.as_str() else {
             continue;
         };
         *slot = Some(to_gtk_accelerator(text));
@@ -316,7 +409,21 @@ fn to_gtk_accelerator(text: &str) -> String {
         "enter" | "return" => "Return",
         "escape" | "esc" => "Escape",
         "space" => "space",
-        _ => return out + &key.to_ascii_lowercase(),
+        "home" => "Home",
+        "end" => "End",
+        "insert" => "Insert",
+        "delete" => "Delete",
+        "backspace" => "BackSpace",
+        lower => {
+            // Function keys are spelled F1..F35 by GDK, which is case sensitive.
+            let function = lower
+                .strip_prefix('f')
+                .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+            return match function {
+                Some(n) => format!("{out}F{n}"),
+                None => out + lower,
+            };
+        }
     });
     out
 }
@@ -469,6 +576,9 @@ impl ShortcutMap {
 
         for (action, config_val, default_accel) in entries {
             let accel_str = config_val.as_deref().unwrap_or(*default_accel);
+            if accel_str.is_empty() {
+                continue; // explicitly unbound
+            }
             let action_name = format!("{:?}", action);
 
             if let Some((key, mods)) = gtk4::accelerator_parse(accel_str) {
@@ -582,7 +692,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// `cmux.json` bindings override the TOML value; chords, null and unknown ids are ignored.
+    /// `cmux.json` bindings override the TOML value; chords and unknown ids are ignored; null unbinds.
     #[test]
     fn test_apply_cmux_json_bindings() {
         let mut config: Config =
@@ -596,7 +706,7 @@ mod tests {
         apply_cmux_json(&mut config, &json);
         assert_eq!(config.shortcuts.new_workspace.as_deref(), Some("<Ctrl><Shift>n"));
         assert_eq!(config.shortcuts.split_right, None);
-        assert_eq!(config.shortcuts.split_down.as_deref(), Some("<Ctrl>j"));
+        assert_eq!(config.shortcuts.split_down.as_deref(), Some(""));
         assert_eq!(
             config.shortcuts.focus_back.as_deref(),
             Some("<Ctrl><Alt>bracketleft")
@@ -643,6 +753,8 @@ buttons_right = ["split_right", "toggle_sidebar"]
             eprintln!("Skipping test_shortcut_map_defaults: GTK4 init failed (headless)");
             return;
         }
+        cmux_json_unbind_spellings_leave_no_key_for_the_action();
+        captured_shortcuts_round_trip_through_cmux_json_text();
         let smap = ShortcutMap::from_config(&ShortcutConfig::default());
         // Ctrl+N should map to NewWorkspace
         let result = smap.lookup(ModifierType::CONTROL_MASK, Key::n);
@@ -674,4 +786,46 @@ buttons_right = ["split_right", "toggle_sidebar"]
         // Ctrl+N should no longer map to NewWorkspace
         assert_eq!(smap.lookup(ModifierType::CONTROL_MASK, Key::n), None);
     }
+
+    /// Needs GTK: called from `test_shortcut_map_defaults`, the one test thread that owns GTK.
+    fn cmux_json_unbind_spellings_leave_no_key_for_the_action() {
+        for spelling in [
+            serde_json::json!(null),
+            serde_json::json!(""),
+            serde_json::json!("none"),
+            serde_json::json!("Unbound"),
+            serde_json::json!("disabled"),
+        ] {
+            let mut config = Config::default();
+            let doc = serde_json::json!({"shortcuts": {"bindings": {"splitRight": spelling}}});
+            apply_cmux_json(&mut config, &doc);
+            assert_eq!(config.shortcuts.split_right.as_deref(), Some(""));
+            let map = ShortcutMap::from_config(&config.shortcuts);
+            assert_eq!(map.accelerator_for(ShortcutAction::SplitRight), None);
+            // Other actions keep their defaults.
+            assert!(map.accelerator_for(ShortcutAction::SplitDown).is_some());
+        }
+    }
+
+    /// Needs GTK: called from `test_shortcut_map_defaults`, the one test thread that owns GTK.
+    fn captured_shortcuts_round_trip_through_cmux_json_text() {
+        let cases = [
+            (ModifierType::CONTROL_MASK | ModifierType::SHIFT_MASK, Key::k),
+            (ModifierType::CONTROL_MASK | ModifierType::ALT_MASK, Key::Left),
+            (ModifierType::CONTROL_MASK | ModifierType::SHIFT_MASK, Key::Page_Up),
+            (ModifierType::CONTROL_MASK | ModifierType::ALT_MASK, Key::bracketleft),
+            (ModifierType::ALT_MASK, Key::F5),
+            (ModifierType::CONTROL_MASK | ModifierType::ALT_MASK, Key::comma),
+            (ModifierType::CONTROL_MASK | ModifierType::ALT_MASK, Key::Return),
+            (ModifierType::CONTROL_MASK | ModifierType::ALT_MASK, Key::Home),
+        ];
+        for (mods, key) in cases {
+            let text = accelerator_to_text(mods, key);
+            let accel = to_gtk_accelerator(&text);
+            let (parsed_key, parsed_mods) = gtk4::accelerator_parse(&accel)
+                .unwrap_or_else(|| panic!("'{text}' -> '{accel}' does not parse"));
+            assert_eq!((parsed_key, parsed_mods & MOD_MASK), (key.to_lower(), mods), "{text}");
+        }
+    }
+
 }
