@@ -1061,15 +1061,6 @@ pub(crate) enum ScopeArg {
     Project,
 }
 
-impl From<ScopeArg> for super::settings_json::Scope {
-    fn from(argument: ScopeArg) -> Self {
-        match argument {
-            ScopeArg::Global => super::settings_json::Scope::Global,
-            ScopeArg::Project => super::settings_json::Scope::Project,
-        }
-    }
-}
-
 /// `cmux config <sub>`: read, validate and edit `cmux.json` with the app closed.
 ///
 /// These verbs only read or write the file and the bundled schema; none of them opens the
@@ -3195,14 +3186,5 @@ mod config_argument_tests {
             );
         }
         assert!(Cli::try_parse_from(["cmux", "config", "docs", "extra"]).is_err());
-    }
-
-    /// `--scope` carries the two scopes the settings file has and nothing else.
-    #[test]
-    fn scope_values_map_onto_the_settings_scopes() {
-        let global: super::super::settings_json::Scope = ScopeArg::Global.into();
-        let project: super::super::settings_json::Scope = ScopeArg::Project.into();
-        assert_eq!(global, super::super::settings_json::Scope::Global);
-        assert_eq!(project, super::super::settings_json::Scope::Project);
     }
 }

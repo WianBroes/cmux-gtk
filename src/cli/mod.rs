@@ -41,6 +41,15 @@ pub mod browser_argv;
 mod diff;
 mod handles;
 pub use args::{BrowserCommand, Cli, Commands};
+impl From<args::ScopeArg> for settings_json::Scope {
+    fn from(argument: args::ScopeArg) -> Self {
+        match argument {
+            args::ScopeArg::Global => settings_json::Scope::Global,
+            args::ScopeArg::Project => settings_json::Scope::Project,
+        }
+    }
+}
+
 use std::io::Write;
 use std::time::Duration;
 
@@ -1967,6 +1976,15 @@ fn notification_caller_params() -> serde_json::Value {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    /// `--scope` carries the two scopes the settings file has and nothing else.
+    #[test]
+    fn scope_values_map_onto_the_settings_scopes() {
+        let global: settings_json::Scope = args::ScopeArg::Global.into();
+        let project: settings_json::Scope = args::ScopeArg::Project.into();
+        assert_eq!(global, settings_json::Scope::Global);
+        assert_eq!(project, settings_json::Scope::Project);
+    }
 
     /// Preserve explicit workspace naming and directory arguments in the outgoing RPC parameters.
     #[test]
