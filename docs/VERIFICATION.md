@@ -22,3 +22,24 @@ real application under Xvfb; a unit test alone never counts. Rows are updated on
 | SSH / mosh | Vrai SSH et PTY, héritage de script, ordre des workspaces, aller-retour de session | vérifié pour SSH (CI vert, sshd installé par la CI), lu par docstring seulement ; mosh : non vérifiable sans hôte distant | `tests/test_linux_workspace_launch.py`, [run 36601225375](https://github.com/WianBroes/cmux-gtk/actions/runs/36601225375) |
 | Session, quit, scrollback | Sauvegarde finale à la fermeture immédiate, récupération d'un workspace fermé, historique stylé conservé sur deux redémarrages | vérifié (CI vert), lu par docstring seulement | `tests/test_linux_session_quit.py`, `tests/test_linux_previous_session.py`, `tests/test_linux_scrollback_restore.py`, [run 36601225375](https://github.com/WianBroes/cmux-gtk/actions/runs/36601225375) |
 | État de la fenêtre | Position, taille et maximisation conservées après redémarrage, sous Openbox avec `xdotool`/`wmctrl` (aucun `assert`, mais chaque condition est attendue avec délai) | vérifié (CI vert). À noter pour l'issue 4 : Openbox fonctionne en CI | `tests/test_linux_window_state.py`, [run 36601225375](https://github.com/WianBroes/cmux-gtk/actions/runs/36601225375) |
+
+## Preuve par mutation
+
+Chaque ligne : une ligne du produit est cassée volontairement dans une copie jetable (jamais commitée), le code est recompilé, puis le test doit échouer (`KILLED`). Banc : `tests/mutation_cases.json`, `tests/run_mutation.py`, `.github/workflows/mutation.yml`. Résultat : les 12 cassages ont été attrapés ([run 36609907008](https://github.com/WianBroes/cmux-gtk/actions/runs/36609907008)). Seul l'échec du cassage `osc-body-limit` a été relu dans le log (timeout attendu « completed OSC99 and parser recovery ») ; pour les 11 autres, on sait que le test a échoué mais pas que la cause est celle attendue.
+
+| Cassage | Ce que le test doit garantir | Test | Résultat |
+| --- | --- | --- | --- |
+| `hook-stop-notification` | a Claude Stop/Notification hook creates an in-app notification | `tests/test_linux_claude_hooks.py` | KILLED |
+| `hook-body-limit` | hook notification bodies are bounded to 8 KiB | `tests/test_linux_claude_hooks.py` | KILLED |
+| `sidebar-status-limit` | a workspace holds at most 32 status entries | `tests/test_linux_sidebar_metadata.py` | KILLED |
+| `osc-body-limit` | chunked OSC 99 bodies up to 8 KiB are assembled | `tests/test_linux_osc_notifications.py` | KILLED |
+| `resume-secret-filter` | secret-like environment variables are not persisted in a resume binding | `tests/test_linux_resume.py` | KILLED |
+| `send-key-field` | send-text and send-key reach the shell as typed input | `tests/test_linux_agent_terminal_io.py` | KILLED |
+| `reorder-dry-run` | a dry-run reorder does not change workspace order | `tests/test_linux_workspace_reorder_many.py` | KILLED |
+| `window-maximized` | the maximized state survives a restart | `tests/test_linux_window_state.py` | KILLED |
+| `window-size-restore` | window size is restored after a restart | `tests/test_linux_window_state.py` | KILLED |
+| `git-untracked-dirty` | untracked files mark a workspace dirty | `tests/test_linux_git_metadata.py` | KILLED |
+| `group-collapse` | a workspace group can be collapsed | `tests/test_workspace_groups.py` | KILLED |
+| `ports-attribution` | a listener is attributed to its own terminal | `tests/test_linux_ports.py` | KILLED |
+
+Les lignes du tableau du haut qui ne sont pas listées ici restent sans preuve par mutation.
