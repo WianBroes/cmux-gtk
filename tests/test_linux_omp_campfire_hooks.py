@@ -96,7 +96,6 @@ await new Promise(resolve => setTimeout(resolve, 750));
             def notifications():
                 return json.loads(app.cli("notifications", "list", "--json"))["notifications"]
 
-            expected_notifications = 0
             for provider in ("omp", "campfire"):
                 invoke(provider, "lifecycle")
                 binding = json.loads(app.cli(
@@ -112,23 +111,21 @@ await new Promise(resolve => setTimeout(resolve, 750));
                 assert argv_output.read_text().splitlines() == [
                     "--session", f"{provider}-native-session",
                 ]
-                expected_notifications += 1
+                # One notification per terminal, as on macOS: this one replaces the previous provider's.
                 app.wait_for(
-                    lambda: len(notifications()) == expected_notifications,
+                    lambda: [row["body"] for row in notifications()] == [f"{provider} response ready"],
                     f"{provider} completion notification",
                 )
-                rows = notifications()
-                assert rows[-1]["surface_id"] == target
-                assert rows[-1]["body"] == f"{provider} response ready"
+                assert notifications()[0]["surface_id"] == target
 
             invoke("campfire", "observer")
             app.wait_for(
-                lambda: len(notifications()) == expected_notifications + 1,
+                lambda: any("join.requested" in row["body"] for row in notifications()),
                 "Campfire observer notification",
             )
             rows = notifications()
-            assert rows[-1]["surface_id"] == target
-            assert "join.requested" in rows[-1]["body"] and "Ada" in rows[-1]["body"]
+            assert len(rows) == 1 and rows[0]["surface_id"] == target
+            assert "join.requested" in rows[0]["body"] and "Ada" in rows[0]["body"]
     print("OMP and Campfire extensions routed resume, prompt and attention lifecycle state")
 
 

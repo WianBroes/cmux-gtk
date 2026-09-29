@@ -64,7 +64,6 @@ def main():
                 "antigravity": (antigravity_commands, "SessionStart", "PreInvocation", "Stop",
                                 "conversation_id", ["--conversation"]),
             }
-            expected_notifications = 0
             for provider, (commands, start, prompt, stop, id_key, resume_prefix) in providers.items():
                 native_id = f"{provider}-native-session"
 
@@ -91,9 +90,8 @@ def main():
                 )
                 assert argv_output.read_text().splitlines() == resume_prefix + [native_id]
                 invoke(stop, f"{provider} response ready")
-                expected_notifications += 1
                 rows = json.loads(app.cli("notifications", "list", "--json"))["notifications"]
-                assert len(rows) == expected_notifications
+                assert len(rows) == 1  # one notification per terminal, as on macOS: each Stop replaces the previous one
                 assert rows[-1]["surface_id"] == target
                 assert rows[-1]["body"] == f"{provider} response ready"
     print("Kiro and Antigravity hooks preserved native schemas and routed lifecycle state")

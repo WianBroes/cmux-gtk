@@ -19,13 +19,18 @@ def wait(name):
         time.sleep(.01)
 (root / 'ready').touch()
 wait('start')
-os.write(1, b'\x1b]9;first burst message\x07\x1b]777;notify;Second title;second burst body\x1b\\')
+os.write(1, b'\x1b]9;first burst message\x07')
+(root / 'osc9').touch()
+wait('go777')
+os.write(1, b'\x1b]777;notify;Second title;second burst body\x1b\\')
 os.write(1, b'\x1b]99;i=chunk:d=0;Chunk title\x1b\\')
 (root / 'partial').touch()
 wait('finish')
 payload = b'\x1b]99;i=chunk:p=body:e=1;' + base64.b64encode(b'long body ' * 100) + b'\x1b\\'
 for byte in payload:
     os.write(1, bytes([byte]))
+(root / 'chunked').touch()
+wait('oversize')
 os.write(1, b'\x1b]9;' + b'x' * 20000 + b'\x07\x1b]9;after oversized frame\x07')
 (root / 'finished').touch()
 '''
@@ -52,19 +57,24 @@ def main():
                 """Read notifications without forcing native rendering or changing focus."""
                 return json.loads(app.cli("notifications", "list", "--json"))["notifications"]
 
+            def only(description, predicate):
+                """Wait for the single notification of the source terminal (one per terminal, as on macOS)."""
+                app.wait_for(lambda: len(messages()) == 1 and predicate(messages()[0]), description)
+                assert messages()[0]["surface_id"] == source and not messages()[0]["is_read"]
+
             (root / "start").touch()
+            app.wait_for((root / "osc9").exists, "OSC9 output")
+            only("OSC9 delivery", lambda row: row["body"] == "first burst message")
+            (root / "go777").touch()
             app.wait_for((root / "partial").exists, "incomplete chunk output")
-            app.wait_for(lambda: len(messages()) == 2, "same-burst OSC9 and OSC777 delivery")
-            assert all(row["surface_id"] == source and not row["is_read"] for row in messages())
+            only("OSC777 replacing OSC9 while the OSC99 chunk is incomplete",
+                 lambda row: row["title"] == "Second title" and row["body"] == "second burst body")
             (root / "finish").touch()
-            app.wait_for((root / "finished").exists, "fragmented PTY output")
-            app.wait_for(lambda: len(messages()) == 4, "completed OSC99 and parser recovery")
-            rows = messages()
-            assert rows[0]["body"] == "first burst message"
-            assert rows[1]["title"] == "Second title" and rows[1]["body"] == "second burst body"
-            assert rows[2]["title"] == "Chunk title" and rows[2]["body"] == "long body " * 100
-            assert rows[3]["body"] == "after oversized frame"
-            assert all(row["surface_id"] == source for row in rows)
+            app.wait_for((root / "chunked").exists, "fragmented PTY output")
+            only("completed OSC99 chunk", lambda row: row["title"] == "Chunk title" and row["body"] == "long body " * 100)
+            (root / "oversize").touch()
+            app.wait_for((root / "finished").exists, "oversized frame output")
+            only("parser recovery after an oversized frame", lambda row: row["body"] == "after oversized frame")
             assert next(row["uuid"] for row in app.surfaces() if row["active"]) == selected
             metrics = json.loads(app.cli("diagnostics", "--json"))["notification_parser"]
             assert metrics["accepted"] >= 4 and metrics["oversize_frames"] >= 1

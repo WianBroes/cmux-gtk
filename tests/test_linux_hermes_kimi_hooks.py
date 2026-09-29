@@ -94,7 +94,6 @@ def main():
                     "SessionEnd", "top", ["--resume"],
                 ),
             }
-            expected_notifications = 0
             for provider, (commands, start, prompt, stop, end, id_location, prefix) in providers.items():
                 native_id = f"{provider}-native-session"
 
@@ -125,9 +124,8 @@ def main():
                 )
                 assert argv_output.read_text().splitlines() == prefix + [native_id]
                 invoke(stop, f"{provider} response ready")
-                expected_notifications += 1
                 rows = json.loads(app.cli("notifications", "list", "--json"))["notifications"]
-                assert len(rows) == expected_notifications and rows[-1]["surface_id"] == target
+                assert len(rows) == 1  # one notification per terminal, as on macOS: each Stop replaces the previous one and rows[-1]["surface_id"] == target
                 assert rows[-1]["body"] == f"{provider} response ready"
                 invoke(end)
                 binding = json.loads(app.cli(

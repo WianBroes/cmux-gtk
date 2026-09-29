@@ -26,6 +26,7 @@ def key(target, chord):
 
 def review(app, chord, prefix=None):
     """Open the production preferences panel and activate its approval or revocation mnemonic."""
+    app.wait_for(lambda: window(app), "visible main window")
     key(window(app), "ctrl+comma")
     app.wait_for(lambda: window(app, "Preferences"), "resume review panel")
     dialog = window(app, "Preferences")

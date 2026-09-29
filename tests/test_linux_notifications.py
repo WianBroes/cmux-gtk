@@ -60,13 +60,14 @@ def main():
                 app.wait_for(lambda: window(app, "Notifications — 1 unread"), "live unread panel")
                 extra = json.loads(app.cli("notify", "--surface", first["uuid"], "--title", "New while panel open", "--json"))
                 app.wait_for(lambda: window(app, "Notifications — 2 unread"), "live notification arrival")
+                # One notification per terminal, as on macOS: the new one replaced the read one of that terminal.
+                assert ids[0] not in [row["id"] for row in messages()]
                 app.cli("notifications", "dismiss", "--id", extra["id"])
                 app.wait_for(lambda: window(app, "Notifications — 1 unread"), "live notification removal")
                 key(window(app, "Notifications — 1 unread"), "alt+j")
                 app.wait_for(lambda: window(app, "Notifications — 1 unread") is None, "panel navigation close")
                 assert active() == second["uuid"]
                 assert all(row["is_read"] for row in messages())
-                app.cli("notifications", "dismiss", "--id", ids[0])
                 assert [row["id"] for row in messages()] == [ids[1]]
                 saved = messages()
                 quit_app(app)
