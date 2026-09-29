@@ -1,1 +1,3 @@
-tests/test_linux_session_quit.py
+tests/test_linux_browser_lifecycle.py
+tests/test_linux_browser_lifecycle.py
+tests/test_linux_browser_lifecycle.py
