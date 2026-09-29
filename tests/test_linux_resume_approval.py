@@ -30,6 +30,9 @@ def review(app, chord, prefix=None):
     key(window(app), "ctrl+comma")
     app.wait_for(lambda: window(app, "Preferences"), "resume review panel")
     dialog = window(app, "Preferences")
+    # Preferences is a notebook (App, Terminal, Shortcuts) opening on App; the review controls live on Terminal,
+    # and a mnemonic of a hidden page does not fire.
+    key(dialog, "ctrl+Next")
     if prefix is not None:
         key(dialog, "alt+c")
         key(dialog, "ctrl+a")
