@@ -8,12 +8,12 @@
     "claim": "a Claude Stop/Notification hook creates an in-app notification"
   },
   {
-    "id": "hook-body-limit",
+    "id": "hook-summary-length",
     "file": "src/cli/hooks.rs",
-    "old": "let body = notification_text(&payload, body_key, body_default, 8192)?;\n            let (subtitle, body) = if matches!(event, ClaudeHookEvent::Notification) {",
-    "new": "let body = notification_text(&payload, body_key, body_default, 65536)?;\n            let (subtitle, body) = if matches!(event, ClaudeHookEvent::Notification) {",
+    "old": "const ATTENTION_SUMMARY_CHARS: usize = 180;",
+    "new": "const ATTENTION_SUMMARY_CHARS: usize = 360;",
     "test": "tests/test_linux_claude_hooks.py",
-    "claim": "hook notification bodies are bounded to 8 KiB"
+    "claim": "an attention notification body is a one-line summary of at most 180 characters (the 8 KiB cut before it is no longer observable)"
   },
   {
     "id": "sidebar-status-limit",
