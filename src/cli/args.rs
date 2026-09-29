@@ -1045,6 +1045,39 @@ pub enum Commands {
     /// Browser automation (agent primary interface)
     #[command(subcommand)]
     Browser(BrowserCommand),
+
+    // -- Settings file (cmux.json) --
+    /// Inspect the cmux.json settings file without contacting the running app
+    #[command(subcommand)]
+    Config(ConfigCommands),
+}
+
+/// `cmux config <sub>`: read and validate `cmux.json` with the app closed.
+///
+/// These verbs only read the file and the bundled schema; none of them opens the socket, so
+/// they work while cmux is not running. `validate` exits 1 when the file has an error and 0
+/// when it only has warnings, matching the macOS `cmux config doctor` contract.
+#[derive(Subcommand)]
+pub enum ConfigCommands {
+    /// Print the path of the global cmux.json
+    Path,
+    /// Validate the settings file against the bundled cmux schema
+    #[command(aliases = ["doctor", "check"])]
+    Validate {
+        /// Settings file to validate; defaults to the global cmux.json
+        #[arg(long, value_name = "FILE")]
+        file: Option<std::path::PathBuf>,
+    },
+    /// Print the value at a dotted settings path
+    Get {
+        /// Dotted settings path, for example sidebar.branchLayout
+        path: String,
+        /// Settings file to read; defaults to the global cmux.json
+        #[arg(long, value_name = "FILE")]
+        file: Option<std::path::PathBuf>,
+    },
+    /// List every settings path the bundled schema recognizes
+    ListSupported,
 }
 
 /// `cmux workspace <sub>`: upstream spelling of the legacy workspace verbs, same arguments.
@@ -2996,5 +3029,54 @@ mod handle_argument_tests {
         assert!(Cli::try_parse_from(["cmux", "--id-format", "short", "identify"]).is_err());
         let cli = Cli::try_parse_from(["cmux", "ping"]).expect("plain ping should parse");
         assert!(cli.id_format.is_none());
+    }
+}
+
+#[cfg(test)]
+mod config_argument_tests {
+    use super::*;
+
+    /// The settings verbs parse with their documented flags, file overrides and aliases.
+    #[test]
+    fn config_verbs_parse_with_file_override_and_aliases() {
+        let cli = Cli::try_parse_from(["cmux", "config", "path"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Config(ConfigCommands::Path)
+        ));
+
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "config",
+            "validate",
+            "--file",
+            "/tmp/cmux.json",
+        ])
+        .unwrap();
+        let Commands::Config(ConfigCommands::Validate { file }) = &cli.command else {
+            panic!("wrong command");
+        };
+        assert_eq!(file.as_deref(), Some(std::path::Path::new("/tmp/cmux.json")));
+
+        for alias in ["validate", "doctor", "check"] {
+            assert!(Cli::try_parse_from(["cmux", "config", alias]).is_ok(), "{alias}");
+        }
+
+        let cli = Cli::try_parse_from(["cmux", "config", "get", "sidebar.branchLayout"]).unwrap();
+        let Commands::Config(ConfigCommands::Get { path, file }) = &cli.command else {
+            panic!("wrong command");
+        };
+        assert_eq!(path, "sidebar.branchLayout");
+        assert!(file.is_none());
+
+        let cli = Cli::try_parse_from(["cmux", "--json", "config", "list-supported"]).unwrap();
+        assert!(cli.json);
+        assert!(matches!(
+            cli.command,
+            Commands::Config(ConfigCommands::ListSupported)
+        ));
+
+        // `get` needs a path; `--file` is not a substitute for one.
+        assert!(Cli::try_parse_from(["cmux", "config", "get"]).is_err());
     }
 }

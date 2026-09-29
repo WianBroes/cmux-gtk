@@ -25,6 +25,8 @@ mod project_config;
 #[path = "../resume.rs"]
 #[allow(dead_code)]
 mod resume;
+#[path = "../settings_json.rs"]
+mod settings_json;
 pub mod socket_client;
 mod teams;
 mod tree;
@@ -143,6 +145,11 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
     }
     if let Commands::Comments { command } = &cli.command {
         return comments::run(command, cli.json);
+    }
+    // `cmux config` only reads cmux.json and the bundled schema, so it runs before the socket
+    // path is ever considered and works with cmux closed.
+    if let Commands::Config(command) = &cli.command {
+        return run_config(command, cli.json);
     }
     if let Commands::LocalTmux { command } = &cli.command {
         return local_tmux::run(command, explicit_socket.as_deref());
@@ -509,6 +516,116 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
     }
 
     Ok(())
+}
+
+/// Resolve the settings file a `cmux config` verb reads, defaulting to the global one.
+fn config_file(file: Option<&std::path::Path>) -> Result<std::path::PathBuf, CliError> {
+    match file {
+        Some(path) => Ok(path.to_path_buf()),
+        None => settings_json::global_path().ok_or_else(|| {
+            CliError::Command(
+                "cannot determine the cmux.json path; set XDG_CONFIG_HOME or HOME".into(),
+            )
+        }),
+    }
+}
+
+/// Run `cmux config <sub>` against the settings file, without opening the app socket.
+///
+/// Exit code 1 signals at least one validation error; warnings alone exit 0, so scripts can
+/// gate on a broken file without failing on a macOS-only key.
+fn run_config(command: &args::ConfigCommands, json_output: bool) -> Result<(), CliError> {
+    use settings_json::{Issue, Severity};
+    match command {
+        args::ConfigCommands::Path => {
+            let path = config_file(None)?;
+            if json_output {
+                println!("{}", serde_json::json!({"path": path}));
+            } else {
+                println!("{}", path.display());
+            }
+            Ok(())
+        }
+        args::ConfigCommands::ListSupported => {
+            let paths = settings_json::known_paths();
+            if json_output {
+                let payload = serde_json::json!({"count": paths.len(), "paths": paths});
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&payload)
+                        .map_err(|error| CliError::Output(error.to_string()))?
+                );
+            } else {
+                for path in &paths {
+                    println!("{path}");
+                }
+            }
+            Ok(())
+        }
+        args::ConfigCommands::Validate { file } => {
+            let path = config_file(file.as_deref())?;
+            let value = settings_json::read(&path).map_err(CliError::Command)?;
+            let issues = settings_json::validate(&value);
+            let errors = Issue::errors(&issues);
+            if json_output {
+                let payload = serde_json::json!({
+                    "path": path,
+                    "ok": errors == 0,
+                    "error_count": errors,
+                    "warning_count": issues.len() - errors,
+                    "issues": issues,
+                });
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&payload)
+                        .map_err(|error| CliError::Output(error.to_string()))?
+                );
+            } else if issues.is_empty() {
+                println!("{}: no problems found", path.display());
+            } else {
+                for issue in &issues {
+                    let label = if issue.severity == Severity::Error {
+                        "error"
+                    } else {
+                        "warning"
+                    };
+                    eprintln!("{label}: {}", issue.line());
+                }
+            }
+            if errors > 0 {
+                return Err(CliError::Command(format!(
+                    "cmux config validate found {errors} error(s) in {}",
+                    path.display()
+                )));
+            }
+            Ok(())
+        }
+        args::ConfigCommands::Get { path: key, file } => {
+            let path = config_file(file.as_deref())?;
+            let value = settings_json::read(&path).map_err(CliError::Command)?;
+            let found = settings_json::get(&value, key).ok_or_else(|| {
+                CliError::Command(format!(
+                    "{}: no value at '{key}'",
+                    path.display()
+                ))
+            })?;
+            if json_output {
+                let payload = serde_json::json!({"path": path, "key": key, "value": found});
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&payload)
+                        .map_err(|error| CliError::Output(error.to_string()))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(found)
+                        .map_err(|error| CliError::Output(error.to_string()))?
+                );
+            }
+            Ok(())
+        }
+    }
 }
 
 /// The surface this CLI runs in, if any: creation commands default to its workspace.
@@ -993,6 +1110,7 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
         Commands::Diff { .. } => unreachable!("diff is prepared before socket dispatch"),
         Commands::Project { .. } => unreachable!("project is prepared before socket dispatch"),
         Commands::Comments { .. } => unreachable!("comments run without socket dispatch"),
+        Commands::Config(_) => unreachable!("config runs without socket dispatch"),
         Commands::ClaudeTeams { .. } | Commands::TmuxCompat { .. } => {
             unreachable!("team launch commands are handled before socket discovery")
         }

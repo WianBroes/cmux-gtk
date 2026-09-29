@@ -39,6 +39,8 @@ clap_mangen = "0.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 hmac = "0.12.1"
 pulldown-cmark = { version = "0.13.4", default-features = false }
+# Schema `pattern` validation for cmux.json; already in the tree through bindgen.
+regex = "1"
 
 [[bin]]
 name = "cmux-generate"

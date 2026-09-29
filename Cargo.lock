@@ -319,6 +319,7 @@ dependencies = [
  "hmac",
  "image",
  "pulldown-cmark",
+ "regex",
  "reqwest",
  "semver",
  "serde",
