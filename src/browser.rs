@@ -542,7 +542,15 @@ impl BrowserManager {
     ) -> impl std::future::Future<Output = Result<Value, String>> + Send + 'static {
         let path = self.daemon_socket_path();
         let request = Self::command_request(action, params);
-        async move { transport::request_async(&path, &request, trace_id).await }
+        let waits_for_download = action == "waitfordownload";
+        async move {
+            let result = transport::request_async(&path, &request, trace_id).await;
+            if waits_for_download {
+                result.map_err(download_wait_failure)
+            } else {
+                result
+            }
+        }
     }
 
     /// Fetch a snapshot with bounded async transport and prepare display text off GTK.
@@ -822,6 +830,16 @@ fn snapshot_text(mut response: Value) -> Result<String, String> {
     serde_json::to_string(&response).map_err(|error| format!("Invalid snapshot: {error}"))
 }
 
+/// `waitfordownload` fails the same way whether nothing was downloaded or the daemon cannot
+/// see download events (agent-browser releases before the fix for vercel-labs/agent-browser
+/// PR 2023); say so, keeping the generic transport error and never the daemon's own text.
+fn download_wait_failure(error: String) -> String {
+    format!(
+        "{error}; no download completed in time, or this agent-browser cannot report finished \
+         downloads (needs the fix from vercel-labs/agent-browser PR 2023)"
+    )
+}
+
 /// Translate a socket browser action (cmux CLI or upstream macOS name) into the
 /// agent-browser daemon action, renaming params the daemon spells differently.
 /// `Err` carries the message for actions the daemon cannot perform.
@@ -1091,6 +1109,14 @@ mod manager_tests {
             translate("download.wait", serde_json::json!({})).unwrap().0,
             "waitfordownload"
         );
+    }
+
+    /// A failed download wait names the likely causes and keeps only the generic error.
+    #[test]
+    fn download_wait_failure_adds_a_hint_without_daemon_text() {
+        let message = download_wait_failure("Browser daemon exchange failed: x".into());
+        assert!(message.starts_with("Browser daemon exchange failed: x; "));
+        assert!(message.contains("PR 2023"));
     }
 
     /// `--property` keeps one computed style, `null` when the page has none.

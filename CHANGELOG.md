@@ -4,6 +4,10 @@ All notable changes to cmux GTK are documented here.
 
 ## [Unreleased]
 
+### Known limits
+
+- `cmux browser download-wait` needs an agent-browser that reports finished downloads. Releases up to 0.38.1 do not (`wait --download` always times out there); the fix is proposed upstream as vercel-labs/agent-browser PR 2023. Until it is released, `download-wait` fails with a message saying so; `cmux browser download <selector> <path>` (click and save) works with any release. Point cmux at a patched binary with `CMUX_AGENT_BROWSER=<path>`.
+
 ### Changed
 
 - Add structured diagnostic snapshots, process resource sampling, bounded log delivery and CLI/GTK request correlation.
