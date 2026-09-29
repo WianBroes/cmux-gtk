@@ -177,24 +177,121 @@ pub fn load_config() -> Config {
     let path = config_path();
     let content = match std::fs::read_to_string(&path) {
         Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Config::default();
-        }
         Err(e) => {
-            eprintln!("cmux: config read error at {}: {e}", path.display());
-            return Config::default();
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("cmux: config read error at {}: {e}", path.display());
+            }
+            let mut config = Config::default();
+            overlay_cmux_json(&mut config);
+            return config;
         }
     };
 
     warn_unknown_shortcuts(&content);
 
-    match toml::from_str::<Config>(&content) {
+    let mut config = match toml::from_str::<Config>(&content) {
         Ok(config) => config,
         Err(e) => {
             eprintln!("cmux: config parse error at {}: {e}", path.display());
             Config::default()
         }
+    };
+    overlay_cmux_json(&mut config);
+    config
+}
+
+/// Apply the global `cmux.json` on top of `config.toml`: a key set in both takes the JSON value.
+/// An unreadable or invalid file is reported on stderr and ignored; the TOML values stay.
+fn overlay_cmux_json(config: &mut Config) {
+    let Some(path) = crate::settings_json::global_path() else {
+        return;
+    };
+    match crate::settings_json::read(&path) {
+        Ok(value) => apply_cmux_json(config, &value),
+        Err(e) => eprintln!("cmux: cmux.json read error: {e}"),
     }
+}
+
+/// Map the `cmux.json` keys the Linux app honors onto `Config`.
+///
+/// Only `shortcuts.bindings.<actionId>` with a single shortcut string is mapped (table in
+/// [`shortcut_slot`]); chords, `null`/`""` unbinding and ids without a Linux action are ignored.
+/// Other sections stay CLI-only (`cmux config get|set`) until the app has a setting for them.
+fn apply_cmux_json(config: &mut Config, value: &serde_json::Value) {
+    let Some(bindings) = value
+        .pointer("/shortcuts/bindings")
+        .and_then(|v| v.as_object())
+    else {
+        return;
+    };
+    for (id, binding) in bindings {
+        let Some(slot) = shortcut_slot(&mut config.shortcuts, id) else {
+            continue;
+        };
+        let Some(text) = binding.as_str().filter(|s| !s.trim().is_empty()) else {
+            continue;
+        };
+        *slot = Some(to_gtk_accelerator(text));
+    }
+}
+
+/// The `ShortcutConfig` field driven by a `cmux.json` action id, if the Linux app has one.
+fn shortcut_slot<'a>(cfg: &'a mut ShortcutConfig, id: &str) -> Option<&'a mut Option<String>> {
+    Some(match id {
+        "newTab" => &mut cfg.new_workspace,
+        "closeWorkspace" => &mut cfg.close_workspace,
+        "nextSidebarTab" => &mut cfg.next_workspace,
+        "prevSidebarTab" => &mut cfg.prev_workspace,
+        "moveWorkspaceUp" => &mut cfg.move_workspace_up,
+        "moveWorkspaceDown" => &mut cfg.move_workspace_down,
+        "toggleFocusedWorkspaceGroupCollapsed" => &mut cfg.toggle_workspace_group,
+        "renameWorkspace" => &mut cfg.rename_workspace,
+        "toggleSidebar" => &mut cfg.toggle_sidebar,
+        "focusRightSidebar" => &mut cfg.focus_right_sidebar,
+        "splitRight" => &mut cfg.split_right,
+        "splitDown" => &mut cfg.split_down,
+        "focusLeft" => &mut cfg.focus_left,
+        "focusRight" => &mut cfg.focus_right,
+        "focusUp" => &mut cfg.focus_up,
+        "focusDown" => &mut cfg.focus_down,
+        "focusHistoryBack" => &mut cfg.focus_back,
+        "focusHistoryForward" => &mut cfg.focus_forward,
+        "openBrowser" => &mut cfg.browser_open,
+        _ => return None,
+    })
+}
+
+/// Turn a `cmux.json` shortcut ("cmd+shift+b") into a GTK accelerator ("<Ctrl><Shift>b").
+/// `cmd`/`ctrl` both mean Ctrl (Linux has no Command key); an invalid result is caught later by
+/// `ShortcutMap::from_config`, which warns and keeps the default.
+fn to_gtk_accelerator(text: &str) -> String {
+    let mut out = String::new();
+    let mut parts: Vec<&str> = text.split('+').map(str::trim).collect();
+    let key = parts.pop().unwrap_or_default();
+    for m in parts {
+        out.push_str(match m.to_ascii_lowercase().as_str() {
+            "cmd" | "command" | "ctrl" | "control" => "<Ctrl>",
+            "shift" => "<Shift>",
+            "opt" | "option" | "alt" => "<Alt>",
+            _ => "<Unknown>",
+        });
+    }
+    out.push_str(match key.to_ascii_lowercase().as_str() {
+        "[" => "bracketleft",
+        "]" => "bracketright",
+        "left" => "Left",
+        "right" => "Right",
+        "up" => "Up",
+        "down" => "Down",
+        "pageup" => "Page_Up",
+        "pagedown" => "Page_Down",
+        "tab" => "Tab",
+        "enter" | "return" => "Return",
+        "escape" | "esc" => "Escape",
+        "space" => "space",
+        _ => return out + &key.to_ascii_lowercase(),
+    });
+    out
 }
 
 /// Warn about unknown keys in the [shortcuts] table (D-03).
@@ -456,6 +553,35 @@ mod tests {
         assert!(config.shortcuts.new_workspace.is_none());
         std::env::remove_var("XDG_CONFIG_HOME");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `cmux.json` bindings override the TOML value; chords, null and unknown ids are ignored.
+    #[test]
+    fn test_apply_cmux_json_bindings() {
+        let mut config: Config =
+            toml::from_str("[shortcuts]\nnew_workspace = \"<Ctrl>t\"\nsplit_down = \"<Ctrl>j\"\n")
+                .unwrap();
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{"shortcuts":{"bindings":{"newTab":"cmd+shift+n","splitRight":["ctrl+b","c"],
+            "splitDown":null,"focusHistoryBack":"ctrl+alt+[","noSuchAction":"ctrl+q"}}}"#,
+        )
+        .unwrap();
+        apply_cmux_json(&mut config, &json);
+        assert_eq!(config.shortcuts.new_workspace.as_deref(), Some("<Ctrl><Shift>n"));
+        assert_eq!(config.shortcuts.split_right, None);
+        assert_eq!(config.shortcuts.split_down.as_deref(), Some("<Ctrl>j"));
+        assert_eq!(
+            config.shortcuts.focus_back.as_deref(),
+            Some("<Ctrl><Alt>bracketleft")
+        );
+    }
+
+    /// Named keys map to GTK keysym names.
+    #[test]
+    fn test_to_gtk_accelerator() {
+        assert_eq!(to_gtk_accelerator("ctrl+shift+PageUp"), "<Ctrl><Shift>Page_Up");
+        assert_eq!(to_gtk_accelerator("alt+Left"), "<Alt>Left");
+        assert_eq!(to_gtk_accelerator("b"), "b");
     }
 
     /// Keep the GTK header visible when UI settings are omitted.

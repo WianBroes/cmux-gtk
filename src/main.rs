@@ -46,6 +46,9 @@ mod right_sidebar;
 mod scrollback;
 mod selection;
 mod session;
+#[path = "settings_json.rs"]
+#[allow(dead_code)]
+mod settings_json;
 mod shortcuts;
 mod sidebar;
 mod socket;
