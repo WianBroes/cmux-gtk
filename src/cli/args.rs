@@ -1874,6 +1874,18 @@ pub enum BrowserCommand {
         /// File the download is written to
         path: String,
     },
+    /// Wait for a download started by a previous action
+    #[command(name = "download-wait")]
+    DownloadWait {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Timeout in milliseconds
+        #[arg(long)]
+        timeout: Option<u64>,
+        /// File the download is written to
+        #[arg(long)]
+        path: Option<String>,
+    },
 }
 
 /// Page values readable through `cmux browser get <what> <surface>`.
@@ -3426,12 +3438,48 @@ mod browser_verb_tests {
             }
             _ => panic!("wrong command variant"),
         }
-        // A missing script, selector or path never parses.
+        match parse_browser(&[
+            "browser",
+            "download-wait",
+            "surface:3",
+            "--timeout",
+            "4000",
+            "--path",
+            "/tmp/file.zip",
+        ]) {
+            Commands::Browser(BrowserCommand::DownloadWait {
+                surface,
+                timeout,
+                path,
+            }) => {
+                assert_eq!(surface, "surface:3");
+                assert_eq!(timeout, Some(4000));
+                assert_eq!(path.as_deref(), Some("/tmp/file.zip"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse_browser(&["browser", "download-wait", "surface:3"]) {
+            Commands::Browser(BrowserCommand::DownloadWait {
+                surface,
+                timeout,
+                path,
+            }) => {
+                assert_eq!(surface, "surface:3");
+                assert!(timeout.is_none());
+                assert!(path.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        // A missing script, selector, path or timeout value never parses.
         assert!(Cli::try_parse_from(["cmux", "browser", "addinitscript", "surface:3"]).is_err());
         assert!(Cli::try_parse_from(["cmux", "browser", "addstyle", "surface:3"]).is_err());
         assert!(Cli::try_parse_from(["cmux", "browser", "addscript", "surface:3"]).is_err());
         assert!(
             Cli::try_parse_from(["cmux", "browser", "download", "surface:3", "#dl"]).is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["cmux", "browser", "download-wait", "surface:3", "--timeout"])
+                .is_err()
         );
     }
 }

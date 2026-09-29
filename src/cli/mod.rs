@@ -300,6 +300,11 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
             let (_, client) = crate::browser_timeout::wait_budgets(*timeout_ms);
             client
         }
+        Commands::Browser(BrowserCommand::DownloadWait { timeout, .. }) => {
+            let (_, client) =
+                crate::browser_timeout::wait_budgets(timeout.unwrap_or(30_000));
+            client
+        }
         Commands::Browser(BrowserCommand::Open { .. }) => Duration::from_secs(30),
         Commands::Project { .. } => Duration::from_secs(30),
         Commands::ProjectActions { .. } => Duration::from_secs(7),
@@ -1315,6 +1320,18 @@ fn browser_command_to_rpc(cmd: &BrowserCommand) -> (&'static str, serde_json::Va
                 "surface_ref": surface,
                 "selector": selector,
                 "path": absolute_path(path)
+            }),
+        ),
+        BrowserCommand::DownloadWait {
+            surface,
+            timeout,
+            path,
+        } => (
+            "browser.download.wait",
+            json!({
+                "surface_ref": surface,
+                "timeout": timeout,
+                "path": path.as_deref().map(absolute_path)
             }),
         ),
     }
@@ -2947,9 +2964,9 @@ mod tests {
         }
     }
 
-    /// `download` clicks a selector into a file.
+    /// `download` clicks a selector into a file; `download-wait` polls for it.
     #[test]
-    fn browser_download_maps_click() {
+    fn browser_download_maps_click_and_wait() {
         let cli = Cli::try_parse_from([
             "cmux",
             "browser",
@@ -2964,6 +2981,31 @@ mod tests {
         assert_eq!(params["surface_ref"], "surface:3");
         assert_eq!(params["selector"], "#dl");
         assert_eq!(params["path"], "/tmp/file.zip");
+
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "browser",
+            "download-wait",
+            "surface:3",
+            "--timeout",
+            "4000",
+            "--path",
+            "/tmp/file.zip",
+        ])
+        .expect("download-wait should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.download.wait");
+        assert_eq!(params["surface_ref"], "surface:3");
+        assert_eq!(params["timeout"], 4000);
+        assert_eq!(params["path"], "/tmp/file.zip");
+
+        // Bare `download-wait` parses with nulls, like `screenshot` without `--out`.
+        let cli = Cli::try_parse_from(["cmux", "browser", "download-wait", "surface:3"])
+            .expect("download-wait should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "browser.download.wait");
+        assert!(params["timeout"].is_null());
+        assert!(params["path"].is_null());
 
         // A missing download path never parses.
         assert!(

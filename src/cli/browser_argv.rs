@@ -67,6 +67,7 @@ const KNOWN_VERBS: &[&str] = &[
     "addstyle",
     "addscript",
     "download",
+    "download-wait",
     "stream-enable",
     "stream-disable",
     "help",
@@ -246,6 +247,15 @@ mod tests {
             ["cmux", "browser", "addstyle", "surface:2", "body {}"].as_slice(),
             ["cmux", "browser", "addscript", "surface:2", "alert(1);"].as_slice(),
             ["cmux", "browser", "download", "surface:2", "#dl", "/tmp/f.zip"].as_slice(),
+            [
+                "cmux",
+                "browser",
+                "download-wait",
+                "surface:2",
+                "--timeout",
+                "4000",
+            ]
+            .as_slice(),
         ] {
             assert_eq!(rewritten(line), line);
         }
@@ -256,6 +266,25 @@ mod tests {
         assert_eq!(
             rewritten(&["cmux", "browser", "surface:2", "download", "#dl", "/tmp/f.zip"]),
             ["cmux", "browser", "download", "surface:2", "#dl", "/tmp/f.zip"]
+        );
+        assert_eq!(
+            rewritten(&[
+                "cmux",
+                "browser",
+                "--surface",
+                "surface:2",
+                "download-wait",
+                "--timeout",
+                "4000"
+            ]),
+            [
+                "cmux",
+                "browser",
+                "download-wait",
+                "surface:2",
+                "--timeout",
+                "4000"
+            ]
         );
     }
 }
