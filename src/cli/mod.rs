@@ -519,30 +519,83 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
 }
 
 /// Resolve the settings file a `cmux config` verb reads, defaulting to the global one.
-fn config_file(file: Option<&std::path::Path>) -> Result<std::path::PathBuf, CliError> {
-    match file {
-        Some(path) => Ok(path.to_path_buf()),
-        None => settings_json::global_path().ok_or_else(|| {
+///
+/// `--file` names the file outright. `--scope` without `--file` picks the file that scope owns:
+/// the global path, or the project file discovered from the working directory. Neither given,
+/// the global file is the default, matching every read-only verb.
+fn config_file(
+    file: Option<&std::path::Path>,
+    scope: Option<settings_json::Scope>,
+) -> Result<std::path::PathBuf, CliError> {
+    if let Some(path) = file {
+        return Ok(path.to_path_buf());
+    }
+    match scope {
+        Some(settings_json::Scope::Global) | None => settings_json::global_path().ok_or_else(|| {
             CliError::Command(
                 "cannot determine the cmux.json path; set XDG_CONFIG_HOME or HOME".into(),
+            )
+        }),
+        Some(settings_json::Scope::Project) => project_config_path().ok_or_else(|| {
+            CliError::Command(
+                "no project cmux.json in the current directory or any parent".into(),
             )
         }),
     }
 }
 
+/// The scope a `cmux config` verb works in: forced by `--scope`, else read off the file's path.
+fn config_scope(
+    file: Option<&std::path::Path>,
+    scope: Option<settings_json::Scope>,
+) -> Result<settings_json::Scope, CliError> {
+    match scope {
+        Some(scope) => Ok(scope),
+        None => Ok(settings_json::infer_scope(&config_file(file, None)?)),
+    }
+}
+
+/// The nearest project settings file: `.cmux/cmux.json` or `cmux.json`, in this order.
+fn project_config_path() -> Option<std::path::PathBuf> {
+    let directory = std::env::current_dir().ok()?;
+    let base = std::path::absolute(&directory).unwrap_or(directory);
+    for parent in base.ancestors().take(64) {
+        for candidate in [parent.join(".cmux/cmux.json"), parent.join("cmux.json")] {
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
 /// Run `cmux config <sub>` against the settings file, without opening the app socket.
 ///
 /// Exit code 1 signals at least one validation error; warnings alone exit 0, so scripts can
-/// gate on a broken file without failing on a macOS-only key.
+/// gate on a broken file without failing on a macOS-only key. `set` and `unset` also exit 1
+/// without writing when the change would add an error, printing `{"status":"invalid_config",…}`
+/// on stderr.
 fn run_config(command: &args::ConfigCommands, json_output: bool) -> Result<(), CliError> {
     use settings_json::{Issue, Severity};
     match command {
         args::ConfigCommands::Path => {
-            let path = config_file(None)?;
+            let path = config_file(None, None)?;
             if json_output {
                 println!("{}", serde_json::json!({"path": path}));
             } else {
                 println!("{}", path.display());
+            }
+            Ok(())
+        }
+        args::ConfigCommands::Docs => {
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&settings_json::docs_json())
+                        .map_err(|error| CliError::Output(error.to_string()))?
+                );
+            } else {
+                println!("{}", settings_json::docs_text().trim_end());
             }
             Ok(())
         }
@@ -562,14 +615,17 @@ fn run_config(command: &args::ConfigCommands, json_output: bool) -> Result<(), C
             }
             Ok(())
         }
-        args::ConfigCommands::Validate { file } => {
-            let path = config_file(file.as_deref())?;
+        args::ConfigCommands::Validate { file, scope } => {
+            let scope = config_scope(file.as_deref(), scope.map(Into::into))?;
+            let path = config_file(file.as_deref(), Some(scope))?;
             let value = settings_json::read(&path).map_err(CliError::Command)?;
-            let issues = settings_json::validate(&value);
+            let mut issues = settings_json::validate(&value);
+            issues.extend(settings_json::scope_issues(&value, scope));
             let errors = Issue::errors(&issues);
             if json_output {
                 let payload = serde_json::json!({
                     "path": path,
+                    "scope": scope,
                     "ok": errors == 0,
                     "error_count": errors,
                     "warning_count": issues.len() - errors,
@@ -601,7 +657,7 @@ fn run_config(command: &args::ConfigCommands, json_output: bool) -> Result<(), C
             Ok(())
         }
         args::ConfigCommands::Get { path: key, file } => {
-            let path = config_file(file.as_deref())?;
+            let path = config_file(file.as_deref(), None)?;
             let value = settings_json::read(&path).map_err(CliError::Command)?;
             let found = settings_json::get(&value, key).ok_or_else(|| {
                 CliError::Command(format!(
@@ -625,7 +681,79 @@ fn run_config(command: &args::ConfigCommands, json_output: bool) -> Result<(), C
             }
             Ok(())
         }
+        args::ConfigCommands::Set {
+            path: key,
+            value,
+            file,
+            scope,
+        } => write_config(key, Some(value), file.as_deref(), scope.map(Into::into)),
+        args::ConfigCommands::Unset {
+            path: key,
+            file,
+            scope,
+        } => write_config(key, None, file.as_deref(), scope.map(Into::into)),
     }
+}
+
+/// Apply a `set` or `unset` and print the outcome the settings skill documents.
+///
+/// The value is JSON, so `true`, `12` and `"dark"` are three different types. A word that is
+/// not JSON at all is stored as a string, which is what the skill's own helper does; a wrong
+/// type then surfaces as a validation error instead of a silent guess.
+fn write_config(
+    key: &str,
+    raw: Option<&str>,
+    file: Option<&std::path::Path>,
+    scope: Option<settings_json::Scope>,
+) -> Result<(), CliError> {
+    let scope = config_scope(file, scope)?;
+    let path = config_file(file, Some(scope))?;
+    let value = raw.map(|raw| parse_setting_value(raw));
+    match settings_json::apply(&path, key, value.as_ref(), scope) {
+        Ok(outcome) => {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": outcome.status,
+                    "key": outcome.key,
+                    "path": path,
+                    "runtime": "unobserved",
+                })
+            );
+            Ok(())
+        }
+        Err(settings_json::ApplyError::Invalid(issues)) => {
+            // A refusal is machine-readable on its own line: the payload, not a prose summary.
+            let payload = serde_json::json!({
+                "status": "invalid_config",
+                "key": key,
+                "path": path,
+                "issues": issues
+                    .iter()
+                    .map(|issue| serde_json::json!({
+                        "path": issue.path,
+                        "message": issue.message,
+                    }))
+                    .collect::<Vec<_>>(),
+            });
+            eprintln!("{payload}");
+            Err(CliError::Command(format!(
+                "cmux config {} of '{key}' would add {} error(s); nothing was written",
+                if raw.is_some() { "set" } else { "unset" },
+                issues.len()
+            )))
+        }
+        Err(settings_json::ApplyError::Edit(error)) => Err(CliError::Command(format!(
+            "{}: {error}",
+            path.display()
+        ))),
+        Err(settings_json::ApplyError::Io(message)) => Err(CliError::Command(message)),
+    }
+}
+
+/// Read one `--value` argument as JSON, falling back to the word as a plain string.
+fn parse_setting_value(raw: &str) -> serde_json::Value {
+    serde_json::from_str(raw).unwrap_or_else(|_| serde_json::Value::String(raw.to_owned()))
 }
 
 /// The surface this CLI runs in, if any: creation commands default to its workspace.

@@ -1052,11 +1052,31 @@ pub enum Commands {
     Config(ConfigCommands),
 }
 
-/// `cmux config <sub>`: read and validate `cmux.json` with the app closed.
+/// `--scope` values, mirroring `settings_json::Scope` without coupling the parser to it.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum ScopeArg {
+    /// The user-wide `~/.config/cmux/cmux.json`.
+    Global,
+    /// A `cmux.json` in the working directory or one of its parents.
+    Project,
+}
+
+impl From<ScopeArg> for super::settings_json::Scope {
+    fn from(argument: ScopeArg) -> Self {
+        match argument {
+            ScopeArg::Global => super::settings_json::Scope::Global,
+            ScopeArg::Project => super::settings_json::Scope::Project,
+        }
+    }
+}
+
+/// `cmux config <sub>`: read, validate and edit `cmux.json` with the app closed.
 ///
-/// These verbs only read the file and the bundled schema; none of them opens the socket, so
-/// they work while cmux is not running. `validate` exits 1 when the file has an error and 0
-/// when it only has warnings, matching the macOS `cmux config doctor` contract.
+/// These verbs only read or write the file and the bundled schema; none of them opens the
+/// socket, so they work while cmux is not running. `validate` exits 1 when the file has an
+/// error and 0 when it only has warnings, matching the macOS `cmux config doctor` contract.
+/// `set` and `unset` print `{"status":"persisted",…}` on success and `{"status":"unchanged",…}`
+/// when an `unset` finds nothing to remove.
 #[derive(Subcommand)]
 pub enum ConfigCommands {
     /// Print the path of the global cmux.json
@@ -1067,6 +1087,9 @@ pub enum ConfigCommands {
         /// Settings file to validate; defaults to the global cmux.json
         #[arg(long, value_name = "FILE")]
         file: Option<std::path::PathBuf>,
+        /// Scope the file is read as; inferred from its path when absent
+        #[arg(long, value_name = "SCOPE")]
+        scope: Option<ScopeArg>,
     },
     /// Print the value at a dotted settings path
     Get {
@@ -1075,6 +1098,34 @@ pub enum ConfigCommands {
         /// Settings file to read; defaults to the global cmux.json
         #[arg(long, value_name = "FILE")]
         file: Option<std::path::PathBuf>,
+    },
+    /// Print the cmux.json settings reference: paths, format, scopes and example keys
+    #[command(aliases = ["documentation"])]
+    Docs,
+    /// Set the value at a dotted settings path, keeping the file's comments
+    Set {
+        /// Dotted settings path, for example app.appearance
+        path: String,
+        /// Value as JSON, for example true, 12 or "dark"; an unquoted word becomes a string
+        #[arg(allow_hyphen_values = true)]
+        value: String,
+        /// Settings file to write; defaults to the global cmux.json
+        #[arg(long, value_name = "FILE")]
+        file: Option<std::path::PathBuf>,
+        /// Scope the file is written as; inferred from its path when absent
+        #[arg(long, value_name = "SCOPE")]
+        scope: Option<ScopeArg>,
+    },
+    /// Remove the value at a dotted settings path, reverting it to the built-in default
+    Unset {
+        /// Dotted settings path, for example app.appearance
+        path: String,
+        /// Settings file to write; defaults to the global cmux.json
+        #[arg(long, value_name = "FILE")]
+        file: Option<std::path::PathBuf>,
+        /// Scope the file is written as; inferred from its path when absent
+        #[arg(long, value_name = "SCOPE")]
+        scope: Option<ScopeArg>,
     },
     /// List every settings path the bundled schema recognizes
     ListSupported,
@@ -3053,10 +3104,11 @@ mod config_argument_tests {
             "/tmp/cmux.json",
         ])
         .unwrap();
-        let Commands::Config(ConfigCommands::Validate { file }) = &cli.command else {
+        let Commands::Config(ConfigCommands::Validate { file, scope }) = &cli.command else {
             panic!("wrong command");
         };
         assert_eq!(file.as_deref(), Some(std::path::Path::new("/tmp/cmux.json")));
+        assert!(scope.is_none());
 
         for alias in ["validate", "doctor", "check"] {
             assert!(Cli::try_parse_from(["cmux", "config", alias]).is_ok(), "{alias}");
@@ -3078,5 +3130,79 @@ mod config_argument_tests {
 
         // `get` needs a path; `--file` is not a substitute for one.
         assert!(Cli::try_parse_from(["cmux", "config", "get"]).is_err());
+    }
+
+    /// The editing verbs take a dotted path, a JSON value and both writing flags.
+    #[test]
+    fn config_set_and_unset_parse_their_arguments() {
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "config",
+            "set",
+            "app.appearance",
+            "dark",
+            "--file",
+            "/tmp/cmux.json",
+            "--scope",
+            "project",
+        ])
+        .unwrap();
+        let Commands::Config(ConfigCommands::Set {
+            path,
+            value,
+            file,
+            scope,
+        }) = &cli.command
+        else {
+            panic!("wrong command");
+        };
+        assert_eq!(path, "app.appearance");
+        assert_eq!(value, "dark");
+        assert_eq!(file.as_deref(), Some(std::path::Path::new("/tmp/cmux.json")));
+        assert!(matches!(scope, Some(ScopeArg::Project)));
+
+        let cli = Cli::try_parse_from(["cmux", "config", "unset", "app.appearance"]).unwrap();
+        let Commands::Config(ConfigCommands::Unset { path, file, scope }) = &cli.command else {
+            panic!("wrong command");
+        };
+        assert_eq!(path, "app.appearance");
+        assert!(file.is_none());
+        assert!(scope.is_none());
+
+        // A value starting with a dash still belongs to `set`, not to the flag parser.
+        let cli = Cli::try_parse_from(["cmux", "config", "set", "a.b", "-12"]).unwrap();
+        let Commands::Config(ConfigCommands::Set { value, .. }) = &cli.command else {
+            panic!("wrong command");
+        };
+        assert_eq!(value, "-12");
+
+        // `set` without a value and an unknown scope name are both rejected up front.
+        assert!(Cli::try_parse_from(["cmux", "config", "set", "a.b"]).is_err());
+        assert!(Cli::try_parse_from([
+            "cmux", "config", "validate", "--scope", "workspace"
+        ])
+        .is_err());
+    }
+
+    /// `docs` answers to the macOS spelling too, and takes no arguments.
+    #[test]
+    fn config_docs_parses_with_its_alias() {
+        for name in ["docs", "documentation"] {
+            let cli = Cli::try_parse_from(["cmux", "config", name]).unwrap();
+            assert!(
+                matches!(cli.command, Commands::Config(ConfigCommands::Docs)),
+                "{name}"
+            );
+        }
+        assert!(Cli::try_parse_from(["cmux", "config", "docs", "extra"]).is_err());
+    }
+
+    /// `--scope` carries the two scopes the settings file has and nothing else.
+    #[test]
+    fn scope_values_map_onto_the_settings_scopes() {
+        let global: super::super::settings_json::Scope = ScopeArg::Global.into();
+        let project: super::super::settings_json::Scope = ScopeArg::Project.into();
+        assert_eq!(global, super::super::settings_json::Scope::Global);
+        assert_eq!(project, super::super::settings_json::Scope::Project);
     }
 }

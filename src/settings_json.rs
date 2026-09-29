@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// The upstream macOS schema for `cmux.json`; authoritative for keys, types and bounds.
@@ -304,9 +304,21 @@ pub fn schema() -> &'static Value {
 
 /// Read one config file as JSONC, treating an absent file as empty settings.
 pub fn read(path: &Path) -> Result<Value, String> {
+    let Some(bytes) = read_source(path)? else {
+        return Ok(Value::Null);
+    };
+    let text = String::from_utf8(bytes).map_err(|error| format!("{}: {error}", path.display()))?;
+    parse_jsonc(&text).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+/// Read one settings file's raw bytes under the shared budget, with `None` for an absent file.
+///
+/// Splitting this out of [`read`] is what lets `read_text` serve the editing commands: they
+/// need the exact bytes the user wrote, comments included, to edit them in place.
+fn read_source(path: &Path) -> Result<Option<Vec<u8>>, String> {
     let file = match cmux_platform::filesystem::open_regular_read(path) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Value::Null),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(format!("{}: {error}", path.display())),
     };
     let mut bytes = Vec::new();
@@ -317,8 +329,7 @@ pub fn read(path: &Path) -> Result<Value, String> {
     if bytes.len() as u64 > MAX_BYTES {
         return Err(format!("{}: settings exceed 1 MiB", path.display()));
     }
-    let text = String::from_utf8(bytes).map_err(|error| format!("{}: {error}", path.display()))?;
-    parse_jsonc(&text).map_err(|error| format!("{}: {error}", path.display()))
+    Ok(Some(bytes))
 }
 
 /// Whether a settings path is a macOS-only key the Linux port cannot honor.
@@ -1047,6 +1058,998 @@ pub fn get<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     Some(current)
 }
 
+/// Which settings file a document is read as.
+///
+/// macOS infers the same two scopes from the file it loaded: the user-wide file and the
+/// project file discovered from the working directory. `--scope` forces the choice for a
+/// path that sits nowhere in particular.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Scope {
+    /// The user-wide `~/.config/cmux/cmux.json`.
+    Global,
+    /// A `cmux.json` in the working directory or one of its parents.
+    Project,
+}
+
+impl fmt::Display for Scope {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Scope::Global => formatter.write_str("global"),
+            Scope::Project => formatter.write_str("project"),
+        }
+    }
+}
+
+/// Where a settings section may appear, read off the schema's own root description:
+///
+/// > Global cmux.json supports app settings, shortcuts, actions, custom commands, notification
+/// > hooks, and workspace layouts. Project-local .cmux/cmux.json or cmux.json supports actions,
+/// > commands, notification hooks, UI action wiring, Agent Chat overrides, vault agents,
+/// > workspace-group overrides, and workspace launch/button configuration.
+///
+/// The schema carries no `scope` keyword, so this table is the only place the rule lives and
+/// `known_paths()` stays the source of truth for which keys exist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Availability {
+    /// Only the user-wide file honors it.
+    Global,
+    /// Only a project file honors it.
+    Project,
+    /// Both files honor it, and the walk must descend to reach deeper single-scope sections.
+    Both,
+}
+
+/// Section prefixes and the scope they belong to; the longest matching prefix wins.
+///
+/// Anything absent from the table is a global app setting, which is what the schema's
+/// description says the rest of the top-level sections are.
+const SCOPE_RULES: &[(&str, Availability)] = &[
+    ("actions", Availability::Both),
+    ("commands", Availability::Both),
+    ("notifications.hooks", Availability::Both),
+    ("notifications.hooksMode", Availability::Both),
+    ("agentChat", Availability::Project),
+    ("ui", Availability::Project),
+    ("vault", Availability::Project),
+    ("workspaceGroups", Availability::Project),
+    ("newWorkspaceCommand", Availability::Project),
+    ("surfaceTabBarButtons", Availability::Project),
+];
+
+/// The scope a dotted path belongs to, from the deepest matching rule.
+fn availability(path: &str) -> Availability {
+    SCOPE_RULES
+        .iter()
+        .filter(|(prefix, _)| path == *prefix || path.starts_with(&format!("{prefix}.")))
+        .max_by_key(|(prefix, _)| prefix.len())
+        .map_or(Availability::Global, |(_, value)| *value)
+}
+
+/// Whether a dotted path is meaningful in `scope`.
+fn allows(path: &str, scope: Scope) -> bool {
+    match availability(path) {
+        Availability::Both => true,
+        Availability::Global => scope == Scope::Global,
+        Availability::Project => scope == Scope::Project,
+    }
+}
+
+/// Report every setting that only means something in the other scope, as errors.
+///
+/// A section misplaced in a file is reported once, at the section, rather than once per leaf:
+/// `sidebar.showPorts` and `sidebar.hideAllDetails` in a project file is one mistake, not two.
+/// Sections that mix scopes, like `notifications`, are descended into so a project file can
+/// still carry its `notifications.hooks` without dragging the rest of the section along.
+pub fn scope_issues(value: &Value, scope: Scope) -> Vec<Issue> {
+    fn walk(value: &Value, path: &str, scope: Scope, found: &mut Vec<Issue>) {
+        match value {
+            Value::Object(object) => {
+                for (key, entry) in object {
+                    let child = join(path, key);
+                    if allows(&child, scope) {
+                        continue;
+                    }
+                    if descends(entry, &child, scope) {
+                        walk(entry, &child, scope, found);
+                    } else {
+                        let message = match availability(&child) {
+                            Availability::Project => "only valid in a project cmux.json".into(),
+                            _ => "only valid in the global cmux.json".into(),
+                        };
+                        found.push(Issue {
+                            path: child,
+                            message,
+                            severity: Severity::Error,
+                        });
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for (index, entry) in items.iter().enumerate() {
+                    walk(entry, &format!("{path}[{index}]"), scope, found);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    walk(value, "", scope, &mut found);
+    found
+}
+
+/// Whether a misplaced section holds children the walk has to judge one by one.
+///
+/// Only true for a section that mixes scopes: the global `notifications` block, whose
+/// `hooks` are honored in a project file while the rest of the block is not. A child that the
+/// target scope rejects does not earn a descent; the section is reported whole instead.
+fn descends(value: &Value, path: &str, scope: Scope) -> bool {
+    let Value::Object(object) = value else {
+        return false;
+    };
+    let here = availability(path);
+    object.keys().any(|key| {
+        let child = format!("{path}.{key}");
+        availability(&child) != here && allows(&child, scope)
+    })
+}
+
+/// Whether `path` is a dotted settings path with no empty segment.
+fn is_path(path: &str) -> bool {
+    !path.is_empty() && !path.contains("..") && !path.starts_with('.') && !path.ends_with('.')
+}
+
+/// Infer the scope of a settings file from its path, the way macOS infers it.
+///
+/// The global path wins outright. Otherwise a `cmux.json` that sits in the working directory
+/// or one of its parents is a project file, matching the app's own project lookup. A file
+/// that is neither is read as global, which is where `cmux config` points by default.
+pub fn infer_scope(path: &Path) -> Scope {
+    let directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    infer_scope_in(path, &directory)
+}
+
+/// [`infer_scope`] against an explicit working directory, so the rule is testable in place.
+pub fn infer_scope_in(path: &Path, directory: &Path) -> Scope {
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let normalized = lexical(&absolute);
+    if global_path().is_some_and(|global| lexical(&absolute_path(&global)) == normalized) {
+        return Scope::Global;
+    }
+    let Some(name) = normalized.file_name() else {
+        return Scope::Global;
+    };
+    if name != "cmux.json" {
+        return Scope::Global;
+    }
+    let Some(parent) = normalized.parent() else {
+        return Scope::Global;
+    };
+    // `.cmux/cmux.json` is the project's preferred location, so the directory holding it is
+    // the one the walk compares against.
+    let parent = match parent.file_name() {
+        Some(name) if name == ".cmux" => parent.parent().unwrap_or(parent),
+        _ => parent,
+    };
+    let base = lexical(&absolute_path(directory));
+    // The app walks at most 64 ancestors before giving up; the same bound applies here.
+    base.ancestors()
+        .take(64)
+        .any(|ancestor| ancestor == parent)
+        .then_some(Scope::Project)
+        .unwrap_or(Scope::Global)
+}
+
+/// The global settings path, absolutized and normalized for comparison against a user path.
+fn absolute_path(path: &Path) -> PathBuf {
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Drop `.` and `..` segments lexically, so two spellings of one path compare equal.
+///
+/// The file need not exist yet, so `canonicalize` is not an option: a `set` that creates
+/// `cmux.json` still has to know which scope it is writing into.
+fn lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// One byte range in the original JSONC text; both ends are exclusive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Span {
+    /// Byte offset of the first byte.
+    start: usize,
+    /// Byte offset one past the last byte.
+    end: usize,
+}
+
+impl Span {
+    /// The span's own extent, for use as a slice range.
+    fn range(self) -> std::ops::Range<usize> {
+        self.start..self.end
+    }
+}
+
+/// One JSONC value kept as byte ranges, so an edit can be applied to the original text.
+///
+/// Nothing here re-serializes: the tree exists to say *where* a value is, and the bytes around
+/// it, comments and all, are never rewritten.
+#[derive(Debug)]
+enum Node {
+    /// A scalar, or any value whose contents are not navigated.
+    Value(Span),
+    /// An object, with the span of its braces and its members in document order.
+    Object(Span, Vec<Member>),
+    /// An array, with the span of its brackets and its items in document order.
+    Array(Span, Vec<Node>),
+}
+
+impl Node {
+    /// Byte offset of the first byte of this value.
+    fn start(&self) -> usize {
+        match self {
+            Node::Value(span) => span.start,
+            Node::Object(span, _) | Node::Array(span, _) => span.start,
+        }
+    }
+
+    /// Byte offset just past this value.
+    fn end(&self) -> usize {
+        match self {
+            Node::Value(span) => span.end,
+            Node::Object(span, _) | Node::Array(span, _) => span.end,
+        }
+    }
+}
+
+/// One `"key": value` pair of a JSONC object.
+#[derive(Debug)]
+struct Member {
+    /// Span of the key, quotes included.
+    key: Span,
+    /// The decoded key text, used to match a dotted path segment.
+    name: String,
+    /// The member value.
+    node: Node,
+}
+
+/// Index of the next byte that carries meaning, skipping whitespace and comments.
+fn skip_trivia(text: &str, classes: &[Class], mut at: usize) -> usize {
+    let bytes = text.as_bytes();
+    while at < bytes.len()
+        && (bytes[at].is_ascii_whitespace()
+            || matches!(
+                classes.get(at),
+                Some(Class::LineComment) | Some(Class::BlockComment)
+            ))
+    {
+        at += 1;
+    }
+    at
+}
+
+/// End offset of the string literal whose opening quote is at `at`.
+fn scan_string(text: &str, at: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut index = at + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            b'"' => return Some(index + 1),
+            _ => index += 1,
+        }
+    }
+    None
+}
+
+/// Decode a string literal, so an escaped key still matches its path segment.
+fn decode_string(text: &str, span: Span) -> String {
+    serde_json::from_str::<Value>(&text[span.range()])
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+/// Parse the JSONC value starting at `at`, returning it and the offset just past it.
+fn parse_node(text: &str, classes: &[Class], at: usize) -> Option<(Node, usize)> {
+    let bytes = text.as_bytes();
+    match *bytes.get(at)? {
+        b'{' => parse_object(text, classes, at),
+        b'[' => parse_array(text, classes, at),
+        b'"' => {
+            let end = scan_string(text, at)?;
+            Some((Node::Value(Span { start: at, end }), end))
+        }
+        _ => {
+            let mut end = at;
+            while end < bytes.len()
+                && !bytes[end].is_ascii_whitespace()
+                && !matches!(bytes[end], b',' | b'}' | b']')
+                && !(bytes[end] == b'/' && matches!(bytes.get(end + 1), Some(b'/' | b'*')))
+            {
+                end += 1;
+            }
+            (end > at).then_some((Node::Value(Span { start: at, end }), end))
+        }
+    }
+}
+
+/// Parse a `{ … }` object, including the JSONC trailing comma.
+fn parse_object(text: &str, classes: &[Class], at: usize) -> Option<(Node, usize)> {
+    let mut members: Vec<Member> = Vec::new();
+    let mut cursor = skip_trivia(text, classes, at + 1);
+    if text.as_bytes().get(cursor) == Some(&b'}') {
+        return Some((Node::Object(Span { start: at, end: cursor + 1 }, members), cursor + 1));
+    }
+    loop {
+        if text.as_bytes().get(cursor) != Some(&b'"') {
+            return None;
+        }
+        let key = Span {
+            start: cursor,
+            end: scan_string(text, cursor)?,
+        };
+        let name = decode_string(text, key);
+        cursor = skip_trivia(text, classes, key.end);
+        if text.as_bytes().get(cursor) != Some(&b':') {
+            return None;
+        }
+        let value_at = skip_trivia(text, classes, cursor + 1);
+        let (node, after) = parse_node(text, classes, value_at)?;
+        members.push(Member { key, name, node });
+        cursor = skip_trivia(text, classes, after);
+        match text.as_bytes().get(cursor) {
+            Some(b',') => {
+                cursor = skip_trivia(text, classes, cursor + 1);
+                if text.as_bytes().get(cursor) != Some(&b'}') {
+                    continue;
+                }
+            }
+            Some(b'}') => {}
+            _ => return None,
+        }
+        return Some((Node::Object(Span { start: at, end: cursor + 1 }, members), cursor + 1));
+    }
+}
+
+/// Parse a `[ … ]` array, including the JSONC trailing comma.
+fn parse_array(text: &str, classes: &[Class], at: usize) -> Option<(Node, usize)> {
+    let mut items: Vec<Node> = Vec::new();
+    let mut cursor = skip_trivia(text, classes, at + 1);
+    if text.as_bytes().get(cursor) == Some(&b']') {
+        return Some((Node::Array(Span { start: at, end: cursor + 1 }, items), cursor + 1));
+    }
+    loop {
+        let (node, after) = parse_node(text, classes, cursor)?;
+        items.push(node);
+        cursor = skip_trivia(text, classes, after);
+        match text.as_bytes().get(cursor) {
+            Some(b',') => {
+                cursor = skip_trivia(text, classes, cursor + 1);
+                if text.as_bytes().get(cursor) != Some(&b']') {
+                    continue;
+                }
+            }
+            Some(b']') => {}
+            _ => return None,
+        }
+        return Some((Node::Array(Span { start: at, end: cursor + 1 }, items), cursor + 1));
+    }
+}
+
+/// Parse a whole document, returning `None` when it is empty, blank or not JSONC.
+fn parse_document(text: &str) -> Option<Node> {
+    let classes = classify(text).ok()?;
+    let at = skip_trivia(text, classes.as_slice(), 0);
+    if at >= text.len() {
+        return None;
+    }
+    let (node, after) = parse_node(text, classes.as_slice(), at)?;
+    (skip_trivia(text, classes.as_slice(), after) == text.len()).then_some(node)
+}
+
+/// The syntax error behind a document the structural walk could not read.
+///
+/// The scanner is deliberately stricter than `serde_json` in one direction only: it cannot
+/// recover from a malformed node, so the JSONC parser's own diagnosis is the one to show.
+fn unreadable(text: &str) -> EditError {
+    EditError::Syntax(parse_jsonc(text).err().map_or_else(
+        || "the file is not a JSONC document".into(),
+        |error| error.to_string(),
+    ))
+}
+
+/// Whether any byte of `span` sits in a comment.
+fn has_comment(text: &str, classes: &[Class], span: Span) -> bool {
+    text.as_bytes()[span.range()].iter().enumerate().any(|(offset, _)| {
+        matches!(
+            classes.get(span.start + offset),
+            Some(Class::LineComment) | Some(Class::BlockComment)
+        )
+    })
+}
+
+/// The leading whitespace of the line holding `offset`, or empty when the line holds more.
+fn line_indent(text: &str, offset: usize) -> String {
+    let start = text[..offset].rfind('\n').map_or(0, |index| index + 1);
+    let line = &text[start..offset];
+    line.chars()
+        .all(|character| character == ' ' || character == '\t')
+        .then(|| line.to_owned())
+        .unwrap_or_default()
+}
+
+/// The indentation step the file already uses, taken from its shallowest indented line.
+///
+/// Four spaces is the fallback, matching the examples in the settings documentation.
+fn indent_step(text: &str) -> usize {
+    text.lines()
+        .filter_map(|line| {
+            let spaces = line.len() - line.trim_start_matches(' ').len();
+            (spaces > 0).then_some(spaces)
+        })
+        .min()
+        .unwrap_or(4)
+}
+
+/// Where a dotted path meets the document: an existing member, or the object to extend.
+enum Located<'a> {
+    /// The path names an object member that is already there; replace its value.
+    Existing(&'a Member),
+    /// The path names an array element that is already there; replace it.
+    Element(&'a Node),
+    /// The path is missing below `container`; `rest` are the segments still to create.
+    Missing {
+        /// The innermost node the new member would go into.
+        container: &'a Node,
+        /// Path segments after that node, still to be created.
+        rest: &'a [&'a str],
+    },
+}
+
+/// Walk `segments` from the document root to the member a `set` would replace or extend.
+fn locate<'a>(node: &'a Node, segments: &'a [&'a str]) -> Located<'a> {
+    let Some((head, rest)) = segments.split_first() else {
+        return Located::Missing {
+            container: node,
+            rest: &[],
+        };
+    };
+    match node {
+        Node::Object(_, members) => match members.iter().find(|member| member.name == *head) {
+            Some(member) if rest.is_empty() => Located::Existing(member),
+            Some(member) => locate(&member.node, rest),
+            None => Located::Missing {
+                container: node,
+                rest: segments,
+            },
+        },
+        Node::Array(_, items) => match head.parse::<usize>().ok().and_then(|index| items.get(index)) {
+            Some(item) if rest.is_empty() => Located::Element(item),
+            Some(item) => locate(item, rest),
+            // An array entry is never conjured: inserting one would renumber its siblings.
+            None => Located::Missing {
+                container: node,
+                rest: segments,
+            },
+        },
+        Node::Value(_) => Located::Missing {
+            container: node,
+            rest: segments,
+        },
+    }
+}
+
+/// Render `"key": value` for `segments`, nesting the objects a missing path still needs.
+fn render_entry(
+    segments: &[&str],
+    value: &Value,
+    indent: &str,
+    step: usize,
+) -> Result<String, EditError> {
+    let encoded = encode(value)?;
+    let Some((head, rest)) = segments.split_first() else {
+        return Ok(encoded);
+    };
+    let key = serde_json::to_string(head)
+        .map_err(|error| EditError::NotAnObject(error.to_string()))?;
+    if rest.is_empty() {
+        return Ok(format!("{key}: {encoded}"));
+    }
+    let inner = format!("{indent}{}", " ".repeat(step));
+    let body = render_entry(rest, value, &inner, step)?;
+    Ok(format!("{key}: {{\n{inner}{body}\n{indent}}}"))
+}
+
+/// A targeted text edit could not be applied without risking the user's file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditError {
+    /// The file is not JSONC, so nothing about its layout can be preserved.
+    Syntax(String),
+    /// The path does not reach an object: a segment names a scalar, or an array index.
+    NotAnObject(String),
+    /// The text to replace carries comments; the edit is refused rather than dropping them.
+    CommentsInValue(String),
+}
+
+impl fmt::Display for EditError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EditError::Syntax(message)
+            | EditError::NotAnObject(message)
+            | EditError::CommentsInValue(message) => formatter.write_str(message),
+        }
+    }
+}
+
+/// What a write did to the file on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WriteStatus {
+    /// The file was rewritten and now holds the change.
+    Persisted,
+    /// The key was already absent, so the file was left alone.
+    Unchanged,
+}
+
+/// The result of a `set` or `unset`, as the CLI reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WriteOutcome {
+    /// Whether the file changed.
+    pub status: WriteStatus,
+    /// The dotted path that was written.
+    pub key: String,
+}
+
+/// A write that would have broken the file, refused before touching it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApplyError {
+    /// The targeted edit could not be applied safely.
+    Edit(EditError),
+    /// The change would add these errors to the file, so nothing was written.
+    Invalid(Vec<Issue>),
+    /// The file could not be read or written.
+    Io(String),
+}
+
+impl From<EditError> for ApplyError {
+    fn from(error: EditError) -> Self {
+        ApplyError::Edit(error)
+    }
+}
+
+impl fmt::Display for ApplyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ApplyError::Edit(error) => write!(formatter, "{error}"),
+            ApplyError::Invalid(issues) => {
+                write!(formatter, "the change would add {} error(s)", issues.len())
+            }
+            ApplyError::Io(message) => formatter.write_str(message),
+        }
+    }
+}
+
+/// Read one settings file as text, treating an absent file as an empty document.
+pub fn read_text(path: &Path) -> Result<String, String> {
+    let Some(bytes) = read_source(path)? else {
+        return Ok(String::new());
+    };
+    String::from_utf8(bytes).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+/// Set `key` to `value`, or remove it when `value` is `None`, preserving the rest of the file.
+///
+/// The file is edited as text, so comments, key order and layout outside the changed key stay
+/// exactly as the user wrote them. The result is validated before anything is written: when the
+/// change would add an error, the file is left untouched. Errors the file already had never
+/// block an unrelated change, so a key from a newer cmux does not make the file unwritable.
+pub fn apply(
+    path: &Path,
+    key: &str,
+    value: Option<&Value>,
+    scope: Scope,
+) -> Result<WriteOutcome, ApplyError> {
+    if !is_path(key) {
+        return Err(ApplyError::Edit(EditError::NotAnObject(format!(
+            "'{key}' is not a dotted settings path"
+        ))));
+    }
+    let segments: Vec<&str> = key.split('.').collect();
+    let original = read_text(path).map_err(ApplyError::Io)?;
+    let before = document(&original).map_err(ApplyError::Edit)?;
+    let before_issues = issues(&before, scope);
+    let edited = match value {
+        Some(value) => set_text(&original, &segments, value)?,
+        None => match remove_text(&original, &segments)? {
+            Some(text) => text,
+            None => {
+                return Ok(WriteOutcome {
+                    status: WriteStatus::Unchanged,
+                    key: key.to_owned(),
+                })
+            }
+        },
+    };
+    let after = document(&edited).map_err(ApplyError::Edit)?;
+    let introduced: Vec<Issue> = issues(&after, scope)
+        .into_iter()
+        .filter(|issue| issue.severity == Severity::Error && !before_issues.contains(issue))
+        .collect();
+    if !introduced.is_empty() {
+        return Err(ApplyError::Invalid(introduced));
+    }
+    write_atomic(path, &edited).map_err(ApplyError::Io)?;
+    Ok(WriteOutcome {
+        status: WriteStatus::Persisted,
+        key: key.to_owned(),
+    })
+}
+
+/// Every problem in a document, schema findings and misplaced-scope settings alike.
+fn issues(value: &Value, scope: Scope) -> Vec<Issue> {
+    let mut found = validate(value);
+    found.extend(scope_issues(value, scope));
+    found
+}
+
+/// Parse a document for editing, treating blank text as an empty object.
+/// Parse a document for editing, treating blank text as an empty object.
+///
+/// A file holding nothing but comments is empty JSONC, not a syntax error, so the first write
+/// into it still works instead of refusing a change the user plainly meant to make.
+fn document(text: &str) -> Result<Value, EditError> {
+    if is_blank(text) {
+        return Ok(Value::Object(serde_json::Map::new()));
+    }
+    parse_jsonc(text).map_err(|error| EditError::Syntax(error.to_string()))
+}
+
+/// Whether the text holds no JSONC value at all, only whitespace and comments.
+fn is_blank(text: &str) -> bool {
+    let Ok(classes) = classify(text) else {
+        return false;
+    };
+    skip_trivia(text, &classes, 0) >= text.len()
+}
+
+/// Replace the value at `segments`, or create the objects and member a missing path needs.
+fn set_text(text: &str, segments: &[&str], value: &Value) -> Result<String, EditError> {
+    if is_blank(text) {
+        let step = indent_step(text);
+        let indent = " ".repeat(step);
+        let body = render_entry(segments, value, &indent, step)?;
+        return Ok(format!("{{\n{indent}{body}\n}}\n"));
+    }
+    let root = parse_document(text).ok_or_else(|| unreadable(text))?;
+    match locate(&root, segments) {
+        // Only the value is rewritten; the key, its spacing and the comments around it stay.
+        Located::Existing(member) => {
+            let target = Span {
+                start: member.node.start(),
+                end: member.node.end(),
+            };
+            let guard = Span {
+                start: member.key.start,
+                end: target.end,
+            };
+            replace_span(text, guard, target, segments, &encode(value)?)
+        }
+        Located::Element(node) => {
+            let span = Span {
+                start: node.start(),
+                end: node.end(),
+            };
+            replace_span(text, span, span, segments, &encode(value)?)
+        }
+        Located::Missing { container, rest } => insert_path(text, container, rest, value),
+    }
+}
+
+/// Encode a value the way it will be written into the file.
+fn encode(value: &Value) -> Result<String, EditError> {
+    serde_json::to_string(value)
+        .map_err(|error| EditError::NotAnObject(format!("cannot encode the value: {error}")))
+}
+
+/// Replace `target` with `encoded`, after refusing when the member carries comments.
+///
+/// `guard` covers the key as well as the value: a comment between the two is as much the
+/// user's text as one inside the value, and neither is worth losing to make a `set` succeed.
+fn replace_span(
+    text: &str,
+    guard: Span,
+    target: Span,
+    segments: &[&str],
+    encoded: &str,
+) -> Result<String, EditError> {
+    let classes = classify(text).map_err(|error| EditError::Syntax(error.to_string()))?;
+    if has_comment(text, &classes, guard) {
+        return Err(EditError::CommentsInValue(format!(
+            "'{}' carries comments; edit it by hand to keep them",
+            segments.join(".")
+        )));
+    }
+    let mut out = String::with_capacity(text.len() + encoded.len());
+    out.push_str(&text[..target.start]);
+    out.push_str(encoded);
+    out.push_str(&text[target.end..]);
+    Ok(out)
+}
+
+/// Add `rest` under `container` with `value` at its end, creating objects as needed.
+fn insert_path(
+    text: &str,
+    container: &Node,
+    rest: &[&str],
+    value: &Value,
+) -> Result<String, EditError> {
+    let Node::Object(span, members) = container else {
+        return Err(EditError::NotAnObject(format!(
+            "'{}' is not an object",
+            rest.first().copied().unwrap_or("")
+        )));
+    };
+    let step = indent_step(text);
+    let body = &text[span.range()];
+    if members.is_empty() {
+        let entry = render_entry(rest, value, "", step)?;
+        let mut out = String::with_capacity(text.len() + entry.len() + 4);
+        out.push_str(&text[..span.start + 1]);
+        out.push_str(&entry);
+        out.push_str(&text[span.end - 1..]);
+        return Ok(out);
+    }
+    if !body.contains('\n') {
+        let entry = render_entry(rest, value, "", step)?;
+        let mut out = String::with_capacity(text.len() + entry.len() + 4);
+        out.push_str(&text[..span.end - 1]);
+        out.push_str(&format!(", {entry}"));
+        out.push_str(&text[span.end - 1..]);
+        return Ok(out);
+    }
+    let last = members.last().expect("a non-empty object has a last member");
+    let inner = line_indent(text, last.key.start);
+    let trailing = text.as_bytes()[last.node.end()..span.end - 1]
+        .iter()
+        .skip_while(|byte| byte.is_ascii_whitespace())
+        .next()
+        == Some(&b',');
+    let entry = render_entry(rest, value, &inner, step)?;
+    // Insert before the whitespace that indents the closing brace, so it keeps its own line.
+    let close = span.end - 1;
+    let insert_at = close - (text[last.node.end()..close].len()
+        - text[last.node.end()..close].trim_end_matches([' ', '\t', '\n', '\r']).len());
+    let mut out = String::with_capacity(text.len() + entry.len() + inner.len() + 2);
+    out.push_str(&text[..insert_at]);
+    if !trailing {
+        out.push(',');
+    }
+    out.push('\n');
+    out.push_str(&inner);
+    out.push_str(&entry);
+    out.push_str(&text[insert_at..]);
+    Ok(out)
+}
+
+/// Remove the member at `segments`, returning `None` when the key is already absent.
+fn remove_text(text: &str, segments: &[&str]) -> Result<Option<String>, EditError> {
+    if is_blank(text) {
+        return Ok(None);
+    }
+    let classes = classify(text).map_err(|error| EditError::Syntax(error.to_string()))?;
+    let root = parse_document(text).ok_or_else(|| unreadable(text))?;
+    let member = match locate(&root, segments) {
+        Located::Existing(member) => member,
+        // An array element and an absent key are both already "nothing to remove".
+        Located::Element(_) | Located::Missing { .. } => return Ok(None),
+    };
+    let mut start = member.key.start;
+    let end = member.node.end();
+    if has_comment(text, &classes, Span { start, end }) {
+        return Err(EditError::CommentsInValue(format!(
+            "'{}' carries comments; edit it by hand to keep them",
+            segments.join(".")
+        )));
+    }
+    let mut after = end;
+    let bytes = text.as_bytes();
+    while matches!(bytes.get(after), Some(b' ' | b'\t' | b'\r' | b'\n')) {
+        after += 1;
+    }
+    if bytes.get(after) == Some(&b',') {
+        after += 1;
+    }
+    // When the member owns the rest of its line, the line goes with it: either nothing but
+    // whitespace is left, or a comment that described the member being removed. Its leading
+    // indentation goes too, so the next member is not left padded by the dead line.
+    let line_end = text[after..]
+        .find('\n')
+        .map_or(text.len(), |offset| after + offset);
+    let rest = &text[after..line_end];
+    if rest.trim().is_empty() || rest.contains("//") || rest.contains("/*") {
+        after = if line_end < text.len() { line_end + 1 } else { text.len() };
+        let line_start = text[..start].rfind('\n').map_or(0, |offset| offset + 1);
+        if text[line_start..start]
+            .chars()
+            .all(|character| matches!(character, ' ' | '\t'))
+        {
+            start = line_start;
+        }
+    }
+    let mut out = String::with_capacity(text.len());
+    out.push_str(&text[..start]);
+    out.push_str(&text[after..]);
+    Ok(Some(out))
+}
+
+/// Replace a file through a sibling temporary file and one `rename`.
+///
+/// The rename is atomic within a directory, so a reader sees either the whole old file or the
+/// whole new one, never a half-written settings file that fails to parse.
+fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
+    let directory = match path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        Some(parent) => parent,
+        None => Path::new("."),
+    };
+    std::fs::create_dir_all(directory)
+        .map_err(|error| format!("{}: {error}", directory.display()))?;
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "cmux.json".into());
+    let temporary = directory.join(format!(".{name}.{}.tmp", std::process::id()));
+    std::fs::write(&temporary, text)
+        .map_err(|error| format!("{}: {error}", temporary.display()))?;
+    // Keep the mode the file already had; a file created here follows the process umask.
+    if let Ok(metadata) = std::fs::metadata(path) {
+        let _ = std::fs::set_permissions(&temporary, metadata.permissions());
+    }
+    std::fs::rename(&temporary, path).map_err(|error| {
+        let _ = std::fs::remove_file(&temporary);
+        format!("{}: {error}", path.display())
+    })
+}
+
+/// The upstream schema URL, the authority for keys, types and bounds.
+pub const SCHEMA_URL: &str = "https://raw.githubusercontent.com/manaflow-ai/cmux/main/web/data/cmux.schema.json";
+
+/// The rendered settings documentation, mirroring the schema one for one.
+pub const DOCS_URL: &str = "https://cmux.com/docs/configuration";
+
+/// Curated examples for `cmux config docs`, mirroring the settings skill's quick reference.
+const DOC_EXAMPLES: &[(&str, &str)] = &[
+    ("app.appearance", r#""system" | "light" | "dark""#),
+    ("app.accentColor", r#""cmux" | "system""#),
+    ("sidebarAppearance.tintOpacity", "0..1"),
+    ("sidebar.showPorts", "boolean"),
+    ("notifications.sound", r#""none" | "custom_file" | a system sound name"#),
+    (
+        "automation.socketControlMode",
+        r#""off" | "cmuxOnly" | "automation" | "password" | "allowAll""#),
+    ("markdown.fontSize", "8..72"),
+    (
+        "fileExplorer.doubleClickAction",
+        r#""preview" | "open" | "preferredEditor""#),
+    ("shortcuts.bindings.<actionId>", r#""cmd+b" | ["ctrl+b","c"] | null | """#),
+];
+
+/// The top-level sections of the schema, split by the scope that honors them.
+fn sections() -> (Vec<String>, Vec<String>, Vec<String>) {
+    let mut global = Vec::new();
+    let mut shared = Vec::new();
+    let mut project = Vec::new();
+    let Some(properties) = schema().get("properties").and_then(Value::as_object) else {
+        return (global, shared, project);
+    };
+    for name in properties.keys() {
+        match availability(name) {
+            Availability::Global => global.push(name.clone()),
+            Availability::Both => shared.push(name.clone()),
+            Availability::Project => project.push(name.clone()),
+        }
+    }
+    (global, shared, project)
+}
+
+/// The settings reference printed by `cmux config docs`.
+///
+/// It names where the files live, what the format accepts, which sections each scope honors and
+/// a few real keys, so a first `cmux config set` does not need the full documentation open.
+pub fn docs_text() -> String {
+    let (global, shared, project) = sections();
+    let global_path = global_path()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "unset: XDG_CONFIG_HOME or HOME is missing".into());
+    let wrap = |list: &[String]| list.join(", ");
+    format!(
+        "cmux.json settings\n\
+         \n\
+         Files:\n\
+         \x20 global:  {global_path}\n\
+         \x20 project: .cmux/cmux.json or cmux.json in the current directory or a parent\n\
+         \x20 format:  JSONC, so // and /* */ comments and trailing commas are accepted\n\
+         \n\
+         Scopes:\n\
+         \x20 global only: {}\n\
+         \x20 both:        {}\n\
+         \x20 project only: {}\n\
+         A setting that belongs to one scope and sits in the other is an error, so\n\
+         --scope global|project tells `validate` which file it is looking at.\n\
+         \n\
+         Commands:\n\
+         \x20 cmux config path                              print the global cmux.json path\n\
+         \x20 cmux config validate [--file F] [--scope S] check the file against the schema\n\
+         \x20 cmux config get <a.b.c> [--file F]           print the value at a dotted path\n\
+         \x20 cmux config set <a.b.c> <json> [--file F]    set a value, keeping comments\n\
+         \x20 cmux config unset <a.b.c> [--file F]         remove a value\n\
+         \x20 cmux config list-supported                    every path the schema recognizes\n\
+         \x20 cmux config docs                              this reference\n\
+         \n\
+         Values are JSON: true, 12, \"dark\", [\"a\",\"b\"]. An unquoted word is stored as a string.\n\
+         `set` and `unset` edit the file as text, keep its comments, and write nothing when the\n\
+         change would add a validation error. A running cmux applies the file on save; this\n\
+         command never contacts it.\n\
+         \n\
+         Examples:\n\
+         {}\n\
+         \n\
+         Schema: {SCHEMA_URL}\n\
+         Docs:   {DOCS_URL}\n",
+        wrap(&global),
+        wrap(&shared),
+        wrap(&project),
+        DOC_EXAMPLES
+            .iter()
+            .map(|(path, shape)| format!("  {path:<38}{shape}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+/// The same reference as a JSON object, for `cmux config docs --json`.
+pub fn docs_json() -> Value {
+    let (global, shared, project) = sections();
+    serde_json::json!({
+        "global_path": global_path().map(|path| path.display().to_string()),
+        "project_paths": [".cmux/cmux.json", "cmux.json"],
+        "format": "jsonc",
+        "sections": {
+            "global": global,
+            "shared": shared,
+            "project": project,
+        },
+        "commands": [
+            "cmux config path",
+            "cmux config validate [--file F] [--scope global|project]",
+            "cmux config get <a.b.c> [--file F]",
+            "cmux config set <a.b.c> <json> [--file F] [--scope global|project]",
+            "cmux config unset <a.b.c> [--file F] [--scope global|project]",
+            "cmux config list-supported",
+            "cmux config docs",
+        ],
+        "examples": DOC_EXAMPLES
+            .iter()
+            .map(|(path, shape)| serde_json::json!({"path": path, "shape": shape}))
+            .collect::<Vec<_>>(),
+        "known_paths": known_paths().len(),
+        "schema_url": SCHEMA_URL,
+        "docs_url": DOCS_URL,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1427,5 +2430,525 @@ mod tests {
     fn absent_file_validates_as_empty_settings() {
         assert!(validate(&Value::Null).is_empty());
         assert!(validate(&parse_jsonc("{}").unwrap()).is_empty());
+    }
+
+    /// A throwaway directory removed when the test ends, so a write test can inspect the file.
+    struct Sandbox(std::path::PathBuf);
+
+    impl Sandbox {
+        /// A fresh directory named after the test, unique per process and per call.
+        fn new(label: &str) -> Self {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static COUNT: AtomicU32 = AtomicU32::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "cmux-settings-{label}-{}-{}",
+                std::process::id(),
+                COUNT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&path).expect("sandbox directory");
+            Self(path)
+        }
+
+        /// The directory itself, for a test that needs to pass a working directory.
+        fn dir(&self) -> &Path {
+            &self.0
+        }
+
+        /// A file path inside the sandbox; the file itself is not created.
+        fn file(&self, name: &str) -> PathBuf {
+            self.0.join(name)
+        }
+
+        /// Write `text` to `name`, creating the sandbox, and return the path.
+        fn write(&self, name: &str, text: &str) -> PathBuf {
+            let path = self.file(name);
+            std::fs::write(&path, text).expect("seed file");
+            path
+        }
+
+        /// The exact bytes of `name`, so a test can prove nothing was written.
+        fn read(&self, name: &str) -> String {
+            std::fs::read_to_string(self.file(name)).expect("read back")
+        }
+
+        /// Every entry left in the sandbox, so a test can spot a leftover temporary file.
+        fn entries(&self) -> Vec<String> {
+            let mut names: Vec<String> = std::fs::read_dir(&self.0)
+                .expect("sandbox listing")
+                .map(|entry| entry.expect("entry").file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        }
+    }
+
+    impl Drop for Sandbox {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Setting a key in a file that does not exist yet creates the file, and only that key.
+    #[test]
+    fn set_on_a_missing_file_creates_it() {
+        let sandbox = Sandbox::new("create");
+        let path = sandbox.file("cmux.json");
+        assert!(!path.exists());
+
+        let outcome = apply(
+            &path,
+            "app.appearance",
+            Some(&serde_json::json!("dark")),
+            Scope::Global,
+        )
+        .expect("the write succeeds");
+        assert_eq!(outcome.status, WriteStatus::Persisted);
+        assert_eq!(outcome.key, "app.appearance");
+
+        let value = read(&path).expect("the file is valid JSONC");
+        assert_eq!(get(&value, "app.appearance"), Some(&Value::from("dark")));
+        // A brand new file holds exactly the key that was asked for.
+        assert_eq!(
+            value.as_object().map(serde_json::Map::len),
+            Some(1),
+            "{value}"
+        );
+    }
+
+    /// A value change rewrites the value only: comments, spacing and key order all survive.
+    #[test]
+    fn set_preserves_comments_and_layout() {
+        let sandbox = Sandbox::new("comments");
+        let seeded = r#"{
+    // hand written, keep this comment
+    "app": {
+        "appearance": "system"   // and this one
+    },
+    "sidebar": { "showPorts": true },
+}
+"#;
+        sandbox.write("cmux.json", seeded);
+
+        apply(
+            &sandbox.file("cmux.json"),
+            "app.appearance",
+            Some(&serde_json::json!("dark")),
+            Scope::Global,
+        )
+        .expect("the write succeeds");
+
+        let after = sandbox.read("cmux.json");
+        assert_eq!(
+            after,
+            r#"{
+    // hand written, keep this comment
+    "app": {
+        "appearance": "dark"   // and this one
+    },
+    "sidebar": { "showPorts": true },
+}
+"#,
+            "the comment, the trailing comment and the trailing comma all survive"
+        );
+        // The replaced value keeps the file's own type: a JSON string, not a bare word.
+        assert_eq!(
+            get(&read(&sandbox.file("cmux.json")).expect("valid JSONC"), "app.appearance"),
+            Some(&Value::from("dark"))
+        );
+    }
+
+    /// A key that is not in the file yet is added, indented like the members beside it.
+    #[test]
+    fn set_adds_a_new_nested_key() {
+        let sandbox = Sandbox::new("nested");
+        sandbox.write(
+            "cmux.json",
+            "{\n    \"app\": {\"appearance\": \"dark\"},\n    \"sidebar\": {\"showPorts\": true}\n}\n",
+        );
+
+        apply(
+            &sandbox.file("cmux.json"),
+            "sidebar.hideAllDetails",
+            Some(&serde_json::json!(true)),
+            Scope::Global,
+        )
+        .expect("the write succeeds");
+
+        let after = sandbox.read("cmux.json");
+        assert_eq!(
+            after,
+            "{\n    \"app\": {\"appearance\": \"dark\"},\n    \"sidebar\": {\"showPorts\": true, \"hideAllDetails\": true}\n}\n",
+            "an inline object gains its member inline, without being reflowed"
+        );
+
+        // A new section under a multi-line object is indented with the members already there.
+        sandbox.write(
+            "cmux.json",
+            "{\n    \"app\": {\"appearance\": \"dark\"}\n}\n",
+        );
+        apply(
+            &sandbox.file("cmux.json"),
+            "markdown.fontSize",
+            Some(&serde_json::json!(16)),
+            Scope::Global,
+        )
+        .expect("the write succeeds");
+        assert_eq!(
+            sandbox.read("cmux.json"),
+            "{\n    \"app\": {\"appearance\": \"dark\"},\n    \"markdown\": {\n        \"fontSize\": 16\n    }\n}\n"
+        );
+    }
+
+    /// A value the schema rejects is refused before anything reaches the disk.
+    #[test]
+    fn invalid_set_is_refused_without_writing() {
+        let sandbox = Sandbox::new("invalid");
+        let seeded = "{\n    \"app\": {\"appearance\": \"dark\"}\n}\n";
+        sandbox.write("cmux.json", seeded);
+
+        // A word that is not JSON is stored as a string, so the enum is what refuses it.
+        let error = apply(
+            &sandbox.file("cmux.json"),
+            "app.appearance",
+            Some(&Value::from("neon")),
+            Scope::Global,
+        )
+        .expect_err("an unknown appearance is refused");
+        let ApplyError::Invalid(issues) = &error else {
+            panic!("expected a validation refusal, got {error:?}");
+        };
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].path, "app.appearance");
+        assert_eq!(issues[0].severity, Severity::Error);
+        assert_eq!(sandbox.read("cmux.json"), seeded, "the file is untouched");
+
+        // A wrong type is refused the same way, and still leaves no temporary file behind.
+        let error = apply(
+            &sandbox.file("cmux.json"),
+            "sidebar.showPorts",
+            Some(&serde_json::json!(12)),
+            Scope::Global,
+        )
+        .expect_err("a boolean does not take an integer");
+        let ApplyError::Invalid(issues) = &error else {
+            panic!("expected a validation refusal, got {error:?}");
+        };
+        assert_eq!(issues[0].message, "expected boolean, found an integer");
+        assert_eq!(sandbox.read("cmux.json"), seeded);
+        assert_eq!(sandbox.entries(), vec!["cmux.json".to_owned()]);
+    }
+
+    /// A value whose text carries comments is refused, not silently stripped of them.
+    #[test]
+    fn set_refuses_to_drop_comments() {
+        let sandbox = Sandbox::new("guarded");
+        let seeded = r#"{
+    "sidebar": {
+        // ports on the left rail
+        "showPorts": true
+    }
+}
+"#;
+        sandbox.write("cmux.json", seeded);
+
+        // The comment sits inside the value being replaced, so the edit would destroy it.
+        let error = apply(
+            &sandbox.file("cmux.json"),
+            "sidebar",
+            Some(&serde_json::json!({"showPorts": false})),
+            Scope::Global,
+        )
+        .expect_err("a commented value is refused");
+        assert!(
+            matches!(error, ApplyError::Edit(EditError::CommentsInValue(_))),
+            "{error:?}"
+        );
+        assert_eq!(sandbox.read("cmux.json"), seeded, "the file is untouched");
+
+        // Changing the leaf instead is fine: the comment belongs to the line above it.
+        apply(
+            &sandbox.file("cmux.json"),
+            "sidebar.showPorts",
+            Some(&serde_json::json!(false)),
+            Scope::Global,
+        )
+        .expect("the leaf carries no comment of its own");
+        assert_eq!(
+            sandbox.read("cmux.json"),
+            r#"{
+    "sidebar": {
+        // ports on the left rail
+        "showPorts": false
+    }
+}
+"#
+        );
+    }
+
+    /// Removing a member takes its own line with it and leaves its neighbours alone.
+    #[test]
+    fn unset_removes_the_member_and_its_line() {
+        let sandbox = Sandbox::new("unset");
+        sandbox.write(
+            "cmux.json",
+            "{\n    \"app\": {\"appearance\": \"dark\"},\n    \"sidebar\": {\n        \"showPorts\": true,  // ports please\n        \"hideAllDetails\": false\n    }\n}\n",
+        );
+
+        let outcome = apply(
+            &sandbox.file("cmux.json"),
+            "sidebar.showPorts",
+            None,
+            Scope::Global,
+        )
+        .expect("the removal succeeds");
+        assert_eq!(outcome.status, WriteStatus::Persisted);
+        assert_eq!(
+            sandbox.read("cmux.json"),
+            "{\n    \"app\": {\"appearance\": \"dark\"},\n    \"sidebar\": {\n        \"hideAllDetails\": false\n    }\n}\n",
+            "the member, its trailing comment and its own line are gone; the rest is untouched"
+        );
+
+        // The result still validates, so the removal did not leave broken JSON behind.
+        assert!(validate(&read(&sandbox.file("cmux.json")).expect("valid JSONC"))
+            .iter()
+            .all(|issue| issue.severity != Severity::Error));
+    }
+
+    /// Unsetting a key that is not there is a success that changes nothing.
+    #[test]
+    fn unset_of_an_absent_key_changes_nothing() {
+        let sandbox = Sandbox::new("unchanged");
+        let seeded = "{\n    \"app\": {\"appearance\": \"dark\"}\n}\n";
+        sandbox.write("cmux.json", seeded);
+
+        let outcome = apply(
+            &sandbox.file("cmux.json"),
+            "app.accentColor",
+            None,
+            Scope::Global,
+        )
+        .expect("an absent key is not an error");
+        assert_eq!(outcome.status, WriteStatus::Unchanged);
+        assert_eq!(sandbox.read("cmux.json"), seeded, "the file is byte for byte the same");
+
+        // The same holds for a file that does not exist: it is not created by an unset.
+        let missing = sandbox.file("absent.json");
+        assert_eq!(
+            apply(&missing, "app.appearance", None, Scope::Global)
+                .expect("an absent file is not an error")
+                .status,
+            WriteStatus::Unchanged
+        );
+        assert!(!missing.exists());
+    }
+
+    /// A setting that belongs to one scope is an error in the other, and `set` enforces it.
+    #[test]
+    fn scope_separates_the_global_and_project_files() {
+        let value = parse_jsonc(r#"{"terminal": {"scrollSpeed": 2}}"#).unwrap();
+        let global = scope_issues(&value, Scope::Global);
+        assert!(global.is_empty(), "a terminal setting is a global app setting");
+        let project = scope_issues(&value, Scope::Project);
+        assert_eq!(project.len(), 1);
+        assert_eq!(project[0].path, "terminal");
+        assert_eq!(project[0].message, "only valid in the global cmux.json");
+        assert_eq!(project[0].severity, Severity::Error);
+
+        // The other direction: a project-only section in the user-wide file.
+        let value = parse_jsonc(r#"{"ui": {"newWorkspace": {}}}"#).unwrap();
+        assert!(scope_issues(&value, Scope::Project).is_empty());
+        let misplaced = scope_issues(&value, Scope::Global);
+        assert_eq!(misplaced.len(), 1);
+        assert_eq!(misplaced[0].message, "only valid in a project cmux.json");
+
+        // Sections both files honor are honored in both, including a single path inside a
+        // section that is otherwise global.
+        let shared = parse_jsonc(
+            r#"{"actions": {"dev": {"type": "workspaceCommand", "name": "dev"}}, "notifications": {"hooks": []}}"#,
+        )
+        .unwrap();
+        assert!(scope_issues(&shared, Scope::Project).is_empty());
+        assert!(scope_issues(&shared, Scope::Global).is_empty());
+
+        // Everything else in `notifications` stays global even when the hooks are project-local.
+        let mixed = parse_jsonc(r#"{"notifications": {"hooks": [], "sound": "Ping"}}"#).unwrap();
+        let issues = scope_issues(&mixed, Scope::Project);
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert_eq!(issues[0].path, "notifications.sound");
+    }
+
+    /// `set` refuses a setting that does not belong in the file's scope, writing nothing.
+    #[test]
+    fn set_respects_the_file_scope() {
+        let sandbox = Sandbox::new("scope");
+        let seeded = "{\n    \"actions\": {\"dev\": {\"type\": \"workspaceCommand\", \"name\": \"dev\"}}\n}\n";
+        sandbox.write("cmux.json", seeded);
+
+        let error = apply(
+            &sandbox.file("cmux.json"),
+            "app.appearance",
+            Some(&serde_json::json!("dark")),
+            Scope::Project,
+        )
+        .expect_err("a global setting does not belong in a project file");
+        let ApplyError::Invalid(issues) = &error else {
+            panic!("expected a scope refusal, got {error:?}");
+        };
+        assert_eq!(issues[0].path, "app");
+        assert_eq!(issues[0].message, "only valid in the global cmux.json");
+        assert_eq!(sandbox.read("cmux.json"), seeded);
+
+        // The same write into the global file is what a user actually wants.
+        apply(
+            &sandbox.file("cmux.json"),
+            "app.appearance",
+            Some(&serde_json::json!("dark")),
+            Scope::Global,
+        )
+        .expect("the global file accepts a global setting");
+        assert_eq!(
+            get(&read(&sandbox.file("cmux.json")).expect("valid JSONC"), "app.appearance"),
+            Some(&Value::from("dark"))
+        );
+    }
+
+    /// The scope is read off the file's path: the global file, or a `cmux.json` at or above the
+    /// working directory. Anything else is global, which is where `cmux config` points.
+    #[test]
+    fn scope_is_inferred_from_the_file_path() {
+        let sandbox = Sandbox::new("infer");
+        let here = sandbox.dir();
+
+        assert_eq!(infer_scope_in(&here.join("cmux.json"), here), Scope::Project);
+        assert_eq!(
+            infer_scope_in(&here.join(".cmux/cmux.json"), here),
+            Scope::Project
+        );
+        // A parent of the working directory is a project file too.
+        assert_eq!(infer_scope_in(&here.join("cmux.json"), &here.join("child")), Scope::Project);
+        // A child directory, a differently named file and a missing name are all global.
+        assert_eq!(
+            infer_scope_in(&here.join("child/cmux.json"), here),
+            Scope::Global
+        );
+        assert_eq!(infer_scope_in(&here.join("cmux.jsonc"), here), Scope::Global);
+        assert_eq!(infer_scope_in(&here.join("settings.json"), here), Scope::Global);
+        // The real global path is global whatever the working directory is.
+        if let Some(global) = global_path() {
+            assert_eq!(infer_scope_in(&global, here), Scope::Global);
+        }
+    }
+
+    /// An error the file already had does not block a change that does not add one, so a key
+    /// from a newer cmux does not make the file unwritable.
+    #[test]
+    fn pre_existing_errors_do_not_block_an_unrelated_change() {
+        let sandbox = Sandbox::new("preexisting");
+        let seeded = "{\n    \"app\": {\"appearanc\": \"dark\"}\n}\n";
+        sandbox.write("cmux.json", seeded);
+        assert_eq!(Issue::errors(&validate(&parse_jsonc(seeded).unwrap())), 1);
+
+        let outcome = apply(
+            &sandbox.file("cmux.json"),
+            "markdown.fontSize",
+            Some(&serde_json::json!(16)),
+            Scope::Global,
+        )
+        .expect("an unknown key from a newer cmux is not this change's problem");
+        assert_eq!(outcome.status, WriteStatus::Persisted);
+        let after = read(&sandbox.file("cmux.json")).expect("valid JSONC");
+        assert_eq!(
+            get(&after, "markdown.fontSize"),
+            Some(&Value::from(16))
+        );
+        // The pre-existing error is still reported, not quietly swallowed.
+        assert!(scope_issues(&after, Scope::Global).is_empty());
+    }
+
+    /// A path that cannot be reached, or that is not a path at all, is refused before any write.
+    #[test]
+    fn unreachable_and_malformed_paths_are_refused() {
+        let sandbox = Sandbox::new("refuse");
+        let seeded = "{\n    \"app\": \"dark\"\n}\n";
+        sandbox.write("cmux.json", seeded);
+
+        // `app` is a string, so there is no object to hang `appearance` from.
+        let error = apply(
+            &sandbox.file("cmux.json"),
+            "app.appearance",
+            Some(&serde_json::json!("dark")),
+            Scope::Global,
+        )
+        .expect_err("a scalar cannot hold a nested key");
+        assert!(matches!(error, ApplyError::Edit(EditError::NotAnObject(_))), "{error:?}");
+
+        for key in ["", "app..appearance", ".app", "app."] {
+            let error = apply(
+                &sandbox.file("cmux.json"),
+                key,
+                Some(&serde_json::json!("dark")),
+                Scope::Global,
+            )
+            .expect_err(&format!("'{key}' is not a settings path"));
+            assert!(matches!(error, ApplyError::Edit(EditError::NotAnObject(_))), "{key}");
+        }
+        assert_eq!(sandbox.read("cmux.json"), seeded);
+    }
+
+    /// The write is a temporary file plus one rename, so a reader never sees a partial file
+    /// and no scratch file is left behind.
+    #[test]
+    fn write_is_atomic_and_leaves_no_temporary() {
+        let sandbox = Sandbox::new("atomic");
+        sandbox.write("cmux.json", "{\n    \"app\": {\"appearance\": \"dark\"}\n}\n");
+        apply(
+            &sandbox.file("cmux.json"),
+            "app.appearance",
+            Some(&serde_json::json!("light")),
+            Scope::Global,
+        )
+        .expect("the write succeeds");
+        assert_eq!(sandbox.entries(), vec!["cmux.json".to_owned()]);
+        assert_eq!(sandbox.read("cmux.json"), "{\n    \"app\": {\"appearance\": \"light\"}\n}\n");
+    }
+
+    /// `cmux config docs` names the files, the format, the scopes and real keys.
+    #[test]
+    fn docs_name_the_files_the_scopes_and_some_keys() {
+        let text = docs_text();
+        assert!(text.contains("cmux.json settings"));
+        assert!(text.contains("JSONC"));
+        assert!(text.contains(SCHEMA_URL));
+        assert!(text.contains(DOCS_URL));
+        for key in [
+            "app.appearance",
+            "sidebar.showPorts",
+            "shortcuts.bindings.<actionId>",
+            "cmux config set",
+            "cmux config unset",
+        ] {
+            assert!(text.contains(key), "{key} missing from the docs:\n{text}");
+        }
+
+        let payload = docs_json();
+        assert_eq!(payload["format"], "jsonc");
+        assert_eq!(payload["schema_url"], SCHEMA_URL);
+        let sections = &payload["sections"];
+        assert!(sections["project"]
+            .as_array()
+            .expect("project sections")
+            .iter()
+            .any(|name| name == "ui"));
+        assert!(sections["shared"]
+            .as_array()
+            .expect("shared sections")
+            .iter()
+            .any(|name| name == "actions"));
+        assert!(sections["global"]
+            .as_array()
+            .expect("global sections")
+            .iter()
+            .any(|name| name == "sidebar"));
+        assert_eq!(payload["known_paths"], known_paths().len());
     }
 }
