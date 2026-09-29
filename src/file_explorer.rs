@@ -352,6 +352,7 @@ impl FileExplorer {
         explorer.connect_activation();
         explorer.connect_filter();
         explorer.connect_keys();
+        explorer.connect_drag();
         explorer
     }
 
@@ -583,6 +584,29 @@ impl FileExplorer {
             }
         });
         self.tree.add_controller(key);
+    }
+
+    /// Drag a row out of the tree. The terminal's existing file-drop handler receives
+    /// the FileList and pastes the shell-escaped path — the same escaped, space-joined
+    /// text upstream's `FileExplorerTerminalPathInsertion` inserts (see
+    /// `ghostty::text::shell_escape`), so the drop side is reused unchanged.
+    fn connect_drag(&self) {
+        let store = self.store.clone();
+        let tree = self.tree.clone();
+        let drag = gtk4::DragSource::new();
+        drag.set_actions(gtk4::gdk::DragAction::COPY);
+        drag.connect_prepare(move |_source, x, y| {
+            let (row, _column, _cell_x, _cell_y) = tree.path_at_pos(x as i32, y as i32)?;
+            let row = row?;
+            let iter = store.iter(&row)?;
+            let node_path: String = store.get_value(&iter, COL_PATH as i32).get().ok()?;
+            if node_path == DUMMY_PATH {
+                return None;
+            }
+            let files = gtk4::gdk::FileList::from_array(&[gtk4::gio::File::for_path(&node_path)]);
+            Some(gtk4::gdk::ContentProvider::for_value(&files.to_value()))
+        });
+        self.tree.add_controller(drag);
     }
 
     /// Move widget focus into the tree (upstream ⌘⇧E entering the panel).
