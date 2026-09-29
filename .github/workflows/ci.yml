@@ -98,9 +98,11 @@ jobs:
         run: cargo build --workspace --bins
 
       - name: Test version flags without a display or socket
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: python3 tests/test_cli_version_flag.py
 
       - name: Test Python tooling and fixture helpers
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: |
           python3 tests/test_socket_discovery.py
           python3 tests/test_cli_socket_autodiscovery.py
@@ -113,153 +115,206 @@ jobs:
           python3 tests/test_process_support.py
 
       - name: Test prompt probe cleanup
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: python3 tests/test_prompt_probe.py
 
       - name: Install headless UI test dependencies
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: sudo apt-get install -y xvfb dbus-x11 openbox xdotool wmctrl x11-utils
 
       - name: Test terminal pane close lifecycle
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_terminal_pane_close.py
 
       - name: Test CLI closed-pipe and output-error handling
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_cli_sigpipe_ignore.py
 
       - name: Test Linux socket access boundaries
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_socket_access.py
 
       - name: Test unfocused terminal SIGINT delivery
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_terminal_sigint.py
 
       - name: Test surface tab close with browser mapping
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_surface_tab_reentrant_close.py
 
       - name: Test surface move, reorder and drag-to-split lifecycle
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_surface_move.py
 
       - name: Test session load diagnostics and fallback
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_session_loading.py
 
       - name: Test asynchronous browser lifecycle and focus
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_browser_lifecycle.py
 
       - name: Test diff preparation, placement and restore lifecycle
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_diff_viewer.py
 
       - name: Test Linux project inspection, placement and restore lifecycle
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_project_view.py
 
       - name: Run unit tests
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         timeout-minutes: 10
         run: cargo test --workspace
 
       - name: Test local listener attribution
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_ports.py
 
       - name: Test browser address editing focus
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a cargo test --bin cmux-app browser_address_editing_tracks_delegated_focus -- --ignored --test-threads=1
 
       - name: Test idle browser preview widget cleanup
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a cargo test --bin cmux-app destroyed_picture_releases_delivery -- --ignored --test-threads=1
 
       - name: Test asynchronous DevTools snapshot delivery and cancellation
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a cargo test --bin cmux-app devtools_snapshot_delivery_and_cancellation -- --ignored --test-threads=1
 
       - name: Test divider recovery mapping and lifetime
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a cargo test --bin cmux-app divider_recovery_mapping_and_lifetime -- --ignored --test-threads=1
       - name: Test window state restoration
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_window_state.py
 
       - name: Test final session save on immediate quit
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_session_quit.py
 
       - name: Test manual resume in its owning terminal
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_resume.py
 
       - name: Test installed Claude session hook lifecycle
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_claude_hooks.py
 
       - name: Test installed Codex session hook lifecycle
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_codex_hooks.py
 
       - name: Test nested JSON agent hook lifecycles
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_json_agent_hooks.py
 
       - name: Test Kiro and Antigravity hook lifecycles
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_kiro_antigravity_hooks.py
 
       - name: Test Hermes Agent and Kimi hook lifecycles
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_hermes_kimi_hooks.py
 
       - name: Test installed OpenCode lifecycle plugin
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_opencode_hooks.py
 
       - name: Test installed Cursor lifecycle hooks
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_cursor_hooks.py
 
       - name: Test installed Pi lifecycle extension
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_pi_hooks.py
 
       - name: Test installed OMP and Campfire lifecycle extensions
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_omp_campfire_hooks.py
 
       - name: Test installed Amp lifecycle plugin
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_amp_hooks.py
 
       - name: Test installed Rovo Dev lifecycle hooks
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_rovodev_hooks.py
 
       - name: Test Claude Teams native split translation
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_claude_teams.py
 
       - name: Test signed resume approval and automatic PTY restart
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_resume_approval.py
 
       - name: Test notification history and exact terminal routing
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_notifications.py
       - name: Workspace sidebar status and progress
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_sidebar_metadata.py
       - name: Atomic workspace batch reorder
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_workspace_reorder_many.py
       - name: Automatic local Git metadata
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_git_metadata.py
       - name: Desktop notification action routing
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_desktop_notifications.py
       - name: Caller notification attribution
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_notification_caller.py
       - name: Native scrollback capture
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_scrollback.py
       - name: Native session scrollback replay
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_scrollback_restore.py
       - name: Previous session recovery
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_previous_session.py
 
       - name: Test native OSC notification bursts and chunk assembly
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_osc_notifications.py
 
       - name: Test process diagnostics and request correlation
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_diagnostics.py
 
       - name: Test per-terminal working directory reports
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_surface_directories.py
 
       - name: Test sibling surface close selection
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_close_surface_selection.py
       - name: Test workspace close selection
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_close_workspace_selection.py
 
       - name: Test persistent workspace groups
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_workspace_groups.py
 
       - name: Test nested terminal routing and cleanup
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_nested_split_routing.py
 
       - name: Test prompt diagnostic against GTK
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_prompt_probe.py
 
       - name: Test initial terminal input before submission
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_initial_input.py
 
       - name: Test keyboard routing across workspaces
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_multi_workspace_focus.py
       - name: Test workspace widget cleanup
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
@@ -295,15 +350,18 @@ jobs:
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_workspace_launch.py
 
       - name: Build optimized benchmark executables
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: cargo build --release --bin cmux --bin cmux-app
 
       - name: Benchmark optimized CLI to GTK round trips
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         env:
           CMUX_BIN_DIR: target/release
           CMUX_BENCHMARK_OUT: target/benchmarks/cli-round-trip.json
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_diagnostics.py
 
       - name: Benchmark optimized terminal memory and redraw churn
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         timeout-minutes: 5
         env:
           CMUX_BIN_DIR: target/release
@@ -312,10 +370,12 @@ jobs:
         run: dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1200x24' python3 tests/test_linux_memory_churn.py
 
       - name: Benchmark optimized background input and bell attention
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         timeout-minutes: 5
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_attention_benchmark.py
 
       - name: Benchmark optimized SSH workspace lifecycle
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         timeout-minutes: 5
         env:
           CMUX_BIN_DIR: target/release
@@ -324,15 +384,18 @@ jobs:
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_workspace_launch.py
 
       - name: Benchmark optimized history input before and after workspace churn
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         timeout-minutes: 5
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_history_benchmark.py
 
       - name: Setup Node for real browser integration
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
 
       - name: Install pinned external browser benchmark tools
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         timeout-minutes: 5
         run: |
           npm install --prefix target/browser-tools --no-audit --no-fund agent-browser@0.31.1
@@ -340,18 +403,22 @@ jobs:
           echo "$PWD/target/browser-tools/node_modules/.bin" >> "$GITHUB_PATH"
 
       - name: Benchmark optimized real browser DOM and preview
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         timeout-minutes: 5
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_real_browser_benchmark.py
 
       - name: Test real browser diff surface DOM
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         timeout-minutes: 5
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_real_diff_viewer.py
 
       - name: Test real browser project surface DOM
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         timeout-minutes: 5
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_real_project_view.py
 
       - name: Verify remote browser resources through isolated SSH namespaces
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         timeout-minutes: 5
         env:
           CMUX_BIN_DIR: target/release
