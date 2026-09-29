@@ -61,7 +61,7 @@ with tempfile.TemporaryDirectory(prefix="cmux-terminal-close-") as directory:
             ("split", "--direction", "diagonal", "--id", survivors[0]),
             ("close-surface", "00000000-0000-4000-8000-000000000000"),
             ("send-text", "ignored", "--id", "00000000-0000-4000-8000-000000000000"),
-            ("send-key", "ctrl+c", "--id", new_id),
+            ("send-key", "definitely-not-a-key", "--id", new_id),  # macOS refuses an unknown key name
             ("read-text", "--id", "00000000-0000-4000-8000-000000000000"),
             ("refresh", "--id", "00000000-0000-4000-8000-000000000000"),
         ]:

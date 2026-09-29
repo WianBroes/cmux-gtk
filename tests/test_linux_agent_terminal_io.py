@@ -32,7 +32,7 @@ def main():
                 app.cli("send-text", f"printf '{marker}_%s\\n' 7", "--id", surface)
                 app.wait_for(lambda: f"printf '{marker}_%s" in text(surface), "typed but unsubmitted text")
                 assert f"{marker}_7" not in text(surface).splitlines(), "executed before Enter"
-                app.cli("send-key", "\r", "--id", surface)
+                app.cli("send-key", "\r" if surface == focused else "enter", "--id", surface)  # literal character, then a named key
                 app.wait_for(lambda: f"{marker}_7" in text(surface).splitlines(), "executed output")
                 assert selected_surface(app) == focused, "input stole focus"
     print("send-text, send-key and read-text drove focused and background shells without focus change")
