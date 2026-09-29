@@ -107,6 +107,23 @@ impl AppState {
         }
     }
 
+    /// Whether the right sidebar's tree currently owns widget focus.
+    pub fn right_sidebar_tree_focused(&self) -> bool {
+        self.right_sidebar
+            .as_ref()
+            .is_some_and(|sidebar| sidebar.is_visible() && sidebar.tree_has_focus())
+    }
+
+    /// Focus the right sidebar's tree, showing the panel first if needed (upstream ⌘⇧E).
+    pub fn focus_right_sidebar(&self) {
+        if let Some(sidebar) = &self.right_sidebar {
+            if !sidebar.is_visible() {
+                sidebar.set_visible(true);
+            }
+            sidebar.focus_tree();
+        }
+    }
+
     /// Point the right sidebar's Files tree at the focused workspace's root
     /// (upstream `FileExplorerWorkspaceRootResolver`: local current directory,
     /// remote workspaces unavailable). Cheap when the root did not change.

@@ -18,6 +18,7 @@
 
 use gtk4::prelude::*;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -184,6 +185,56 @@ fn find_node_mut<'a>(nodes: &'a mut [Node], path: &Path) -> Option<&'a mut Node>
     None
 }
 
+/// Whether a node shows under the active name filter: its own name matches, or any
+/// loaded child does (a directory keeps its context above a match). The filter is
+/// compared case-insensitively; unloaded children cannot match what is not loaded.
+fn node_matches_filter(node: &Node, filter: &str) -> bool {
+    if filter.is_empty() {
+        return true;
+    }
+    let filter = filter.to_lowercase();
+    if node.name.to_lowercase().contains(&filter) {
+        return true;
+    }
+    node.children.as_ref().is_some_and(|children| {
+        children
+            .iter()
+            .any(|child| node_matches_filter(child, &filter))
+    })
+}
+
+/// Rows in display order with the path they get in the store. Filtered-out rows are
+/// skipped, so the indices count emitted rows only, and children appear under an
+/// expanded directory or — while filtering — under any directory keeping a match.
+fn visible_rows<'a>(nodes: &'a [Node], filter: &str) -> Vec<(String, &'a Node)> {
+    fn walk<'a>(nodes: &'a [Node], filter: &str, prefix: &str, out: &mut Vec<(String, &'a Node)>) {
+        let mut index = 0usize;
+        for node in nodes {
+            if !node_matches_filter(node, filter) {
+                continue;
+            }
+            let path = if prefix.is_empty() {
+                index.to_string()
+            } else {
+                format!("{prefix}:{index}")
+            };
+            index += 1;
+            out.push((path.clone(), node));
+            // Children show under an expanded directory, and always while filtering so
+            // a match stays reachable inside its folder without expanding by hand.
+            let show_children = filter.is_empty() && node.expanded;
+            if show_children || !filter.is_empty() {
+                if let Some(children) = &node.children {
+                    walk(children, filter, &path, out);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(nodes, filter, "", &mut out);
+    out
+}
+
 /// Everything the tree renders from, split into cells so signal handlers re-entering
 /// during a rebuild (see the module docs) never collide on one borrow.
 struct ExplorerState {
@@ -193,6 +244,8 @@ struct ExplorerState {
     nodes: RefCell<Vec<Node>>,
     /// Selected row, kept across rebuilds so filtering can restore the cursor.
     selected: RefCell<Option<PathBuf>>,
+    /// Active name filter (upstream `/` quick search); empty means no filter.
+    filter: RefCell<String>,
 }
 
 /// The Files panel: root path header, lazy file tree, status label.
@@ -200,6 +253,7 @@ pub struct FileExplorer {
     /// Outer widget placed in the right sidebar's content stack.
     root: gtk4::Box,
     header: gtk4::Label,
+    filter_entry: gtk4::SearchEntry,
     tree: gtk4::TreeView,
     scrolled: gtk4::ScrolledWindow,
     status: gtk4::Label,
@@ -264,21 +318,30 @@ impl FileExplorer {
         status.set_vexpand(true);
         status.set_valign(gtk4::Align::Center);
 
+        // Name filter of the `/` quick search (upstream navigateRightSidebarRows).
+        let filter_entry = gtk4::SearchEntry::new();
+        filter_entry.set_placeholder_text(Some("Filtrer par nom ( / )"));
+        filter_entry.set_margin_start(8);
+        filter_entry.set_margin_end(8);
+
         let state = Rc::new(ExplorerState {
             root: RefCell::new(None),
             nodes: RefCell::new(Vec::new()),
             selected: RefCell::new(None),
+            filter: RefCell::new(String::new()),
         });
 
         let root_widget = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
         root_widget.add_css_class("file-explorer");
         root_widget.append(&header);
+        root_widget.append(&filter_entry);
         root_widget.append(&scrolled);
         root_widget.append(&status);
 
         let explorer = FileExplorer {
             root: root_widget,
             header,
+            filter_entry,
             tree: tree.clone(),
             scrolled,
             status,
@@ -287,6 +350,8 @@ impl FileExplorer {
         };
         explorer.connect_signals();
         explorer.connect_activation();
+        explorer.connect_filter();
+        explorer.connect_keys();
         explorer
     }
 
@@ -345,16 +410,22 @@ impl FileExplorer {
                     .to_str()
                     .map(|value| value.to_string())
                     .unwrap_or_default();
+                let filter = state.filter.borrow().clone();
+                let mut shown = 0usize;
                 if let Some(children) = &node.children {
-                    for (index, child) in children.iter().enumerate() {
+                    for child in children.iter() {
+                        if !node_matches_filter(child, &filter) {
+                            continue;
+                        }
                         append_node(
                             &store,
                             &tree,
                             Some(iter),
                             child,
-                            &format!("{parent_path}:{index}"),
+                            &format!("{parent_path}:{shown}"),
                             selected.as_deref(),
                         );
+                        shown += 1;
                     }
                 }
                 // Removing the dummy row can leave the view collapsed even though the
@@ -447,6 +518,81 @@ impl FileExplorer {
                 }
             }
         });
+    }
+
+    /// `/` filtering: typing narrows the visible rows (upstream quick search), Enter
+    /// returns to the tree with the filter kept, Escape clears it.
+    fn connect_filter(&self) {
+        let store = self.store.clone();
+        let tree = self.tree.clone();
+        let state = self.state.clone();
+        self.filter_entry.connect_search_changed(move |entry| {
+            *state.filter.borrow_mut() = entry.text().to_string();
+            rebuild(&store, &tree, &state);
+        });
+        let tree = self.tree.clone();
+        self.filter_entry.connect_stop_search(move |entry| {
+            entry.set_text("");
+            tree.grab_focus();
+        });
+        let tree = self.tree.clone();
+        self.filter_entry.connect_activate(move |_| {
+            tree.grab_focus();
+        });
+    }
+
+    /// J/K row moves, H/L folding and `/` for the filter, scoped to the tree itself so
+    /// the keys never leak into the terminal (upstream `navigateRightSidebarRows`);
+    /// the arrow keys keep GTK's native movement.
+    fn connect_keys(&self) {
+        let store = self.store.clone();
+        let tree = self.tree.clone();
+        let state = self.state.clone();
+        let filter_entry = self.filter_entry.clone();
+        let key = gtk4::EventControllerKey::new();
+        key.connect_key_pressed(move |_, keyval, _code, modifiers| {
+            let chord = modifiers
+                & (gtk4::gdk::ModifierType::CONTROL_MASK
+                    | gtk4::gdk::ModifierType::ALT_MASK
+                    | gtk4::gdk::ModifierType::SUPER_MASK);
+            if chord != gtk4::gdk::ModifierType::empty() {
+                return gtk4::glib::Propagation::Proceed;
+            }
+            match keyval.to_lower() {
+                gtk4::gdk::Key::j => {
+                    move_cursor(&store, &tree, &state, 1);
+                    gtk4::glib::Propagation::Stop
+                }
+                gtk4::gdk::Key::k => {
+                    move_cursor(&store, &tree, &state, -1);
+                    gtk4::glib::Propagation::Stop
+                }
+                gtk4::gdk::Key::l => {
+                    set_cursor_directory(&store, &tree, &state, true);
+                    gtk4::glib::Propagation::Stop
+                }
+                gtk4::gdk::Key::h => {
+                    set_cursor_directory(&store, &tree, &state, false);
+                    gtk4::glib::Propagation::Stop
+                }
+                gtk4::gdk::Key::slash => {
+                    filter_entry.grab_focus();
+                    gtk4::glib::Propagation::Stop
+                }
+                _ => gtk4::glib::Propagation::Proceed,
+            }
+        });
+        self.tree.add_controller(key);
+    }
+
+    /// Move widget focus into the tree (upstream ⌘⇧E entering the panel).
+    pub fn focus_tree(&self) {
+        self.tree.grab_focus();
+    }
+
+    /// Whether the tree currently holds widget focus.
+    pub fn tree_has_focus(&self) -> bool {
+        self.tree.has_focus()
     }
 
     /// The panel widget for the sidebar's content stack.
@@ -543,16 +689,146 @@ pub fn start_root_refresh(state: &crate::app_state::AppStateRef) {
 fn rebuild(store: &gtk4::TreeStore, tree: &gtk4::TreeView, state: &ExplorerState) {
     let nodes = state.nodes.borrow();
     let selected = state.selected.borrow().clone();
+    let filter = state.filter.borrow().clone();
+    let rows = visible_rows(&nodes, &filter);
     store.clear();
-    for (index, node) in nodes.iter().enumerate() {
-        append_node(
-            store,
-            tree,
-            None,
-            node,
-            &index.to_string(),
-            selected.as_deref(),
+    let mut placed: HashMap<String, gtk4::TreeIter> = HashMap::new();
+    let mut opened: Vec<String> = Vec::new();
+    let mut cursor_path: Option<String> = None;
+    for (path, node) in &rows {
+        let parent = path
+            .rsplit_once(':')
+            .and_then(|(parent, _)| placed.get(parent).cloned());
+        let iter = store.append(parent.as_ref());
+        let full_path = node.path.to_string_lossy().into_owned();
+        store.set(
+            &iter,
+            &[
+                (COL_ICON, &icon(node.is_dir, node.is_symlink)),
+                (COL_NAME, &node.name.as_str()),
+                (COL_PATH, &full_path.as_str()),
+                (COL_IS_DIR, &node.is_dir),
+                (COL_HAS_DUMMY, &false),
+            ],
         );
+        if node.is_dir && node.children.is_none() {
+            let dummy = store.append(Some(&iter));
+            store.set(
+                &dummy,
+                &[
+                    (COL_ICON, &""),
+                    (COL_NAME, &"…"),
+                    (COL_PATH, &DUMMY_PATH),
+                    (COL_IS_DIR, &false),
+                    (COL_HAS_DUMMY, &false),
+                ],
+            );
+            store.set(&iter, &[(COL_HAS_DUMMY, &true)]);
+        }
+        if let Some((parent, _)) = path.rsplit_once(':') {
+            opened.push(parent.to_string());
+        }
+        if selected.as_deref() == Some(node.path.as_path()) {
+            cursor_path = Some(path.clone());
+        }
+        placed.insert(path.clone(), iter);
+    }
+    // The view opens every folder whose children were emitted before the cursor is
+    // restored: those re-entrant row-expanded callbacks find the nodes borrow held and
+    // skip their flag writes, so expansion state cannot flip during a rebuild.
+    opened.sort();
+    opened.dedup();
+    for parent in &opened {
+        if let Some(tree_path) = gtk4::TreePath::from_string(parent) {
+            tree.expand_row(&tree_path, false);
+        }
+    }
+    if let Some(path) = cursor_path.as_deref().and_then(gtk4::TreePath::from_string) {
+        set_cursor(tree, &path);
+    }
+}
+
+/// The cursor row as (row path, filesystem path), when one is set.
+fn cursor_row(store: &gtk4::TreeStore, tree: &gtk4::TreeView) -> Option<(gtk4::TreePath, String)> {
+    let (path, _) = gtk4::prelude::TreeViewExt::cursor(tree);
+    let path = path?;
+    let iter = store.iter(&path)?;
+    let node_path = store
+        .get_value(&iter, COL_PATH as i32)
+        .get::<String>()
+        .ok()?;
+    Some((path, node_path))
+}
+
+/// Put the cursor on a row without starting an edit.
+fn set_cursor(tree: &gtk4::TreeView, path: &gtk4::TreePath) {
+    gtk4::prelude::TreeViewExt::set_cursor(
+        tree,
+        path,
+        Option::<&gtk4::TreeViewColumn>::None,
+        false,
+    );
+}
+
+/// Move the cursor one visible row down (+1) or up (-1) in display order, honouring
+/// the active filter; without a cursor the move starts at the first (or last) row.
+fn move_cursor(store: &gtk4::TreeStore, tree: &gtk4::TreeView, state: &ExplorerState, offset: i32) {
+    let paths: Vec<String> = {
+        let nodes = state.nodes.borrow();
+        let filter = state.filter.borrow();
+        visible_rows(&nodes, &filter)
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect()
+    };
+    if paths.is_empty() {
+        return;
+    }
+    let current =
+        cursor_row(store, tree).and_then(|(path, _)| path.to_str().map(|value| value.to_string()));
+    let index = current.and_then(|current| paths.iter().position(|path| *path == current));
+    let target = match index {
+        Some(index) => (index as i32 + offset).clamp(0, paths.len() as i32 - 1) as usize,
+        None if offset < 0 => paths.len() - 1,
+        None => 0,
+    };
+    if let Some(path) = gtk4::TreePath::from_string(&paths[target]) {
+        set_cursor(tree, &path);
+    }
+}
+
+/// Fold (`expand` false) or unfold the directory under the cursor — the upstream
+/// H/L rule; files and the dummy row ignore the keys.
+fn set_cursor_directory(
+    store: &gtk4::TreeStore,
+    tree: &gtk4::TreeView,
+    state: &ExplorerState,
+    expand: bool,
+) {
+    let Some((row_path, node_path)) = cursor_row(store, tree) else {
+        return;
+    };
+    if node_path == DUMMY_PATH {
+        return;
+    }
+    let Some(iter) = store.iter(&row_path) else {
+        return;
+    };
+    let is_dir: bool = store
+        .get_value(&iter, COL_IS_DIR as i32)
+        .get()
+        .unwrap_or(false);
+    if !is_dir {
+        return;
+    }
+    let expanded = {
+        let mut nodes = state.nodes.borrow_mut();
+        find_node_mut(&mut nodes, Path::new(&node_path)).is_some_and(|node| node.expanded)
+    };
+    if expand && !expanded {
+        tree.expand_row(&row_path, false);
+    } else if !expand && expanded {
+        tree.collapse_row(&row_path);
     }
 }
 
@@ -734,6 +1010,80 @@ mod tests {
             Some("deep")
         );
         assert!(find_node_mut(&mut nodes, Path::new("/nope")).is_none());
+    }
+
+    fn test_node(name: &str, is_dir: bool, children: Option<Vec<Node>>) -> Node {
+        Node {
+            name: name.to_string(),
+            path: PathBuf::from(format!("/r/{name}")),
+            is_dir,
+            is_symlink: false,
+            children,
+            expanded: false,
+        }
+    }
+
+    fn row_names<'a>(rows: &'a [(String, &'a Node)]) -> Vec<(&'a str, &'a str)> {
+        rows.iter()
+            .map(|(path, node)| (path.as_str(), node.name.as_str()))
+            .collect()
+    }
+
+    /// The name filter keeps matches with their folders, hides the rest, and the store
+    /// indices count only emitted rows; children show while filtering even collapsed.
+    #[test]
+    fn filter_keeps_matches_parents_and_reindexes() {
+        let mut nodes = vec![
+            test_node(
+                "docs",
+                true,
+                Some(vec![
+                    test_node("alpha.md", false, None),
+                    test_node("beta.md", false, None),
+                ]),
+            ),
+            test_node("lisez-moi.txt", false, None),
+            test_node("dossier-vide", true, None),
+        ];
+
+        // No filter, collapsed: top level only.
+        assert_eq!(
+            row_names(&visible_rows(&nodes, "")),
+            [("0", "docs"), ("1", "lisez-moi.txt"), ("2", "dossier-vide")]
+        );
+
+        // Expanded directory: children keep their nested paths.
+        nodes[0].expanded = true;
+        assert_eq!(
+            row_names(&visible_rows(&nodes, "")),
+            [
+                ("0", "docs"),
+                ("0:0", "alpha.md"),
+                ("0:1", "beta.md"),
+                ("1", "lisez-moi.txt"),
+                ("2", "dossier-vide")
+            ]
+        );
+
+        // Filter (case-insensitive): the folder survives for its matching child even
+        // while collapsed, the non-matching sibling is hidden.
+        nodes[0].expanded = false;
+        assert_eq!(
+            row_names(&visible_rows(&nodes, "ALPHA")),
+            [("0", "docs"), ("0:0", "alpha.md")]
+        );
+
+        // A plain name match is re-indexed to the top of the store.
+        assert_eq!(
+            row_names(&visible_rows(&nodes, "lisez")),
+            [("0", "lisez-moi.txt")]
+        );
+        // An unloaded folder can only match by its own name.
+        assert_eq!(
+            row_names(&visible_rows(&nodes, "dossier-vide")),
+            [("0", "dossier-vide")]
+        );
+        assert!(visible_rows(&nodes, "zzz").is_empty());
     }
 
     /// Links get their own icon; only real directories get the folder.

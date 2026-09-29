@@ -26,6 +26,7 @@ pub struct ShortcutConfig {
     pub rename_workspace: Option<String>,
     pub toggle_sidebar: Option<String>,
     pub toggle_right_sidebar: Option<String>,
+    pub focus_right_sidebar: Option<String>,
     pub split_right: Option<String>,
     pub split_down: Option<String>,
     pub close_pane: Option<String>,
@@ -92,6 +93,7 @@ pub enum ShortcutAction {
     RenameWorkspace,
     ToggleSidebar,
     ToggleRightSidebar,
+    FocusRightSidebar,
     SplitRight,
     SplitDown,
     ClosePane,
@@ -132,6 +134,7 @@ const KNOWN_SHORTCUTS: &[&str] = &[
     "rename_workspace",
     "toggle_sidebar",
     "toggle_right_sidebar",
+    "focus_right_sidebar",
     "split_right",
     "split_down",
     "close_pane",
@@ -266,6 +269,12 @@ impl ShortcutMap {
                 ShortcutAction::ToggleRightSidebar,
                 &config.toggle_right_sidebar,
                 "<Ctrl><Alt>b",
+            ),
+            // Upstream ⌘⇧E: toggle focus between the panel and the terminal.
+            (
+                ShortcutAction::FocusRightSidebar,
+                &config.focus_right_sidebar,
+                "<Ctrl><Shift>e",
             ),
             (ShortcutAction::SplitRight, &config.split_right, "<Ctrl>d"),
             (

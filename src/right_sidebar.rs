@@ -75,4 +75,14 @@ impl RightSidebar {
     pub fn show_root(&self, root: crate::file_explorer::Root) {
         self.explorer.apply_root(root);
     }
+
+    /// Move widget focus into the Files tree (upstream ⌘⇧E entering the panel).
+    pub fn focus_tree(&self) {
+        self.explorer.focus_tree();
+    }
+
+    /// Whether the Files tree currently holds widget focus.
+    pub fn tree_has_focus(&self) -> bool {
+        self.explorer.tree_has_focus()
+    }
 }
