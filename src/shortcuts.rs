@@ -116,6 +116,26 @@ pub fn install_shortcuts(
                     }
                     gtk4::glib::Propagation::Stop
                 }
+                Some(ShortcutAction::ToggleRightSidebar) => {
+                    // Upstream ⌘⌥B: toggling never moves focus into the panel; ⌘⇧E below
+                    // owns the focus hand-over.
+                    state.borrow().toggle_right_sidebar();
+                    if let Some(engine) = state.borrow_mut().active_split_engine_mut() {
+                        engine.focus_active_surface();
+                    }
+                    gtk4::glib::Propagation::Stop
+                }
+                Some(ShortcutAction::FocusRightSidebar) => {
+                    // Upstream ⌘⇧E: toggle focus between the panel's tree and the terminal.
+                    if state.borrow().right_sidebar_tree_focused() {
+                        if let Some(engine) = state.borrow_mut().active_split_engine_mut() {
+                            engine.focus_active_surface();
+                        }
+                    } else {
+                        state.borrow().focus_right_sidebar();
+                    }
+                    gtk4::glib::Propagation::Stop
+                }
                 // -- Pane split shortcuts --
                 Some(ShortcutAction::SplitRight) => {
                     handle_split(&state, false);

@@ -273,6 +273,23 @@ fn format_capabilities(result: &Value, color: bool) -> String {
     lines.join("\n")
 }
 
+/// Report the right sidebar's state after a `right_sidebar.apply` command.
+fn format_right_sidebar(result: &Value) -> String {
+    let visible = result
+        .get("visible")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if visible {
+        let mode = result
+            .get("mode")
+            .and_then(Value::as_str)
+            .unwrap_or("files");
+        format!("Right sidebar visible ({mode})")
+    } else {
+        "Right sidebar hidden".to_string()
+    }
+}
+
 /// Format notification list response.
 fn format_notification_list(result: &Value, color: bool) -> String {
     let notifications = match result.get("notifications").and_then(|v| v.as_array()) {
@@ -532,6 +549,7 @@ pub fn format_response(method: &str, result: &Value, json_mode: bool, color: boo
         "sidebar.log" | "sidebar.clear_log" => "OK".to_string(),
         "sidebar.list_log" => format_log_list(result),
         "sidebar.state" => format_sidebar_state(result),
+        "right_sidebar.apply" => format_right_sidebar(result),
         "debug.layout" => serde_json::to_string_pretty(result).unwrap_or_default(),
 
         // Mutation commands: show success message
@@ -757,6 +775,29 @@ fn format_fallback(result: &Value) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The right sidebar answer reports its visibility and the active mode.
+    #[test]
+    fn right_sidebar_state_output() {
+        assert_eq!(
+            format_response(
+                "right_sidebar.apply",
+                &json!({"visible": true, "mode": "files"}),
+                false,
+                false
+            ),
+            "Right sidebar visible (files)"
+        );
+        assert_eq!(
+            format_response(
+                "right_sidebar.apply",
+                &json!({"visible": false, "mode": "files"}),
+                false,
+                false
+            ),
+            "Right sidebar hidden"
+        );
+    }
 
     /// Missing layout metadata must not be rendered as a known zero-pane workspace.
     #[test]

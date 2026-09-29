@@ -13,6 +13,7 @@ mod browser_timeout;
 mod config;
 mod diagnostics;
 mod events;
+mod file_explorer;
 mod focus_history;
 mod ghostty;
 mod git_metadata;
@@ -41,6 +42,7 @@ mod resume_review;
     reason = "the GUI uses only insertion; the CLI binary owns query mutations"
 )]
 mod review_comments;
+mod right_sidebar;
 mod scrollback;
 mod selection;
 mod session;
@@ -67,6 +69,12 @@ const APP_CSS: &str = "
 /* cmux Phase 2 styles — per UI-SPEC.md */
 window { background-color: #1a1a1a; }
 .sidebar { background-color: #242424; }
+/* File explorer (right sidebar Files mode): rows, header and selection follow the dark
+   sidebar instead of the light theme's white treeview. */
+.file-explorer treeview.view { background-color: #242424; color: #cccccc; }
+.file-explorer treeview.view:selected { background-color: #3a63a8; color: #ffffff; }
+.file-explorer .heading { color: #cccccc; }
+.file-explorer .dim-label { color: #c0c0c0; }
 .workspace-list { background-color: #242424; }
 .workspace-list row { min-height: 36px; padding: 8px 16px; }
 .workspace-list row label { color: #cccccc; font-size: 14px; font-weight: 400; }
@@ -396,7 +404,10 @@ fn build_ui(
     let split = gtk4::Paned::new(gtk4::Orientation::Horizontal);
     split.set_wide_handle(true);
     split.set_start_child(Some(&sidebar_box));
-    split.set_end_child(Some(&stack));
+    // Workspaces and the right sidebar (Files panel) share their own divider so the panel
+    // sits to the right of the content without touching the left sidebar's layout.
+    let (content_paned, right_sidebar) = crate::right_sidebar::RightSidebar::build(&stack);
+    split.set_end_child(Some(&content_paned));
     crate::preferences::attach_sidebar_resize(&split);
     // Make the stack expand to fill remaining width.
     stack.set_hexpand(true);
@@ -418,6 +429,8 @@ fn build_ui(
         ghostty_app,
         app.clone(),
     );
+    // The right sidebar is driven from shortcuts, the menu and the socket through AppState.
+    state.borrow_mut().right_sidebar = Some(right_sidebar);
 
     // Wire sidebar click-to-switch.
     crate::sidebar::wire_sidebar_clicks(&sidebar_list, state.clone());
@@ -499,6 +512,7 @@ fn build_ui(
     crate::sidebar::rebuild_grouped_sidebar(&state);
 
     crate::git_metadata::start(&state, &window);
+    crate::file_explorer::start_root_refresh(&state);
     crate::ports::start(&state, &window);
     crate::agent_activity::start(&state, &window);
     crate::browser::location::start(&state, &window);

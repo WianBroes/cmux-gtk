@@ -16,6 +16,10 @@ struct Preferences {
     desktop_notifications: bool,
     #[serde(default = "default_sidebar_width")]
     sidebar_width: f64,
+    #[serde(default)]
+    right_sidebar_visible: bool,
+    #[serde(default = "default_sidebar_width")]
+    right_sidebar_width: f64,
 }
 
 fn enabled() -> bool {
@@ -82,6 +86,48 @@ pub fn sidebar_width() -> f64 {
 /// Remember a dragged width: live at once, on disk for the next launch.
 pub fn save_sidebar_width(width: f64) -> Result<(), String> {
     SIDEBAR_WIDTH.store(clamp_sidebar_width(width).to_bits(), Ordering::Relaxed);
+    save_current()
+}
+
+/// Whether the right sidebar (Files) is open; loaded once, saved on every toggle.
+static RIGHT_SIDEBAR_VISIBLE: LazyLock<AtomicBool> = LazyLock::new(|| {
+    AtomicBool::new(read(&path()).is_some_and(|prefs| prefs.right_sidebar_visible))
+});
+
+/// Whether the right sidebar is open.
+pub fn right_sidebar_visible() -> bool {
+    RIGHT_SIDEBAR_VISIBLE.load(Ordering::Relaxed)
+}
+
+/// Show or hide the right sidebar, remembering the choice for the next launch.
+pub fn set_right_sidebar_visible(visible: bool) {
+    if right_sidebar_visible() == visible {
+        return;
+    }
+    RIGHT_SIDEBAR_VISIBLE.store(visible, Ordering::Relaxed);
+    let _ = save_current();
+}
+
+/// Right sidebar width in points; dragged on its divider, persisted like the left one.
+static RIGHT_SIDEBAR_WIDTH: LazyLock<AtomicU64> = LazyLock::new(|| {
+    let stored = read(&path()).map_or(SIDEBAR_WIDTH_MIN, |prefs| prefs.right_sidebar_width);
+    AtomicU64::new(clamp_sidebar_width(stored).to_bits())
+});
+
+/// Current right sidebar width in points, already clamped.
+pub fn right_sidebar_width() -> f64 {
+    f64::from_bits(RIGHT_SIDEBAR_WIDTH.load(Ordering::Relaxed))
+}
+
+/// Remember a dragged right sidebar width: live at once, on disk for the next launch.
+pub fn save_right_sidebar_width(width: f64) -> Result<(), String> {
+    RIGHT_SIDEBAR_WIDTH.store(clamp_sidebar_width(width).to_bits(), Ordering::Relaxed);
+    save_current()
+}
+
+/// Persist every current preference value; the single write path shared by Apply, the two
+/// dividers and the right sidebar toggle, so one writer never drops another writer's fields.
+fn save_current() -> Result<(), String> {
     save(
         &path(),
         saved_font_size().unwrap_or(12.0),
@@ -137,6 +183,109 @@ pub fn attach_sidebar_resize(paned: &gtk4::Paned) {
     });
 }
 
+/// Measured minimum width of the right sidebar. `GtkPaned` clamps `max-position` against
+/// exactly this value when `shrink_end_child` is false, which is what keeps the panel from
+/// ever being allocated less than it asks for (`gtkpaned.c`, `gtk_paned_compute_position`).
+fn right_sidebar_minimum(paned: &gtk4::Paned) -> i32 {
+    paned
+        .end_child()
+        .map(|sidebar| sidebar.measure(gtk4::Orientation::Horizontal, -1).0)
+        .unwrap_or(0)
+}
+
+/// End child width in points, derived from GTK's own clamp:
+/// `max_position = width - handle - end_min`, so `width - handle - position = max - position + end_min`.
+/// None before the first allocation, when `max-position` is still unset.
+fn right_sidebar_width_of(paned: &gtk4::Paned) -> Option<i32> {
+    let available = paned.width();
+    if available <= 1 || i64::from(paned.max_position()) > i64::from(available) {
+        return None;
+    }
+    Some(right_sidebar_minimum(paned) + paned.max_position() - paned.position())
+}
+
+/// Cap for the right sidebar, the same bound the left sidebar gets: at most a third of the
+/// **window** (the content paned only spans the region left of the panel, so its own width
+/// would cap the panel far below a third of the window).
+fn right_sidebar_cap(paned: &gtk4::Paned) -> f64 {
+    let window_width = paned.root().map(|root| root.width()).unwrap_or(0);
+    let available = if window_width > 1 {
+        window_width
+    } else {
+        paned.width()
+    };
+    (f64::from(available) / 3.0).clamp(SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX)
+}
+
+/// Move the divider so the right sidebar is `width` points wide, applying the same bounds as
+/// the left sidebar (240…600, at most a third of the window). GTK clamps the position itself.
+fn set_right_sidebar_width(paned: &gtk4::Paned, width: f64) {
+    let Some(available) = (paned.width() > 1).then(|| paned.width()) else {
+        return;
+    };
+    if i64::from(paned.max_position()) > i64::from(available) {
+        return;
+    }
+    let target = clamp_sidebar_width(width)
+        .min(right_sidebar_cap(paned))
+        .round() as i32;
+    let position = (paned.max_position() - (target - right_sidebar_minimum(paned))).max(0);
+    if paned.position() != position {
+        paned.set_position(position);
+    }
+}
+
+/// Right sidebar divider, mirrored from `attach_sidebar_resize` onto the end child: it keeps
+/// the width it was given when the window resizes, follows the same bounds, and its persisted
+/// width survives a relaunch. Dragging writes through the same debounced path.
+pub fn attach_right_sidebar_resize(paned: &gtk4::Paned) {
+    if let Some(sidebar) = paned.end_child() {
+        sidebar.set_size_request(SIDEBAR_WIDTH_MIN as i32, -1);
+    }
+    // The workspace content (start child) absorbs window resizes; the sidebar keeps its width.
+    paned.set_resize_end_child(false);
+    paned.set_shrink_end_child(false);
+    // The stored width can only land after GTK computed max-position for this window, which
+    // also happens on every window resize (the third-of-the-window cap must follow it).
+    paned.connect_max_position_notify(|paned| {
+        let paned = paned.clone();
+        gtk4::glib::idle_add_local_once(move || {
+            set_right_sidebar_width(&paned, right_sidebar_width())
+        });
+    });
+    let scheduled = Rc::new(Cell::new(false));
+    paned.connect_position_notify(move |paned| {
+        // The first allocation places the divider by GTK's own default while `position-set`
+        // is still false; storing that value would clobber the persisted width before the
+        // max-position handler below has applied it.
+        if !paned.property::<bool>("position-set") {
+            return;
+        }
+        let Some(width) = right_sidebar_width_of(paned) else {
+            return;
+        };
+        let cap = right_sidebar_cap(paned);
+        if f64::from(width) > cap {
+            set_right_sidebar_width(paned, cap);
+            return;
+        }
+        let width = clamp_sidebar_width(f64::from(width));
+        if width.to_bits() == RIGHT_SIDEBAR_WIDTH.load(Ordering::Relaxed) {
+            return;
+        }
+        RIGHT_SIDEBAR_WIDTH.store(width.to_bits(), Ordering::Relaxed);
+        // Write once the drag settles, not on every pixel (same debounce as the left divider).
+        if scheduled.replace(true) {
+            return;
+        }
+        let scheduled = scheduled.clone();
+        gtk4::glib::timeout_add_local_once(std::time::Duration::from_millis(400), move || {
+            scheduled.set(false);
+            let _ = save_right_sidebar_width(right_sidebar_width());
+        });
+    });
+}
+
 /// Test-only: pin the gate, so a test of the delivery itself never reads the user's preferences file.
 #[cfg(test)]
 pub(crate) fn set_desktop_notifications(value: bool) {
@@ -187,6 +336,8 @@ fn save(
         auto_resume_agents,
         desktop_notifications,
         sidebar_width: sidebar_width(),
+        right_sidebar_visible: right_sidebar_visible(),
+        right_sidebar_width: right_sidebar_width(),
     })
     .map_err(|error| error.to_string())?;
     cmux_platform::filesystem::atomic_write(path, &contents).map_err(|error| error.to_string())
@@ -358,6 +509,34 @@ mod tests {
         assert_eq!(clamp_sidebar_width(f64::NAN), SIDEBAR_WIDTH_MIN);
         std::fs::write(&path, r#"{"font_size": 14.0}"#).unwrap();
         assert_eq!(read(&path).unwrap().sidebar_width, SIDEBAR_WIDTH_MIN);
+    }
+
+    #[test]
+    /// The right sidebar's open state and width are read back bounded like the left one's.
+    fn right_sidebar_state_roundtrips_and_is_clamped() {
+        let dir = std::env::temp_dir().join(format!("cmux-rwidth-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("preferences.json");
+        for (stored, expected) in [(900.0, 600.0), (10.0, 240.0), (320.0, 320.0)] {
+            std::fs::write(
+                &path,
+                format!(
+                    r#"{{"font_size": 14.0, "right_sidebar_visible": true, "right_sidebar_width": {stored}}}"#
+                ),
+            )
+            .unwrap();
+            let prefs = read(&path).unwrap();
+            assert!(prefs.right_sidebar_visible);
+            assert_eq!(clamp_sidebar_width(prefs.right_sidebar_width), expected);
+        }
+        std::fs::write(&path, r#"{"font_size": 14.0}"#).unwrap();
+        let prefs = read(&path).unwrap();
+        assert!(!prefs.right_sidebar_visible);
+        assert_eq!(
+            clamp_sidebar_width(prefs.right_sidebar_width),
+            SIDEBAR_WIDTH_MIN
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

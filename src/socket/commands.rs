@@ -34,6 +34,15 @@ pub enum SocketCommand {
         req_id: Value,
         resp_tx: RespTx,
     },
+    /// Show, hide or toggle the right sidebar (upstream `cmux right-sidebar …`).
+    RightSidebarApply {
+        req_id: Value,
+        /// One of `toggle`, `show`, `hide`, `set`; validated in dispatch.
+        action: String,
+        /// Mode for `set`; only `files` exists on Linux so far.
+        mode: Option<String>,
+        resp_tx: RespTx,
+    },
 
     /// Explicitly submit a reviewed project command after checking its fingerprint and live context.
     ProjectActionRun {
