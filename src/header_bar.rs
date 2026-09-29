@@ -64,6 +64,12 @@ pub fn build_header_bar(
     menu.set_menu_model(Some(&crate::menus::build_hamburger_menu()));
     menu.add_css_class("headerbar-btn");
     header.pack_end(&menu);
+    // Mirror of the left sidebar button: the Files panel opens and closes from the titlebar too.
+    header.pack_end(&action_button(
+        "sidebar-show-right-symbolic",
+        "Toggle File Explorer (Ctrl+Alt+B)",
+        "win.toggle-right-sidebar",
+    ));
     Some((header, [back, forward]))
 }
 
