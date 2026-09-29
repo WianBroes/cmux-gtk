@@ -49,7 +49,14 @@ with tempfile.TemporaryDirectory(prefix="cmux-terminal-close-") as directory:
             pass
         else:
             raise AssertionError("unknown split target unexpectedly succeeded")
-        assert app.surfaces() == targeted, "failed split changed layout or selection"
+        after = app.surfaces()
+        changed = [
+            (before_row.get("uuid"), key, before_row.get(key), after_row.get(key))
+            for before_row, after_row in zip(targeted, after)
+            for key in sorted(set(before_row) | set(after_row))
+            if before_row.get(key) != after_row.get(key)
+        ]
+        assert after == targeted, f"failed split changed layout or selection: rows {len(targeted)}->{len(after)}, changed fields {changed}"
         for arguments in [
             ("split", "--direction", "diagonal", "--id", survivors[0]),
             ("close-surface", "00000000-0000-4000-8000-000000000000"),
