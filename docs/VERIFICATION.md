@@ -21,7 +21,7 @@ Source of evidence: [CI run 36634061848](https://github.com/WianBroes/cmux-gtk/a
 | Historique de focus | aucun test trouvé | non vérifié | — | — |
 | État de la fenêtre | Position, taille et maximisation après redémarrage | vérifié | step 34, `tests/test_linux_window_state.py` | `window-maximized`, `window-size-restore` attrapés |
 | Session : scrollback et récupération | Historique conservé, récupération d'un workspace fermé | vérifié | steps 57 et 58 | aucun |
-| Session : sauvegarde finale à la fermeture immédiate | `tests/test_linux_session_quit.py` | **cassé** en CI (step 35), cause non établie, à confirmer par relance | step 35 | — |
+| Session : sauvegarde finale à la fermeture immédiate | Fermeture (croix et Ctrl+Q) juste après une mutation : workspaces, ordre, noms explicites, binding de reprise | vérifié : 3 exécutions sur 3 vertes ([sonde 36638793647](https://github.com/WianBroes/cmux-gtk/actions/runs/36638793647)) après avoir exclu de la comparaison le nom du premier workspace, qui n'a pas de nom explicite et suit le titre de son terminal ; le run CI complet suivant reste à lire | \`tests/test_linux_session_quit.py\` | aucun |
 | Navigateur : cycle de vie | Démarrage sans vol de focus, complétion différée | vérifié | step 24 | aucun |
 | Navigateur : verbes réseau, géolocalisation, etc. | offline, geolocation, trace, har, network, viewport, cookies… | non vérifié : issues 2, 3, 5 | — | — |
 | Diff dans un vrai navigateur | Clic sur un fichier, mise en page unifiée | **cassé** en CI (step 85) : après le clic sur « Unified », aucune ligne `.line` en 1 seconde ; cause non établie | step 85, `tests/test_linux_real_diff_viewer.py` | — |

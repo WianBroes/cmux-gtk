@@ -162,6 +162,11 @@ Subsystem sftp internal-sftp
 
         eventually(preferences_window)
         dialog = preferences_window()
+        # Preferences is a notebook (App, Terminal, Shortcuts) opening on App; the approval button is on Terminal.
+        subprocess.check_call(
+            ["xdotool", "windowfocus", "--sync", dialog, "key", "--clearmodifiers", "ctrl+Next"],
+            timeout=10,
+        )
         subprocess.check_call(
             ["xdotool", "windowfocus", "--sync", dialog, "key", "--clearmodifiers", "alt+a"],
             timeout=10,
