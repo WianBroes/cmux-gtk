@@ -144,6 +144,9 @@ jobs:
       - name: Test diff preparation, placement and restore lifecycle
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_diff_viewer.py
 
+      - name: Test agent terminal I/O verbs against a real shell
+        run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_agent_terminal_io.py
+
       - name: Test Linux project inspection, placement and restore lifecycle
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_project_view.py
 
