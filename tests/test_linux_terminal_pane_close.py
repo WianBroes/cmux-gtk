@@ -38,7 +38,7 @@ with tempfile.TemporaryDirectory(prefix="cmux-terminal-close-") as directory:
         survivors = [surface["uuid"] for surface in after]
         app.cli("focus-surface", survivors[-1])
         app.cli("split", "--id", survivors[0], "--direction", "horizontal")
-        targeted = app.surfaces()
+        targeted = app.layout()
         new_id = next(surface["uuid"] for surface in targeted if surface["active"])
         assert new_id not in survivors
         assert [surface["uuid"] for surface in targeted] == [survivors[0], new_id, survivors[1]]
@@ -49,7 +49,7 @@ with tempfile.TemporaryDirectory(prefix="cmux-terminal-close-") as directory:
             pass
         else:
             raise AssertionError("unknown split target unexpectedly succeeded")
-        after = app.surfaces()
+        after = app.layout()
         changed = [
             (before_row.get("uuid"), key, before_row.get(key), after_row.get(key))
             for before_row, after_row in zip(targeted, after)
@@ -71,10 +71,10 @@ with tempfile.TemporaryDirectory(prefix="cmux-terminal-close-") as directory:
                 pass
             else:
                 raise AssertionError(f"unsupported input unexpectedly succeeded: {arguments[0]}")
-            assert app.surfaces() == targeted, "failed input changed selection"
+            assert app.layout() == targeted, "failed input changed selection"
 
         app.cli("focus-surface", survivors[0])
-        before_read = app.surfaces()
+        before_read = app.layout()
         app.cli("refresh", "--id", new_id)
         assert json.loads(app.cli("health", "--id", new_id, "--json"))["alive"]
         assert not json.loads(app.cli("health", "--id",
@@ -87,7 +87,7 @@ with tempfile.TemporaryDirectory(prefix="cmux-terminal-close-") as directory:
             app.cli("read-text", "--id", new_id, "--json"))["text"], "unfocused terminal output")
         assert "CMUXREADCHECK" not in json.loads(
             app.cli("read-text", "--id", survivors[0], "--json"))["text"]
-        assert app.surfaces() == before_read, "terminal input/read changed focus"
+        assert app.layout() == before_read, "terminal input/read changed focus"
         app.cli("close-surface", new_id)
         app.wait_for(lambda: len(app.children()) == len(before_children) - 1, "targeted split cleanup")
     log = (root / "app.log").read_text()

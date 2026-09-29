@@ -51,7 +51,7 @@ jobs:
               echo "PASS $t" >> /tmp/summary.txt
             else
               echo "FAIL $t" >> /tmp/summary.txt
-              grep -v '^cmux:\|Gtk-WARNING\|^$\|^  File\|^    ' /tmp/out.log | tail -n 5 | cut -c1-700 | sed 's/^/     /' >> /tmp/summary.txt
+              { grep -A1 '^  File ".*tests/' /tmp/out.log | tail -n 4; grep -v '^cmux:\|Gtk-WARNING\|^$\|^  File\|^    \|^--' /tmp/out.log | tail -n 3; } | cut -c1-600 | sed 's/^/     /' >> /tmp/summary.txt
             fi
           done < tests/probe_tests.txt
 

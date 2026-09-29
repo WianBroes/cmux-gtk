@@ -8,4 +8,3 @@ tests/test_linux_omp_campfire_hooks.py
 tests/test_linux_resume_approval.py
 tests/test_linux_notifications.py
 tests/test_linux_osc_notifications.py
-tests/test_linux_agent_terminal_io.py

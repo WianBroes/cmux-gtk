@@ -37,7 +37,7 @@ with tempfile.TemporaryDirectory(prefix="cmux-sigint-") as directory:
         target = app.surfaces()[0]["uuid"]
         app.cli("split", "--direction", "horizontal")
         app.wait_for(lambda: len(app.children()) == 2, "foreground terminal child")
-        before = app.surfaces()
+        before = app.layout()
         foreground = next(row["uuid"] for row in before if row["active"])
         assert foreground != target
         command = "exec python3 " + " ".join(shlex.quote(str(path)) for path in (probe, ready, result))
@@ -48,7 +48,7 @@ with tempfile.TemporaryDirectory(prefix="cmux-sigint-") as directory:
         app.cli("send-key", "\x03", "--id", target)
         app.wait_for(lambda: result.exists() and result.read_text() == "2", "SIGINT received through terminal input")
         app.wait_for(lambda: not Path(f"/proc/{child}").exists(), "SIGINT child reaped")
-        assert app.surfaces() == before, "signal delivery changed selected surface or layout"
+        assert app.layout() == before, "signal delivery changed selected surface or layout"
         app.cli("close-surface", target)
         app.wait_for(lambda: len(app.children()) == 1, "closed probe terminal cleanup")
         assert [row["uuid"] for row in app.surfaces()] == [foreground]

@@ -3,11 +3,8 @@ name: Bisect
 # Finds where scenario tests that pass upstream start failing on the fork: one job per sampled commit builds that
 # commit and runs the given tests; the report job prints one line per commit.
 on:
+  # Manual only (dispatch works once merged into the default branch). It served its purpose on the PR.
   workflow_dispatch:
-  pull_request:
-    paths:
-      - tests/bisect_commits.json
-      - .github/workflows/bisect.yml
 
 jobs:
   list:
