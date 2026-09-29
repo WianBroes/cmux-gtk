@@ -116,3 +116,31 @@ Autres fichiers sans fonctionnalité propre : `Cargo.toml` (F28), `Cargo.lock`, 
 - **Comportement de la CI au-delà de l'étape 17** : jamais observé sur `local/wian` (64 étapes sautées).
 - **Modules Rust exacts des tests** : `cargo test --list` n'a pas été lancé (pas de build dans le dépôt) ; les noms viennent du diff et du fichier source.
 - **Qualité des tests de traduction F22 et F29** : supposés du même style que F30 ; seul F30 a été audité. F20/F25 : les tests vérifient l'analyse des arguments et la méthode visée, pas le gestionnaire côté GTK (d'après les noms de tests seulement).
+
+## Fichiers rattachés après contrôle
+
+Cinq fichiers de code modifiés par nous n'étaient cités dans aucune ligne du tableau. Ce sont des effets secondaires de commits déjà attribués (de 1 à 10 lignes chacun), rattachés ainsi :
+
+| Fichier | Changement | Fonctionnalité |
+|---|---|---|
+| `src/bin/cmux.rs` | 1 ligne (formes d'appel amont du CLI navigateur) | F22 (`a3990a6`) |
+| `src/ghostty/events.rs` | +5 lignes (titres de terminal) | F12 (`5402f71`) |
+| `src/ghostty/mod.rs` | +1 ligne (déclaration du module des touches nommées) | F21 (`402a735`) |
+| `src/notification.rs` | +10 lignes (préférence pour couper les notifications de bureau, test qui fixe la préférence) | F11 (`ce346d4`, `c3619c9`) |
+| `src/split_engine/restore.rs` | +1 ligne (panneaux à leur minimum) | F14 (`5ed42c7`) |
+
+Les 19 autres fichiers non cités sont des ressources : icônes d'agents (`resources/agent-icons/*.png`) et leurs fichiers de licence et d'attribution (F13).
+
+## Dépendances hors dépôt
+
+Ce qui fait marcher notre cmux sans figurer dans les commits, donc à ne pas oublier quand on teste :
+
+- **agent-browser >= 0.38.1 patché** : `download-wait` (F29) échoue avec l'agent-browser 0.27.0 du PATH, parce que `wait --download` ne voit pas un téléchargement déjà fini. Le correctif est proposé en amont (`vercel-labs/agent-browser`, PR 2023) et n'est pas fusionné à la date de cet inventaire. Sélection du binaire par la variable d'environnement **`CMUX_AGENT_BROWSER`** (prioritaire sur le PATH, voir `src/browser/discovery.rs`).
+- **Banc de test local** : le script d'instance jetable retire toutes les variables `CMUX_*`, dont `CMUX_AGENT_BROWSER` : les essais y tournent sur le mauvais daemon tant qu'on ne la repose pas. `route` n'y intercepte rien avec le 0.27.0.
+- **Configuration utilisateur** (`config.toml`, `cmux.json`, hooks installés par `cmux hooks setup`) : non versionnée, jamais dans le dépôt.
+
+## Limites de cet inventaire
+
+- Il couvre les 89 commits de `local/wian` entre `e9c62ef` et `5a340419`. Les commits postérieurs (cet inventaire, le changement des conditions de `ci.yml`) n'y sont pas.
+- « Couvert par CI » signifie qu'une étape de `ci.yml` lance un scénario sur cette fonction. Ce n'est pas vérifié que le scénario exerce notre changement précis, et plusieurs scénarios amont testent l'ancien comportement (F11).
+- La mention (success/failure/skipped) accolée à chaque étape est celle du run 36600296691, où 64 étapes avaient été sautées. Depuis, les étapes s'exécutent malgré un échec précédent : relire l'état d'un run récent, pas ces mentions.
