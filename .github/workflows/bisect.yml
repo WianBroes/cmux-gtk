@@ -1,0 +1,95 @@
+name: Bisect
+
+# Finds where scenario tests that pass upstream start failing on the fork: one job per sampled commit builds that
+# commit and runs the given tests; the report job prints one line per commit.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - tests/bisect_commits.json
+      - .github/workflows/bisect.yml
+
+jobs:
+  list:
+    runs-on: ubuntu-latest
+    outputs:
+      commits: ${{ steps.list.outputs.commits }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - id: list
+        run: echo "commits=$(python3 -c "import json;print(json.dumps(json.load(open('tests/bisect_commits.json'))))")" >> "$GITHUB_OUTPUT"
+
+  bisect:
+    needs: list
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        commit: ${{ fromJson(needs.list.outputs.commits) }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ matrix.commit.sha }}
+          submodules: recursive
+
+      - name: Identify Ghostty build cache
+        id: ghostty_revision
+        run: echo "revision=$(git rev-parse HEAD:ghostty)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Ghostty build cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .tools
+            ghostty/.zig-cache
+            ghostty/zig-out
+            ~/.cache/zig
+          key: ghostty-${{ runner.os }}-${{ runner.arch }}-${{ steps.ghostty_revision.outputs.revision }}-${{ hashFiles('scripts/setup-linux*.sh') }}
+
+      - name: Install Linux dependencies and build Ghostty
+        run: ./scripts/setup-linux-dev.sh
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install headless UI test dependencies
+        run: sudo apt-get install -y xvfb dbus-x11 openbox xdotool wmctrl x11-utils
+
+      - name: Build this commit and run the probe tests
+        run: |
+          mkdir -p out
+          subject="$(git log -1 --format=%s | cut -c1-70)"
+          if ! cargo build --workspace --bins; then
+            echo "${{ matrix.commit.idx }} $(git rev-parse --short HEAD) BUILD_FAIL | $subject" > out/result.txt
+            exit 0
+          fi
+          probe() {
+            if [ ! -f "$1" ]; then echo MISSING; return; fi
+            if dbus-run-session -- xvfb-run -a python3 "$1" > /tmp/probe.log 2>&1; then echo PASS; else echo "FAIL($(tail -n 1 /tmp/probe.log | cut -c1-90))"; fi
+          }
+          pane="$(probe tests/test_linux_terminal_pane_close.py)"
+          hooks="$(probe tests/test_linux_claude_hooks.py)"
+          resume="$(probe tests/test_linux_resume.py)"
+          echo "${{ matrix.commit.idx }} $(git rev-parse --short HEAD) pane=$pane hooks=$hooks resume=$resume | $subject" > out/result.txt
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bisect-${{ matrix.commit.idx }}
+          path: out/result.txt
+
+  report:
+    needs: bisect
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bisect-*
+          path: results
+          merge-multiple: false
+      - name: One line per sampled commit, oldest first
+        run: |
+          echo "=== BISECT RESULTS ==="
+          for f in $(ls results/*/result.txt | sort -t- -k2 -n); do cat "$f"; done | sort -n
+          echo "=== END ==="
