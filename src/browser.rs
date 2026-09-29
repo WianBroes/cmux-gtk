@@ -900,6 +900,13 @@ pub(crate) fn daemon_action(
             params.insert("type".into(), Value::String(area.into()));
             "storage_get"
         }
+        // Init scripts, page CSS/JS and downloads already use the daemon's own names.
+        "addinitscript" => "addinitscript",
+        "addstyle" => "addstyle",
+        "addscript" => "addscript",
+        "download" => "download",
+        // The CLI spells the wait `download-wait`; the socket carries it dotted.
+        "download.wait" => "waitfordownload",
         _ if action.starts_with("find.") => {
             return Err("browser find is not supported: agent-browser locators always act on the element; use snapshot refs or CSS selectors".into())
         }
@@ -1029,6 +1036,60 @@ mod manager_tests {
                 "cookies_set".into(),
                 serde_json::json!({"name": "id", "value": "7", "httpOnly": true})
             )
+        );
+    }
+
+    /// Init scripts, page CSS/JS and downloads reach the daemon under its own action names.
+    #[test]
+    fn script_and_download_verbs_translate_to_daemon_actions() {
+        let translate = |action: &str, params: Value| {
+            let mut params = params.as_object().cloned().unwrap();
+            daemon_action(action, &mut params).map(|daemon| (daemon, Value::Object(params)))
+        };
+        // The daemon spells these actions exactly like the socket methods.
+        for (upstream, daemon, params) in [
+            (
+                "addinitscript",
+                "addinitscript",
+                serde_json::json!({"script": "window.x = 1;"}),
+            ),
+            (
+                "addstyle",
+                "addstyle",
+                serde_json::json!({"content": "body { color: red; }"}),
+            ),
+            (
+                "addscript",
+                "addscript",
+                serde_json::json!({"content": "alert(1);"}),
+            ),
+            (
+                "download",
+                "download",
+                serde_json::json!({"selector": "#dl", "path": "/tmp/file.zip"}),
+            ),
+        ] {
+            assert_eq!(
+                translate(upstream, params.clone()).unwrap(),
+                (daemon.into(), params),
+                "{upstream}"
+            );
+        }
+        // The dotted download wait maps onto the daemon's single `waitfordownload` action.
+        assert_eq!(
+            translate(
+                "download.wait",
+                serde_json::json!({"timeout": 4000, "path": "/tmp/file.zip"})
+            )
+            .unwrap(),
+            (
+                "waitfordownload".into(),
+                serde_json::json!({"timeout": 4000, "path": "/tmp/file.zip"})
+            )
+        );
+        assert_eq!(
+            translate("download.wait", serde_json::json!({})).unwrap().0,
+            "waitfordownload"
         );
     }
 

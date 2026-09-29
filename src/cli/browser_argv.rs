@@ -63,6 +63,11 @@ const KNOWN_VERBS: &[&str] = &[
     "viewport",
     "cookies",
     "storage",
+    "addinitscript",
+    "addstyle",
+    "addscript",
+    "download",
+    "download-wait",
     "stream-enable",
     "stream-disable",
     "help",
@@ -231,6 +236,55 @@ mod tests {
         assert_eq!(
             rewritten(&["cmux", "browser", "surface:2", "viewport", "800", "600"]),
             ["cmux", "browser", "viewport", "surface:2", "800", "600"]
+        );
+    }
+
+    /// The script and download verbs keep the clap spelling and move a bare handle behind them.
+    #[test]
+    fn script_and_download_verbs_keep_their_clap_spelling() {
+        for line in [
+            ["cmux", "browser", "addinitscript", "surface:2", "window.x = 1;"].as_slice(),
+            ["cmux", "browser", "addstyle", "surface:2", "body {}"].as_slice(),
+            ["cmux", "browser", "addscript", "surface:2", "alert(1);"].as_slice(),
+            ["cmux", "browser", "download", "surface:2", "#dl", "/tmp/f.zip"].as_slice(),
+            [
+                "cmux",
+                "browser",
+                "download-wait",
+                "surface:2",
+                "--timeout",
+                "4000",
+            ]
+            .as_slice(),
+        ] {
+            assert_eq!(rewritten(line), line);
+        }
+        assert_eq!(
+            rewritten(&["cmux", "browser", "surface:2", "addscript", "alert(1);"]),
+            ["cmux", "browser", "addscript", "surface:2", "alert(1);"]
+        );
+        assert_eq!(
+            rewritten(&["cmux", "browser", "surface:2", "download", "#dl", "/tmp/f.zip"]),
+            ["cmux", "browser", "download", "surface:2", "#dl", "/tmp/f.zip"]
+        );
+        assert_eq!(
+            rewritten(&[
+                "cmux",
+                "browser",
+                "--surface",
+                "surface:2",
+                "download-wait",
+                "--timeout",
+                "4000"
+            ]),
+            [
+                "cmux",
+                "browser",
+                "download-wait",
+                "surface:2",
+                "--timeout",
+                "4000"
+            ]
         );
     }
 }

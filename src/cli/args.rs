@@ -1824,6 +1824,51 @@ pub enum BrowserCommand {
         #[arg(value_parser = ["local", "session"])]
         store: String,
     },
+    /// Register a script that runs before page scripts on every navigation
+    #[command(name = "addinitscript")]
+    AddInitScript {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// JavaScript source run before page scripts
+        script: String,
+    },
+    /// Insert CSS into the page
+    #[command(name = "addstyle")]
+    AddStyle {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// CSS source inserted into the page
+        css: String,
+    },
+    /// Insert JavaScript into the page
+    #[command(name = "addscript")]
+    AddScript {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// JavaScript source inserted into the page
+        script: String,
+    },
+    /// Click an element and save the download to a file
+    Download {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Target element (CSS selector)
+        selector: String,
+        /// File the download is written to
+        path: String,
+    },
+    /// Wait for a download started by a previous action
+    #[command(name = "download-wait")]
+    DownloadWait {
+        /// Surface reference (surface:N or UUID)
+        surface: String,
+        /// Timeout in milliseconds
+        #[arg(long)]
+        timeout: Option<u64>,
+        /// File the download is written to
+        #[arg(long)]
+        path: Option<String>,
+    },
 }
 
 /// Page values readable through `cmux browser get <what> <surface>`.
@@ -3338,5 +3383,86 @@ mod browser_verb_tests {
             "cmux", "browser", "cookies", "surface:1", "set", "k", "v", "--expires", "demain",
         ])
         .is_err());
+    }
+
+    /// The script and download verbs parse with the surface first; missing payloads never parse.
+    #[test]
+    fn script_and_download_verbs_parse_with_the_surface_first() {
+        match parse_browser(&["browser", "addinitscript", "surface:3", "window.x = 1;"]) {
+            Commands::Browser(BrowserCommand::AddInitScript { surface, script }) => {
+                assert_eq!(surface, "surface:3");
+                assert_eq!(script, "window.x = 1;");
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse_browser(&["browser", "addstyle", "surface:3", "body { color: red; }"]) {
+            Commands::Browser(BrowserCommand::AddStyle { surface, css }) => {
+                assert_eq!(surface, "surface:3");
+                assert_eq!(css, "body { color: red; }");
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse_browser(&["browser", "addscript", "surface:3", "alert(1);"]) {
+            Commands::Browser(BrowserCommand::AddScript { surface, script }) => {
+                assert_eq!(surface, "surface:3");
+                assert_eq!(script, "alert(1);");
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse_browser(&["browser", "download", "surface:3", "#dl", "/tmp/file.zip"]) {
+            Commands::Browser(BrowserCommand::Download {
+                surface,
+                selector,
+                path,
+            }) => {
+                assert_eq!(surface, "surface:3");
+                assert_eq!(selector, "#dl");
+                assert_eq!(path, "/tmp/file.zip");
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse_browser(&[
+            "browser",
+            "download-wait",
+            "surface:3",
+            "--timeout",
+            "4000",
+            "--path",
+            "/tmp/file.zip",
+        ]) {
+            Commands::Browser(BrowserCommand::DownloadWait {
+                surface,
+                timeout,
+                path,
+            }) => {
+                assert_eq!(surface, "surface:3");
+                assert_eq!(timeout, Some(4000));
+                assert_eq!(path.as_deref(), Some("/tmp/file.zip"));
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse_browser(&["browser", "download-wait", "surface:3"]) {
+            Commands::Browser(BrowserCommand::DownloadWait {
+                surface,
+                timeout,
+                path,
+            }) => {
+                assert_eq!(surface, "surface:3");
+                assert!(timeout.is_none());
+                assert!(path.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        // A missing script, selector, path or timeout value never parses.
+        assert!(Cli::try_parse_from(["cmux", "browser", "addinitscript", "surface:3"]).is_err());
+        assert!(Cli::try_parse_from(["cmux", "browser", "addstyle", "surface:3"]).is_err());
+        assert!(Cli::try_parse_from(["cmux", "browser", "addscript", "surface:3"]).is_err());
+        assert!(
+            Cli::try_parse_from(["cmux", "browser", "download", "surface:3", "#dl"]).is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["cmux", "browser", "download-wait", "surface:3", "--timeout"])
+                .is_err()
+        );
     }
 }
