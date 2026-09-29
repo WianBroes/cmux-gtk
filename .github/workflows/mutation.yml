@@ -4,6 +4,15 @@ name: Mutation
 # A green job means the test caught the mutation; a red job means it survived or the mutation is invalid.
 on:
   workflow_dispatch:
+  # The repository default branch is not main, so manual dispatch is unavailable here; a push to main
+  # touching the bench (or its cases) runs it instead.
+  push:
+    branches:
+      - main
+    paths:
+      - tests/mutation_cases.json
+      - tests/run_mutation.py
+      - .github/workflows/mutation.yml
 
 jobs:
   cases:
