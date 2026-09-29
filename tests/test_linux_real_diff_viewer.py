@@ -54,7 +54,10 @@ def main():
             surface = opened["surface_ref"]
 
             def command(name, *arguments):
-                result = json.loads(app.cli("browser", name, surface, *arguments, timeout=20))
+                try:
+                    result = json.loads(app.cli("browser", name, surface, *arguments, timeout=20))
+                except subprocess.CalledProcessError as error:
+                    raise AssertionError(f"browser {name} {arguments} exited {error.returncode}: {error.stdout!r} {error.stderr!r}") from error
                 assert result["success"] is True, result
                 return result["data"]
 
@@ -91,6 +94,8 @@ def main():
             command("wait", "--function", "document.querySelectorAll('#viewer .line').length > 0", "--timeout-ms", "1000")
             unified = command("eval", "({unified:document.querySelectorAll('#viewer .line').length, split:document.querySelectorAll('#viewer .split-line').length})")["result"]
             assert unified["unified"] > 0 and unified["split"] == 0, unified
+            layout = command("eval", "({width:innerWidth,nav:getComputedStyle(document.getElementById('files')).display,box:document.querySelector('#files button:nth-child(2)').getBoundingClientRect().width})")["result"]
+            assert layout["nav"] != "none" and layout["box"] > 0, f"file list is not clickable: {layout}"
             command("click", "#files button:nth-child(2)")
             assert "another marker" in command("eval", "document.body.innerText")["result"]
             assert selected_surface(app) == terminal, "default diff open stole terminal focus"
