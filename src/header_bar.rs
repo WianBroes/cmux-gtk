@@ -64,9 +64,9 @@ pub fn build_header_bar(
     menu.set_menu_model(Some(&crate::menus::build_hamburger_menu()));
     menu.add_css_class("headerbar-btn");
     header.pack_end(&menu);
-    // Mirror of the left sidebar button: the Files panel opens and closes from the titlebar too.
+    // Files panel toggle. Icon is folder-symbolic: breeze (the active theme here) has no sidebar-show-right-symbolic, GTK showed image-missing.
     header.pack_end(&action_button(
-        "sidebar-show-right-symbolic",
+        "folder-symbolic",
         "Toggle File Explorer (Ctrl+Alt+B)",
         "win.toggle-right-sidebar",
     ));
