@@ -94,6 +94,8 @@ def main():
             command("wait", "--function", "document.querySelectorAll('#viewer .line').length > 0", "--timeout-ms", "1000")
             unified = command("eval", "({unified:document.querySelectorAll('#viewer .line').length, split:document.querySelectorAll('#viewer .split-line').length})")["result"]
             assert unified["unified"] > 0 and unified["split"] == 0, unified
+            layout = command("eval", "({width:innerWidth,nav:getComputedStyle(document.getElementById('files')).display,box:document.querySelector('#files button:nth-child(2)').getBoundingClientRect().width})")["result"]
+            assert layout["nav"] != "none" and layout["box"] > 0, f"file list is not clickable: {layout}"
             command("click", "#files button:nth-child(2)")
             assert "another marker" in command("eval", "document.body.innerText")["result"]
             assert selected_surface(app) == terminal, "default diff open stole terminal focus"
