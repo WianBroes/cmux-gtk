@@ -357,6 +357,12 @@ pub enum SocketCommand {
         resp_tx: RespTx,
     },
 
+    // -- config.* --
+    ConfigReload {
+        req_id: Value,
+        resp_tx: RespTx,
+    },
+
     // -- window.* --
     WindowList {
         req_id: Value,

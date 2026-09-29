@@ -796,6 +796,8 @@ fn build_ui(
     crate::menus::register_accels(app, &shortcut_map);
 
     // 7. Install keyboard shortcuts (config-driven, D-06)
+    let shortcut_map = std::rc::Rc::new(std::cell::RefCell::new(shortcut_map));
+    crate::config::set_live_map(shortcut_map.clone());
     crate::shortcuts::install_shortcuts(&window, state.clone(), &sidebar_box, app, shortcut_map);
 
     // 8. Present the window

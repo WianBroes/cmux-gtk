@@ -1908,6 +1908,7 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
         }
         Commands::LastPane => ("pane.last", json!({})),
 
+        Commands::ReloadConfig => ("config.reload", json!({})),
         Commands::ListWindows => ("window.list", json!({})),
         Commands::CurrentWindow => ("window.current", json!({})),
 

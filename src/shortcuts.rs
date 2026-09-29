@@ -21,7 +21,7 @@ pub fn install_shortcuts(
     state: Rc<RefCell<AppState>>,
     sidebar: &gtk4::Box,
     app: &gtk4::Application,
-    shortcut_map: crate::config::ShortcutMap,
+    shortcut_map: std::rc::Rc<std::cell::RefCell<crate::config::ShortcutMap>>,
 ) {
     let key_ctrl = gtk4::EventControllerKey::new();
     // CRITICAL: Capture phase -- fires before GLArea key handlers.
@@ -34,7 +34,7 @@ pub fn install_shortcuts(
         let state = state.clone();
         let window = window.downgrade();
         move |_ctrl, keyval, _keycode, mods| {
-            match shortcut_map.lookup(mods, keyval) {
+            match shortcut_map.borrow().lookup(mods, keyval) {
                 // -- Workspace shortcuts --
                 Some(ShortcutAction::NewWorkspace) => {
                     handle_new_workspace(&state, &app_clone);

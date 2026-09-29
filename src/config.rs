@@ -117,6 +117,33 @@ pub enum ShortcutAction {
     BrowserClose,
 }
 
+thread_local! {
+    /// The live shortcut map shared with the key handler; `reload_shortcuts` swaps its contents.
+    static LIVE_MAP: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<ShortcutMap>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Publish the shortcut map the key handler reads, so a reload can replace it in place.
+pub fn set_live_map(map: std::rc::Rc<std::cell::RefCell<ShortcutMap>>) {
+    LIVE_MAP.with(|live| *live.borrow_mut() = Some(map));
+}
+
+/// Re-read `config.toml` + `cmux.json`, rebuild the shortcut map and re-register the menu
+/// accelerators. Returns false when the UI has not published a map yet. GTK main thread only.
+/// Header style and other startup-only settings still need a restart.
+pub fn reload_shortcuts() -> bool {
+    let Some(live) = LIVE_MAP.with(|live| live.borrow().clone()) else {
+        return false;
+    };
+    let fresh = ShortcutMap::from_config(&load_config().shortcuts);
+    use gtk4::prelude::Cast;
+    if let Some(app) = gtk4::gio::Application::default().and_then(|a| a.downcast::<gtk4::Application>().ok()) {
+        crate::menus::register_accels(&app, &fresh);
+    }
+    *live.borrow_mut() = fresh;
+    true
+}
+
 /// HashMap-based shortcut lookup table built from config + defaults.
 pub struct ShortcutMap {
     map: HashMap<(ModifierType, Key), ShortcutAction>,

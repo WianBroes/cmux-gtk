@@ -884,6 +884,9 @@ pub enum Commands {
     /// Switch to last focused pane
     LastPane,
 
+    /// Re-read config.toml and cmux.json and re-apply the keyboard shortcuts
+    ReloadConfig,
+
     // -- Window commands --
     /// List all windows
     ListWindows,

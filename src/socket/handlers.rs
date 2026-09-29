@@ -633,6 +633,7 @@ fn handle_socket_command_traced(
                 "pane.create",
                 "pane.focus",
                 "pane.last",
+                "config.reload",
                 "window.list",
                 "window.current",
                 "notification.list",
@@ -1607,6 +1608,12 @@ fn handle_socket_command_traced(
             };
             crate::sidebar::rebuild_grouped_sidebar(state);
             let _ = resp_tx.send(response);
+        }
+
+        // -- config.* --
+        SocketCommand::ConfigReload { req_id, resp_tx } => {
+            let reloaded = crate::config::reload_shortcuts();
+            let _ = resp_tx.send(ok(req_id, json!({"reloaded": reloaded})));
         }
 
         // -- window.* --
