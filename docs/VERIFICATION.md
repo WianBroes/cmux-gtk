@@ -1,3 +1,5 @@
+> **Attention : ce registre concerne `main` (l'amont v0.2.1 plus quelques commits), PAS le fork.** Le code réellement utilisé est sur `local/wian`, où plusieurs de ces tests échouent (voir l'issue 10). Rien ici ne prouve que le fork fonctionne. Le travail continue sur une branche issue de `local/wian`.
+
 # Verification ledger
 
 Status values: `vérifié` (replayable proof named), `cassé` (issue linked), `non vérifiable ici` (reason),
