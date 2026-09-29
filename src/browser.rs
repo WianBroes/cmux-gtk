@@ -905,8 +905,6 @@ pub(crate) fn daemon_action(
         "addstyle" => "addstyle",
         "addscript" => "addscript",
         "download" => "download",
-        // The CLI spells the wait `download-wait`; the socket carries it dotted.
-        "download.wait" => "waitfordownload",
         _ if action.starts_with("find.") => {
             return Err("browser find is not supported: agent-browser locators always act on the element; use snapshot refs or CSS selectors".into())
         }
@@ -1075,22 +1073,6 @@ mod manager_tests {
                 "{upstream}"
             );
         }
-        // The dotted download wait maps onto the daemon's single `waitfordownload` action.
-        assert_eq!(
-            translate(
-                "download.wait",
-                serde_json::json!({"timeout": 4000, "path": "/tmp/file.zip"})
-            )
-            .unwrap(),
-            (
-                "waitfordownload".into(),
-                serde_json::json!({"timeout": 4000, "path": "/tmp/file.zip"})
-            )
-        );
-        assert_eq!(
-            translate("download.wait", serde_json::json!({})).unwrap().0,
-            "waitfordownload"
-        );
     }
 
     /// `--property` keeps one computed style, `null` when the page has none.
