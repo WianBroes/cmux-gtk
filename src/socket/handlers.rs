@@ -634,6 +634,7 @@ fn handle_socket_command_traced(
                 "pane.focus",
                 "pane.last",
                 "config.reload",
+                "settings.open",
                 "window.list",
                 "window.current",
                 "notification.list",
@@ -1608,6 +1609,15 @@ fn handle_socket_command_traced(
             };
             crate::sidebar::rebuild_grouped_sidebar(state);
             let _ = resp_tx.send(response);
+        }
+
+        SocketCommand::SettingsOpen { req_id, resp_tx } => {
+            use gtk4::prelude::*;
+            let opened = gtk4::gio::Application::default()
+                .and_then(|a| a.downcast::<gtk4::Application>().ok())
+                .and_then(|app| app.active_window())
+                .is_some_and(|window| window.activate_action("win.preferences", None).is_ok());
+            let _ = resp_tx.send(ok(req_id, json!({"opened": opened})));
         }
 
         // -- config.* --

@@ -884,6 +884,13 @@ pub enum Commands {
     /// Switch to last focused pane
     LastPane,
 
+    /// Open the settings window; `path` prints the cmux.json path instead
+    Settings {
+        #[command(subcommand)]
+        action: Option<SettingsAction>,
+    },
+    /// Open the settings window (this port has no separate keyboard-shortcuts page yet)
+    Shortcuts,
     /// Re-read config.toml and cmux.json and re-apply the keyboard shortcuts
     ReloadConfig,
 
@@ -1088,6 +1095,17 @@ pub(crate) enum ScopeArg {
 /// error and 0 when it only has warnings, matching the macOS `cmux config doctor` contract.
 /// `set` and `unset` print `{"status":"persisted",…}` on success and `{"status":"unchanged",…}`
 /// when an `unset` finds nothing to remove.
+/// Sub-actions of `cmux settings`.
+#[derive(Subcommand)]
+pub enum SettingsAction {
+    /// Open the settings window
+    Open,
+    /// Print the path of the global cmux.json (works with cmux closed)
+    Path,
+    /// Open the settings window (no separate shortcuts page in this port)
+    Shortcuts,
+}
+
 #[derive(Subcommand)]
 pub enum ConfigCommands {
     /// Print the path of the global cmux.json

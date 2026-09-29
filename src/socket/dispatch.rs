@@ -1237,6 +1237,10 @@ async fn dispatch_request(
             resp_tx,
         },
 
+        "settings.open" => commands::SocketCommand::SettingsOpen {
+            req_id: req_id.clone(),
+            resp_tx,
+        },
         "config.reload" => commands::SocketCommand::ConfigReload {
             req_id: req_id.clone(),
             resp_tx,

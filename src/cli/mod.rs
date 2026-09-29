@@ -161,6 +161,12 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
     if let Commands::Config(command) = &cli.command {
         return run_config(command, cli.json);
     }
+    if let Commands::Settings {
+        action: Some(args::SettingsAction::Path),
+    } = &cli.command
+    {
+        return run_config(&args::ConfigCommands::Path, cli.json);
+    }
     if let Commands::LocalTmux { command } = &cli.command {
         return local_tmux::run(command, explicit_socket.as_deref());
     }
@@ -1908,6 +1914,7 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
         }
         Commands::LastPane => ("pane.last", json!({})),
 
+        Commands::Settings { .. } | Commands::Shortcuts => ("settings.open", json!({})),
         Commands::ReloadConfig => ("config.reload", json!({})),
         Commands::ListWindows => ("window.list", json!({})),
         Commands::CurrentWindow => ("window.current", json!({})),
