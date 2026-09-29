@@ -54,7 +54,10 @@ def main():
             surface = opened["surface_ref"]
 
             def command(name, *arguments):
-                result = json.loads(app.cli("browser", name, surface, *arguments, timeout=20))
+                try:
+                    result = json.loads(app.cli("browser", name, surface, *arguments, timeout=20))
+                except subprocess.CalledProcessError as error:
+                    raise AssertionError(f"browser {name} {arguments} exited {error.returncode}: {error.stdout!r} {error.stderr!r}") from error
                 assert result["success"] is True, result
                 return result["data"]
 
