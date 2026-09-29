@@ -1,0 +1,63 @@
+name: Probe
+
+# Builds once, replays the listed scenario tests and prints the last useful lines of each, because the log tool only
+# returns the end of a long job log. Runs when tests/probe_tests.txt changes.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - tests/probe_tests.txt
+      - .github/workflows/probe.yml
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Identify Ghostty build cache
+        id: ghostty_revision
+        run: echo "revision=$(git rev-parse HEAD:ghostty)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Ghostty build cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .tools
+            ghostty/.zig-cache
+            ghostty/zig-out
+            ~/.cache/zig
+          key: ghostty-${{ runner.os }}-${{ runner.arch }}-${{ steps.ghostty_revision.outputs.revision }}-${{ hashFiles('scripts/setup-linux*.sh') }}
+
+      - name: Install Linux dependencies and build Ghostty
+        run: ./scripts/setup-linux-dev.sh
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install headless UI test dependencies
+        run: sudo apt-get install -y xvfb dbus-x11 openbox xdotool wmctrl x11-utils
+
+      - name: Build
+        run: cargo build --workspace --bins
+
+      - name: Replay each test and keep its last useful lines
+        run: |
+          : > /tmp/summary.txt
+          while read -r t; do
+            if dbus-run-session -- xvfb-run -a python3 "$t" > /tmp/out.log 2>&1; then
+              echo "PASS $t" >> /tmp/summary.txt
+            else
+              echo "FAIL $t" >> /tmp/summary.txt
+              grep -v '^cmux:\|Gtk-WARNING\|^$\|^  File\|^    ' /tmp/out.log | tail -n 5 | cut -c1-700 | sed 's/^/     /' >> /tmp/summary.txt
+            fi
+          done < tests/probe_tests.txt
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "=== PROBE RESULTS ==="
+          cat /tmp/summary.txt
+          echo "=== END ==="

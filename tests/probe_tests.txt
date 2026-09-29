@@ -1,0 +1,11 @@
+tests/test_linux_terminal_pane_close.py
+tests/test_linux_terminal_sigint.py
+tests/test_linux_claude_hooks.py
+tests/test_linux_json_agent_hooks.py
+tests/test_linux_kiro_antigravity_hooks.py
+tests/test_linux_hermes_kimi_hooks.py
+tests/test_linux_omp_campfire_hooks.py
+tests/test_linux_resume_approval.py
+tests/test_linux_notifications.py
+tests/test_linux_osc_notifications.py
+tests/test_linux_agent_terminal_io.py
