@@ -219,7 +219,7 @@ def main():
                 with pending_open(app, browser_dir) as pending:
                     app.cli("select-workspace", target)
                     app.cli("close-workspace", source)
-                    before = app.surfaces()
+                    before = app.layout()
                     error = finish_open(pending, browser_dir, False)
                     assert "closed during browser startup" in error, error
                     assert app.layout() == before, "stale completion mutated another workspace"
