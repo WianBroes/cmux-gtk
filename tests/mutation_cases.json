@@ -160,6 +160,22 @@
     "claim": "a Markdown heading becomes an h1 on the page cmux markdown writes"
   },
   {
+    "id": "handles-surface-ref",
+    "file": "src/cli/handles.rs",
+    "old": "        \"surface\" => Some(HandleKind::Surface),",
+    "new": "        \"surface\" => Some(HandleKind::Pane),",
+    "test": "tests/test_linux_agent_handles.py",
+    "claim": "a surface:N reference is accepted wherever a surface handle is expected"
+  },
+  {
+    "id": "handles-id-format-refs",
+    "file": "src/cli/format.rs",
+    "old": "                        map.remove(\"id\");",
+    "new": "                        map.remove(\"id_disabled\");",
+    "test": "tests/test_linux_agent_handles.py",
+    "claim": "--id-format refs drops the redundant UUID of each identity"
+  },
+  {
     "id": "settings-window-action",
     "file": "src/socket/handlers.rs",
     "old": "window.activate_action(\"win.preferences\", None).is_ok()",
