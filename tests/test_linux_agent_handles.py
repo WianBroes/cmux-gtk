@@ -89,6 +89,10 @@ def main():
                 check("read-screen accepts a surface:N reference for the first terminal",
                       code == 0 and bool(screen.strip()), repr(screen.splitlines()[-1:]))
 
+                code, output = cmux("read-screen", "--surface", "surface:99", expect_success=False)
+                check("a well-formed ref to an unknown ordinal is refused by the server, not by the client's shape check",
+                      code != 0 and "Invalid surface handle" not in output, f"exit {code}")
+
                 code, output = cmux("read-screen", "--surface", "workspace:1", expect_success=False)
                 check("a reference of another kind is refused with the documented shape",
                       code != 0 and "Invalid surface handle: workspace:1" in output

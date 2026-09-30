@@ -161,11 +161,27 @@
   },
   {
     "id": "handles-surface-ref",
+    "file": "src/socket/handles.rs",
+    "old": "        \"surface\" => HandleKind::Surface,",
+    "new": "        \"surface\" => HandleKind::Workspace,",
+    "test": "tests/test_linux_agent_handles.py",
+    "claim": "a surface:N reference resolves to that surface and not to another kind"
+  },
+  {
+    "id": "handles-ref-kind-shape",
     "file": "src/cli/handles.rs",
     "old": "        \"surface\" => Some(HandleKind::Surface),",
     "new": "        \"surface\" => Some(HandleKind::Pane),",
     "test": "tests/test_linux_agent_handles.py",
-    "claim": "a surface:N reference is accepted wherever a surface handle is expected"
+    "claim": "a well-formed surface:N reference is left to the server, so an unknown ordinal is refused with the server's own answer"
+  },
+  {
+    "id": "handles-bare-index",
+    "file": "src/cli/handles.rs",
+    "old": "        .find(|record| record_index(record, \"index\") == Some(index))?;",
+    "new": "        .find(|record| record_index(record, \"index\") == Some(0))?;",
+    "test": "tests/test_linux_agent_handles.py",
+    "claim": "a bare index names the workspace the server lists under that index"
   },
   {
     "id": "handles-id-format-refs",
