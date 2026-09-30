@@ -134,6 +134,10 @@ jobs:
         if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: python3 tests/test_linux_config_cli.py
 
+      - name: Test the page cmux markdown writes
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
+        run: python3 tests/test_linux_markdown_render.py
+
       - name: Test Linux socket access boundaries
         if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_socket_access.py

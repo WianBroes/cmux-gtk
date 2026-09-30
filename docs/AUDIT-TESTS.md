@@ -2,7 +2,7 @@
 
 Méthode : chaque commande est jouée contre le vrai programme (vrai daemon agent-browser 0.38.1 et vrai Chromium pour le navigateur ; vrai binaire `cmux` et vrais fichiers pour la configuration). Le contrôle regarde l'**effet réel** (ce que voit la page, ce qui est écrit sur disque, le code de sortie). La preuve « le test discrimine » consiste à casser une ligne du produit et à exiger que le test échoue.
 
-Scénarios : `tests/test_linux_real_browser_verbs.py` (banc `tests/browser_mutation_cases.json`, workflow « Browser mutation »), `tests/test_linux_real_markdown_view.py` (même banc, étape CI « Test real browser markdown surface DOM ») et `tests/test_linux_config_cli.py` (banc `tests/mutation_cases.json`, workflow « Mutation »).
+Scénarios : `tests/test_linux_real_browser_verbs.py` (banc `tests/browser_mutation_cases.json`, workflow « Browser mutation »), `tests/test_linux_markdown_render.py` (sans application ni navigateur : juge la page écrite sur disque ; banc `tests/mutation_cases.json`, étape CI « Test the page cmux markdown writes »), `tests/test_linux_real_markdown_view.py` (vraie page dans un vrai Chromium ; étape CI « Test real browser markdown surface DOM ») et `tests/test_linux_config_cli.py` (banc `tests/mutation_cases.json`).
 
 | Commande | Preuve réelle | Test discriminant | Trou |
 |---|---|---|---|
@@ -29,7 +29,7 @@ Scénarios : `tests/test_linux_real_browser_verbs.py` (banc `tests/browser_mutat
 | `config validate` | code 0 si valide, 1 si valeur hors liste, échec si JSON cassé | oui (cassage du code de sortie) | avertissements (code 0) non testés |
 | `config set --file` | seul le fichier nommé est écrit | oui (cassage `config-explicit-file`) | `config get --file` sans cassage dédié |
 | `config list-supported`, `config docs` | affichent leur contenu | non | contenu vérifié minimalement |
-| `markdown` | la page rendue porte le titre du fichier en `<h1>`, sa liste en `<li>`, seul le lien http devient une ancre, aucun `<script>`, et le terminal garde le focus | oui (cassage `markdown-heading`) | titres de niveau 2 et suivants, tableaux, notes de bas de page non testés |
+| `markdown` | la page écrite porte le titre du fichier en `<h1>`, sa liste en `<li>`, un seul lien cliquable (le `javascript:` reste du texte), aucun `<script>` ; la même page est ensuite rendue dans un vrai Chromium, où le terminal garde le focus | oui (cassage `markdown-heading`) | titres de niveau 2 et suivants, tableaux, notes de bas de page non testés |
 
 ## Pas encore audité
 

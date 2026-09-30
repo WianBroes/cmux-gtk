@@ -150,5 +150,13 @@
     "new": "    if let Some(path) = file {\n        let _ = path;\n    }",
     "test": "tests/test_linux_config_cli.py",
     "claim": "an explicit --file selects that file for cmux config set and validate"
+  },
+  {
+    "id": "markdown-heading",
+    "file": "src/cli/markdown.rs",
+    "old": "                Tag::Heading { level, .. } => {\n                    let _ = write!(html, \"<{level}>\");",
+    "new": "                Tag::Heading { level, .. } => {\n                    let _ = write!(html, \"<p data-level={level}>\");",
+    "test": "tests/test_linux_markdown_render.py",
+    "claim": "a Markdown heading becomes an h1 on the page cmux markdown writes"
   }
 ]

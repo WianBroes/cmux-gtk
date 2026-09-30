@@ -46,6 +46,7 @@ def main():
             opened = json.loads(app.cli("markdown", str(document), "--json", timeout=35))
             print("markdown open ->", json.dumps(opened)[:300], flush=True)
             surface = opened["surface_ref"]
+            surface_uuid = opened["uuid"]
 
             def command(name, *arguments):
                 """Run one browser verb against the preview surface and return its raw data."""
@@ -76,8 +77,8 @@ def main():
             check("the page carries no script tag", state["scripts"] == 0, state["scripts"])
             check("the page title is the file's heading", state["title"] == "Deployment notes", state["title"])
             check("the preview is a surface of the running app",
-                  any(row["uuid"] == surface for row in app.surfaces()),
-                  [row["uuid"] for row in app.surfaces()])
+                  surface_uuid in [row["uuid"] for row in app.surfaces()],
+                  surface_uuid)
             check("the terminal keeps the focus", selected_surface(app) == terminal, selected_surface(app))
             check("one browser daemon serves the preview", processes.sample()["daemon_count"] == 1,
                   processes.sample()["daemon_count"])
