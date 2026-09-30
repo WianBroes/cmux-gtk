@@ -46,34 +46,48 @@ def main():
 
                 assert panes() == 1
                 app.wait_for(lambda: bool(active_text().strip()), "first prompt")
+
+                def texts():
+                    """Which markers each surface shows, for reporting where typed input landed."""
+                    return {row["uuid"][:8]: json.loads(app.cli("read-text", "--id", row["uuid"], "--json"))["text"]
+                            for row in app.surfaces()}
+
+                def type_marker(marker):
+                    """Type a marker into the focused window and say which surfaces received it."""
+                    subprocess.check_call(
+                        ["xdotool", "windowfocus", "--sync", windows[-1], "type", "--clearmodifiers", "--delay", "20", marker],
+                        timeout=10,
+                    )
+                    deadline = time.monotonic() + 6
+                    while time.monotonic() < deadline:
+                        landed = [name for name, text in texts().items() if marker in text]
+                        if landed:
+                            return landed
+                        time.sleep(0.2)
+                    return []
+
                 press("ctrl+d")
                 app.wait_for(lambda: panes() == 2, "default Ctrl+D splitting the pane")
+                app.wait_for(lambda: bool(active_text().strip()), "prompt of the second pane")
+                after_default_split = type_marker("AAA")
 
                 config = root / "config/cmux/cmux.json"
                 config.parent.mkdir(parents=True, exist_ok=True)
                 config.write_text(json.dumps({"shortcuts": {"bindings": {"splitRight": "ctrl+shift+k"}}}))
                 app.cli("reload-config")
 
-                app.wait_for(lambda: bool(active_text().strip()), "prompt of the new pane")
                 press("ctrl+shift+k")
                 app.wait_for(lambda: panes() == 3, "rebound Ctrl+Shift+K splitting the pane")
-
-                # An unbound input reaches the terminal instead of being consumed by the application.
                 app.wait_for(lambda: bool(active_text().strip()), "prompt of the third pane")
-                subprocess.check_call(
-                    ["xdotool", "windowfocus", "--sync", windows[-1], "type", "--clearmodifiers", "--delay", "1", "Q7Z"],
-                    timeout=10,
-                )
-                try:
-                    app.wait_for(lambda: "Q7Z" in active_text(), "typed text reaching the terminal")
-                except AssertionError as error:
-                    # Say where the text went: another pane means keyboard focus and the active surface differ.
-                    where = {
-                        row["uuid"][:8]: {"active": row["active"],
-                                          "has_text": "Q7Z" in json.loads(app.cli("read-text", "--id", row["uuid"], "--json"))["text"]}
-                        for row in app.surfaces()
-                    }
-                    raise AssertionError(f"typed text did not reach the active terminal; per surface: {where}") from error
+                after_rebound_split = type_marker("BBB")
+                active = next(row["uuid"][:8] for row in app.surfaces() if row["active"])
+
+                # Report before asserting, so a failure says where input went (empty = no terminal got it).
+                print(f"typed after default split -> {after_default_split}; after rebound split -> "
+                      f"{after_rebound_split}; active pane {active}", flush=True)
+                assert after_rebound_split == [active], (
+                    f"typed text did not reach only the active terminal: default split {after_default_split}, "
+                    f"rebound split {after_rebound_split}, active {active}")
 
                 press("ctrl+d")
                 time.sleep(1)  # no event to wait for: give a wrongly still-bound key time to act
