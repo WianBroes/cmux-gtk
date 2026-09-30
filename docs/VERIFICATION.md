@@ -36,3 +36,12 @@ Source of evidence: [CI run 36634061848](https://github.com/WianBroes/cmux-gtk/a
 ## Preuve par mutation
 
 Banc : `tests/mutation_cases.json`, `tests/run_mutation.py`, `.github/workflows/mutation.yml`. Sur le code du fork ([run 36634061781](https://github.com/WianBroes/cmux-gtk/actions/runs/36634061781)) : 11 cassages sur 12 attrapés. Le cassage `hook-body-limit` a **survécu** : la limite de 8 Kio qu'il modifiait n'est plus observable, car le corps est ensuite résumé à 180 caractères. Il est remplacé par `hook-summary-length` (cassage de la longueur du résumé), pas encore exécuté. Seule la cause d'échec de `osc-body-limit` a été relue ; pour les autres cassages on sait que le test a échoué, pas que la cause est celle attendue.
+
+
+## Mise à jour du 30/09 (commit 7850165)
+
+- CI complète verte au second essai ([run 36688557862](https://github.com/WianBroes/cmux-gtk/actions/runs/36688557862)) : la première tentative avait échoué aux étapes 85 et 87 (démarrage de Chromium trop lent, puis nettoyage qui en découle) ; ces deux étapes avaient passé au run précédent et ont repassé à la relance. C'est une instabilité de la machine CI, pas prouvée comme telle par une cause racine.
+- Test « navigateur asynchrone » : l'échec venait du test (les titres de terminaux changent seuls), corrigé ; il passe.
+- Banc de mutation vert sur ce commit, `shortcut-live-reload` compris : le point 4 (raccourcis) est prouvé. Ctrl+N ouvre un dialogue et Ctrl+D coupe en deux, comme le comportement macOS attendu par le fork.
+- `send` et `read-screen` : défaut de fidélité macOS corrigé et prouvé (sonde 36679693673).
+- Panneau Fichiers : mise à jour en direct ajoutée, test unitaire vert, scénario réel avec agent pas encore écrit.
