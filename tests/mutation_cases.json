@@ -94,5 +94,13 @@
     "new": ".filter(|(_, candidate)| *candidate != device)",
     "test": "tests/test_linux_ports.py",
     "claim": "a listener is attributed to its own terminal"
+  },
+  {
+    "id": "shortcut-live-reload",
+    "file": "src/config.rs",
+    "old": "    *live.borrow_mut() = fresh;\n    true",
+    "new": "    let _ = fresh;\n    true",
+    "test": "tests/test_linux_shortcut_effect.py",
+    "claim": "a shortcut rebound in cmux.json takes effect in the main window after reload-config, and the old key stops working"
   }
 ]

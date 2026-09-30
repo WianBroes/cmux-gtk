@@ -1,3 +1,2 @@
-tests/test_linux_browser_lifecycle.py
-tests/test_linux_browser_lifecycle.py
-tests/test_linux_browser_lifecycle.py
+tests/test_linux_shortcut_effect.py
+tests/test_linux_shortcut_effect.py
