@@ -1,0 +1,50 @@
+[
+  {
+    "id": "verb-offline",
+    "file": "src/browser.rs",
+    "old": "        \"offline\" => \"offline\",",
+    "new": "        \"offline\" => \"offline_disabled\",",
+    "test": "tests/test_linux_real_browser_verbs.py",
+    "claim": "browser offline blocks the page's requests until switched off"
+  },
+  {
+    "id": "verb-route",
+    "file": "src/browser.rs",
+    "old": "        \"network.route\" => \"route\",",
+    "new": "        \"network.route\" => \"route_disabled\",",
+    "test": "tests/test_linux_real_browser_verbs.py",
+    "claim": "browser network route aborts or mocks the page's requests"
+  },
+  {
+    "id": "verb-unroute",
+    "file": "src/browser.rs",
+    "old": "        \"network.unroute\" => \"unroute\",",
+    "new": "        \"network.unroute\" => \"unroute_disabled\",",
+    "test": "tests/test_linux_real_browser_verbs.py",
+    "claim": "browser network unroute restores the real answer"
+  },
+  {
+    "id": "verb-trace-stop",
+    "file": "src/browser.rs",
+    "old": "        \"trace.stop\" => \"trace_stop\",",
+    "new": "        \"trace.stop\" => \"trace_stop_disabled\",",
+    "test": "tests/test_linux_real_browser_verbs.py",
+    "claim": "browser trace stop writes a non-empty trace file"
+  },
+  {
+    "id": "verb-har-stop",
+    "file": "src/browser.rs",
+    "old": "        \"har.stop\" => \"har_stop\",",
+    "new": "        \"har.stop\" => \"har_stop_disabled\",",
+    "test": "tests/test_linux_real_browser_verbs.py",
+    "claim": "browser har stop writes a valid HAR with the request made"
+  },
+  {
+    "id": "geolocation-permission",
+    "file": "src/socket/handlers.rs",
+    "old": "json!({\"permissions\": [\"geolocation\"]})",
+    "new": "json!({\"permissions\": [\"notifications\"]})",
+    "test": "tests/test_linux_real_browser_verbs.py",
+    "claim": "browser geolocation grants the page the geolocation permission so it can read the position"
+  }
+]

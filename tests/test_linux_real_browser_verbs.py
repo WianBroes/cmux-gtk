@@ -108,6 +108,23 @@ def main():
             verb("network", surface, "unroute", base + "/data.json")
             seen = page(fetch_data)
             check("unroute after body: real answer returns", seen and "real-server" in seen, seen)
+
+            # Trace and HAR recorders write real files with the traffic seen while recording.
+            trace_file = root / "recorded-trace.json"
+            verb("trace", surface, "start")
+            page(fetch_data)
+            verb("trace", surface, "stop", str(trace_file))
+            size = trace_file.stat().st_size if trace_file.exists() else 0
+            check("trace start/stop: a non-empty trace file is written", size > 0, f"{trace_file.name} {size} bytes")
+            har_file = root / "recorded.har"
+            verb("har", surface, "start")
+            page(fetch_data)
+            verb("har", surface, "stop", str(har_file))
+            try:
+                urls = [entry["request"]["url"] for entry in json.loads(har_file.read_text())["log"]["entries"]]
+            except (OSError, ValueError, KeyError) as error:
+                urls = [f"unreadable HAR: {error!r}"]
+            check("har start/stop: valid HAR containing the request made", any(url.endswith("/data.json") for url in urls), urls[:5])
     server.shutdown()
     failed = [name for name, ok, _ in results if not ok]
     print(f"\n{len(results) - len(failed)}/{len(results)} verb checks passed", flush=True)

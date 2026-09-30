@@ -1,0 +1,76 @@
+name: Browser mutation
+
+# Breaks one browser-verb line of the product per job; the real-daemon verb scenario must then fail.
+# A green job means the test caught the mutation; a red job means it survived or the mutation is invalid.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - tests/browser_mutation_cases.json
+      - tests/run_mutation.py
+      - tests/test_linux_real_browser_verbs.py
+      - .github/workflows/browser-mutation.yml
+
+jobs:
+  cases:
+    runs-on: ubuntu-latest
+    outputs:
+      ids: ${{ steps.ids.outputs.ids }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - id: ids
+        run: echo "ids=$(python3 -c "import json;print(json.dumps([c['id'] for c in json.load(open('tests/browser_mutation_cases.json'))]))")" >> "$GITHUB_OUTPUT"
+
+  mutate:
+    needs: cases
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        id: ${{ fromJson(needs.cases.outputs.ids) }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Identify Ghostty build cache
+        id: ghostty_revision
+        run: echo "revision=$(git rev-parse HEAD:ghostty)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Ghostty build cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .tools
+            ghostty/.zig-cache
+            ghostty/zig-out
+            ~/.cache/zig
+          key: ghostty-${{ runner.os }}-${{ runner.arch }}-${{ steps.ghostty_revision.outputs.revision }}-${{ hashFiles('scripts/setup-linux*.sh') }}
+
+      - name: Install Linux dependencies and build Ghostty
+        run: ./scripts/setup-linux-dev.sh
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install headless UI test dependencies
+        run: sudo apt-get install -y xvfb dbus-x11 openbox xdotool wmctrl x11-utils
+
+      - name: Build unmutated binaries (must compile)
+        run: cargo build --workspace --bins
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+
+      - name: Install agent-browser 0.38.1 and Chromium
+        run: |
+          npm install --prefix target/browser-tools-new --no-audit --no-fund agent-browser@0.38.1
+          target/browser-tools-new/node_modules/.bin/agent-browser install --with-deps
+          echo "CMUX_TEST_AGENT_BROWSER=$PWD/target/browser-tools-new/node_modules/.bin/agent-browser" >> "$GITHUB_ENV"
+
+      - name: Mutate, rebuild and require the test to fail
+        env:
+          MUTATION_CASES: tests/browser_mutation_cases.json
+        run: python3 tests/run_mutation.py "${{ matrix.id }}"

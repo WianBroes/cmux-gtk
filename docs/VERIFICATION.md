@@ -45,3 +45,12 @@ Banc : `tests/mutation_cases.json`, `tests/run_mutation.py`, `.github/workflows/
 - Banc de mutation vert sur ce commit, `shortcut-live-reload` compris : le point 4 (raccourcis) est prouvé. Ctrl+N ouvre un dialogue et Ctrl+D coupe en deux, comme le comportement macOS attendu par le fork.
 - `send` et `read-screen` : défaut de fidélité macOS corrigé et prouvé (sonde 36679693673).
 - Panneau Fichiers : mise à jour en direct ajoutée, test unitaire vert, scénario réel avec agent pas encore écrit.
+
+## Mise à jour du 30/09 après-midi : commandes navigateur (issues 2 et 3)
+
+Preuve : scénario réel `tests/test_linux_real_browser_verbs.py` (page servie en http local, vrai daemon agent-browser 0.38.1, vrai Chromium), workflow « Browser verbs ».
+
+- **Issue 3 (`geolocation`) : corrigée, preuve avant/après.** À 14h38 (Bruxelles), [run 36715644709](https://github.com/WianBroes/cmux-gtk/actions/runs/36715644709) : la page reçoit « User denied Geolocation » alors que la commande répond « succès ». À 14h59, [run 36717567958](https://github.com/WianBroes/cmux-gtk/actions/runs/36717567958) : la page lit `48.85, 2.35`. Correctif : la permission `geolocation` est accordée à la page (action `permissions` du daemon) avant la position.
+- **Issue 2 (`offline`, `network route --abort`, `route --body`, `unroute`) : comportement mesuré sur le vrai navigateur** (8 contrôles sur 8 au run 36717567958). `trace` et `har` ajoutés au scénario.
+- **Preuve « le test échoue quand on casse la commande » :** banc `tests/browser_mutation_cases.json` (6 cassages : offline, route, unroute, trace stop, har stop, permission de géolocalisation), workflow « Browser mutation ». Résultat à lire dans la PR qui l'introduit.
+- **Pas encore fait pour l'issue 2 :** suppression ou réduction des anciens tests de simple traduction ; `network route` avec `--resource-type`.
