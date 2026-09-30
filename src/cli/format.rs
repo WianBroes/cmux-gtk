@@ -579,6 +579,12 @@ pub fn format_response(method: &str, result: &Value, json_mode: bool, color: boo
         // Browser list: human-readable table
         "browser.list" => format_browser_list(result, color),
 
+        // Terminal text prints as plain text, as upstream does, so it can be piped and matched.
+        "surface.read_text" | "surface.read_scrollback" => match result.get("text").and_then(Value::as_str) {
+            Some(text) => text.to_owned(),
+            None => format_fallback(result),
+        },
+
         // Default: pretty-print JSON for uncommon commands
         _ => format_fallback(result),
     }

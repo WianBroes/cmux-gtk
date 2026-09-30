@@ -260,18 +260,66 @@ fn terminal_target(
     Ok(surface)
 }
 
-/// Send literal UTF-8 text to a live terminal in the active workspace without changing focus.
-/// Resolve the optional UUID before native calls; reject missing targets and embedded NUL bytes.
+/// Split text at CR, LF or CRLF breaks into `(segment, ends_with_break)` parts.
+/// Empty trailing text yields no part; empty segments before a break are kept.
+fn split_at_line_breaks(text: &str) -> Vec<(&str, bool)> {
+    let mut parts = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(|c| c == '\r' || c == '\n') {
+        let is_cr = rest.as_bytes()[at] == b'\r';
+        parts.push((&rest[..at], true));
+        rest = &rest[at + 1..];
+        if is_cr && rest.starts_with('\n') {
+            rest = &rest[1..];
+        }
+    }
+    if !rest.is_empty() {
+        parts.push((rest, false));
+    }
+    parts
+}
+
+/// Send UTF-8 text to a live terminal in the active workspace without changing focus.
+/// Text is pasted literally, and each line break is delivered as the Enter key so that
+/// commands execute as on macOS. Reject missing targets and embedded NUL bytes.
 fn send_terminal_text(
     state: &crate::app_state::AppStateRef,
     id: Option<&str>,
     text: &str,
 ) -> Result<(), (&'static str, &'static str)> {
+    if text.contains('\0') {
+        return Err(("invalid_params", "text contains a NUL byte"));
+    }
+    let enter = crate::ghostty::named_key::parse("enter")
+        .ok_or(("not_supported", "the Enter key is unavailable"))?;
     let surface = terminal_target(state, id)?;
-    // SAFETY: target resolution found a live native terminal on GTK and released
-    // the model borrow. No event-loop iteration or teardown occurs before delivery.
-    unsafe { crate::ghostty::text::send_literal(surface, text) }
-        .map_err(|message| ("invalid_params", message))
+    for (segment, has_break) in split_at_line_breaks(text) {
+        if !segment.is_empty() {
+            // SAFETY: target resolution found a live native terminal on GTK and released
+            // the model borrow. No event-loop iteration or teardown occurs before delivery.
+            unsafe { crate::ghostty::text::send_literal(surface, segment) }
+                .map_err(|message| ("invalid_params", message))?;
+        }
+        if has_break {
+            // SAFETY: same live-surface guarantee as above; no teardown between calls.
+            unsafe { crate::ghostty::named_key::send(surface, enter) };
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod send_split_tests {
+    use super::split_at_line_breaks;
+
+    #[test]
+    fn splits_at_every_kind_of_break() {
+        assert_eq!(split_at_line_breaks("echo a\r"), vec![("echo a", true)]);
+        assert_eq!(split_at_line_breaks("a\r\nb"), vec![("a", true), ("b", false)]);
+        assert_eq!(split_at_line_breaks("plain"), vec![("plain", false)]);
+        assert_eq!(split_at_line_breaks("\r\r"), vec![("", true), ("", true)]);
+        assert!(split_at_line_breaks("").is_empty());
+    }
 }
 
 /// Resolve a surface_ref string ("surface:N" or UUID) to a UUID string.
