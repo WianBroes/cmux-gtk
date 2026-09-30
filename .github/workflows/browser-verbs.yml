@@ -1,0 +1,69 @@
+name: Browser verbs
+
+# Runs the behavioural browser-verb scenario against agent-browser >= 0.38.1 and prints only the useful lines,
+# because the log tool returns just the end of a long job log. Runs when the scenario or this file changes.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - tests/test_linux_real_browser_verbs.py
+      - .github/workflows/browser-verbs.yml
+      - src/browser.rs
+      - src/socket/handlers.rs
+
+jobs:
+  verbs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Identify Ghostty build cache
+        id: ghostty_revision
+        run: echo "revision=$(git rev-parse HEAD:ghostty)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Ghostty build cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .tools
+            ghostty/.zig-cache
+            ghostty/zig-out
+            ~/.cache/zig
+          key: ghostty-${{ runner.os }}-${{ runner.arch }}-${{ steps.ghostty_revision.outputs.revision }}-${{ hashFiles('scripts/setup-linux*.sh') }}
+
+      - name: Install Linux dependencies and build Ghostty
+        run: ./scripts/setup-linux-dev.sh
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install headless UI test dependencies
+        run: sudo apt-get install -y xvfb dbus-x11 openbox xdotool wmctrl x11-utils
+
+      - name: Build
+        run: cargo build --workspace --bins
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+
+      - name: Install agent-browser 0.38.1 and Chromium
+        run: |
+          npm install --prefix target/browser-tools-new --no-audit --no-fund agent-browser@0.38.1
+          target/browser-tools-new/node_modules/.bin/agent-browser install --with-deps
+          echo "CMUX_TEST_AGENT_BROWSER=$PWD/target/browser-tools-new/node_modules/.bin/agent-browser" >> "$GITHUB_ENV"
+
+      - name: Run the verb scenario
+        run: |
+          set +e
+          dbus-run-session -- xvfb-run -a python3 tests/test_linux_real_browser_verbs.py > /tmp/verbs.log 2>&1
+          echo "exit code: $?" >> /tmp/verbs.log
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "=== VERBS RESULTS ==="
+          grep -E '^(agent-browser version|browser open|PASS|FAIL|  cmux browser|[0-9]+/[0-9]+ verb|exit code|Traceback|AssertionError|.*Error)' /tmp/verbs.log | cut -c1-420 | tail -n 80
+          echo "=== END ==="

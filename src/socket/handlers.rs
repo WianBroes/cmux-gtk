@@ -3033,18 +3033,26 @@ fn handle_socket_command_traced(
                     return;
                 };
                 let session = bm.session_identity();
-                let exchange = bm.send_command_async(
-                    &daemon_action,
-                    params,
-                    trace_id
-                        .as_deref()
-                        .and_then(|id| uuid::Uuid::parse_str(id).ok()),
-                );
+                let trace = trace_id
+                    .as_deref()
+                    .and_then(|id| uuid::Uuid::parse_str(id).ok());
+                // The daemon emulates the position but never grants the page the permission to read
+                // it, so a page would get "User denied Geolocation" behind a reported success.
+                let grant_permission = (daemon_action == "geolocation").then(|| {
+                    bm.send_command_async("permissions", json!({"permissions": ["geolocation"]}), trace)
+                });
+                let exchange = bm.send_command_async(&daemon_action, params, trace);
                 let (url_tx, url_rx) = tokio::sync::oneshot::channel();
                 drop(s);
                 spawn_browser_exchange(
                     &runtime,
                     async move {
+                        if let Some(grant) = grant_permission {
+                            let granted = grant.await?;
+                            if granted.get("success").and_then(Value::as_bool) == Some(false) {
+                                return Ok(granted);
+                            }
+                        }
                         let mut result = exchange.await?;
                         if let Some(property) = style_property {
                             result = crate::browser::pick_style(result, &property);
