@@ -9,6 +9,15 @@ from linux_app import running_app
 from process_support import stop_process
 
 
+def stable(workspaces):
+    """Mask the name of the first workspace: it was never named, so it follows its terminal's title.
+
+    Order, identity and every explicit name (middle, background, the renamed one) are still compared;
+    a workspace with an explicit name is never renamed after its title.
+    """
+    return [(uuid, name if index else None) for index, (uuid, name) in enumerate(workspaces)]
+
+
 def main():
     """Mutate and quit by keyboard/window manager, then reopen without visiting background workspaces."""
     with tempfile.TemporaryDirectory(prefix="cmux-session-quit-") as directory:
@@ -23,7 +32,7 @@ def main():
                     app.cli("ping")
                     if expected is not None:
                         restored = json.loads(app.cli("list-workspaces", "--json"))["workspaces"]
-                        assert [(row["uuid"], row["name"]) for row in restored] == expected
+                        assert stable([(row["uuid"], row["name"]) for row in restored]) == stable(expected)
                         assert json.loads(app.cli("current-workspace", "--json"))["uuid"] == expected[1][0]
                         binding = json.loads(app.cli("surface", "resume", "show", "--surface", binding_surface, "--json"))
                         assert binding["resume_binding"] == saved_binding
@@ -70,7 +79,7 @@ def main():
                     saved = json.loads((root / "data/cmux/session.json").read_text())
                     expected = [(row["uuid"], row["name"]) for row in rows]
                     expected[2] = (rows[2]["uuid"], name)
-                    assert [(row["uuid"], row["name"]) for row in saved["workspaces"]] == expected
+                    assert stable([(row["uuid"], row["name"]) for row in saved["workspaces"]]) == stable(expected)
                     assert saved["active_index"] == 1
                     # The owned process has exited; remove its stale discovery endpoint
                     # so the next launch cannot mistake it for listener readiness.

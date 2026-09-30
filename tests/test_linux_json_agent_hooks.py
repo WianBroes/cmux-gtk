@@ -59,7 +59,6 @@ def main():
         with running_app(root, env, startup_timeout=20) as app:
             target = next(row["uuid"] for row in app.surfaces() if row["active"])
             hook_env = dict(app.environment, CMUX_SURFACE_ID=target, CMUX_SOCKET=str(app.socket_path))
-            expected_notifications = 0
             for name, (_, _, start_name, stop_name, end_name, resume_prefix) in providers.items():
                 commands = installed[name]
                 native_id = name + "-session"
@@ -87,9 +86,8 @@ def main():
                                check=True, timeout=10)
                 assert argv_output.read_text().splitlines() == resume_prefix + [native_id]
                 event(stop_name, "stop", summary=name + " complete")
-                expected_notifications += 1
                 rows = json.loads(app.cli("notifications", "list", "--json"))["notifications"]
-                assert len(rows) == expected_notifications
+                assert len(rows) == 1  # one notification per terminal, as on macOS: each Stop replaces the previous one
                 assert rows[-1]["surface_id"] == target and rows[-1]["body"] == name + " complete"
                 if end_name:
                     event(end_name, "session-end")

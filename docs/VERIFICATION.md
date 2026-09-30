@@ -1,0 +1,47 @@
+# Verification ledger (fork `local/wian`)
+
+Statuses: `vérifié` (a green CI step on the fork's code, named), `cassé` (fails on the fork), `non vérifié` (no proof yet). Proof is a CI step in `.github/workflows/ci.yml` running the real application under Xvfb; a unit test alone never counts.
+Source of evidence: [CI run 36634061848](https://github.com/WianBroes/cmux-gtk/actions/runs/36634061848) on branch `claude/verification-on-fork` (fork code plus test updates), and the mutation bench [run 36634061781](https://github.com/WianBroes/cmux-gtk/actions/runs/36634061781). Earlier results obtained on `main` (upstream) do not apply to the fork and are not used here.
+
+**Contract used for notifications and `send-key`: macOS.** Checked in upstream `Sources/TerminalNotificationStore.swift` (a new notification replaces the previous ones of the same workspace and surface, unless it carries a correlation key) and `CLI/cmux.swift` (`send-key` takes a key name; an unknown name is refused). Not checked: the exact list of accepted key names, correlated notifications, the 180/200-character summaries (taken from the fork's own commit message).
+
+| Fonction | Scénario | Statut | Preuve | Mutation |
+| --- | --- | --- | --- | --- |
+| `send-text` / `send-key` / `read-text` | Commande envoyée à un vrai shell (caractère puis touche nommée `enter`), focalisé et en arrière-plan, focus inchangé | vérifié | step 26, `tests/test_linux_agent_terminal_io.py` | `send-key-field` attrapé |
+| `set-status` / `set-progress` | Métadonnées d'un workspace en arrière-plan, limites, restauration | vérifié | step 51, `tests/test_linux_sidebar_metadata.py` | `sidebar-status-limit` attrapé |
+| Notifications OSC 9/99/777 | Vraies séquences d'un vrai terminal, une notification par terminal, morceaux OSC 99 assemblés, trame trop grosse ignorée | vérifié | step 59, `tests/test_linux_osc_notifications.py` | `osc-body-limit` attrapé |
+| Notifications (CLI, panneau, non lu) | `notify`, lu/ignoré, panneau en direct, Alt+J, historique après quit, remplacement par terminal | vérifié | step 50, `tests/test_linux_notifications.py` | aucun |
+| Hooks d'agents, Claude | Hook installé puis exécuté, notification résumée sur une ligne, une par terminal, binding de reprise | vérifié (faux binaire `claude`, agent réel non lancé) | step 37, `tests/test_linux_claude_hooks.py` | `hook-stop-notification` attrapé ; `hook-summary-length` à lancer |
+| Hooks des autres agents | JSON imbriqué, Kiro/Antigravity, Hermes/Kimi, OMP/Campfire, Codex, OpenCode, Cursor, Pi, Amp, Rovo Dev | vérifié au niveau « hook installé → notification dans l'application » (faux binaires) | steps 38 à 47 | aucun |
+| Reprise de session | Reprise manuelle dans son terminal ; approbation depuis les Préférences (onglet Terminal) puis relance automatique | vérifié | steps 36 et 49 | `resume-secret-filter` attrapé |
+| Ports d'écoute | Écouteur attribué au bon terminal, effacé à la sortie | vérifié | step 29, `tests/test_linux_ports.py` | `ports-attribution` attrapé |
+| Branche/dirty git | Découverte automatique sur de vrais dépôts | vérifié pour branche et état modifié ; PR/MR et écart amont non relus | step 53, `tests/test_linux_git_metadata.py` | `git-untracked-dirty` attrapé |
+| Workspaces, groupes, réordonnancement, déplacement | Groupes persistants, réordonnancement par lot avec plan à blanc, déplacement de surfaces | vérifié | steps 22, 52, 64 | `reorder-dry-run`, `group-collapse` attrapés |
+| Panes et splits | Fermeture qui préserve les voisins et libère le bon PTY, routage imbriqué, split refusé sans changer mise en page ni sélection (le titre du terminal est exclu de la comparaison) | vérifié | steps 17 et 65 (SIGINT : step 20) | aucun |
+| Historique de focus | aucun test trouvé | non vérifié | — | — |
+| État de la fenêtre | Position, taille et maximisation après redémarrage | vérifié | step 34, `tests/test_linux_window_state.py` | `window-maximized`, `window-size-restore` attrapés |
+| Session : scrollback et récupération | Historique conservé, récupération d'un workspace fermé | vérifié | steps 57 et 58 | aucun |
+| Session : sauvegarde finale à la fermeture immédiate | Fermeture (croix et Ctrl+Q) juste après une mutation : workspaces, ordre, noms explicites, binding de reprise | vérifié : 3 exécutions sur 3 vertes ([sonde 36638793647](https://github.com/WianBroes/cmux-gtk/actions/runs/36638793647)) après avoir exclu de la comparaison le nom du premier workspace, qui n'a pas de nom explicite et suit le titre de son terminal ; le run CI complet suivant reste à lire | \`tests/test_linux_session_quit.py\` | aucun |
+| Navigateur : cycle de vie | Démarrage sans vol de focus, complétion différée | vérifié ; une seule exécution rouge sur les 6 derniers runs de la PR, verte aux autres sans changement de ce code : instable, cause non établie | step 24, [run 36643256429](https://github.com/WianBroes/cmux-gtk/actions/runs/36643256429) | aucun |
+| Navigateur : verbes réseau, géolocalisation, etc. | offline, geolocation, trace, har, network, viewport, cookies… | non vérifié : issues 2, 3, 5 | — | — |
+| Diff dans un vrai navigateur | Clic sur un fichier, bascule Split → Unified, commentaire créé dans la page | vérifié après correction du produit : dans un volet de 269 px l'en-tête débordait, le bouton « Unified » sortait de l'écran, le clic ne faisait rien et la commande répondait « succès ». L'en-tête passe maintenant à la ligne (`src/cli/diff.rs`). Échouait sur 4 runs avant, passe après | step 85, `tests/test_linux_real_diff_viewer.py`, [run 36643256429](https://github.com/WianBroes/cmux-gtk/actions/runs/36643256429) | aucun |
+| Navigateur : benchmark DOM et aperçu | Mesures DOM dans un vrai Chromium, aperçu GTK, focus du terminal préservé | passait sur 5 runs, **rouge une fois** (`Browser preview startup deadline exceeded` à l'ouverture d'une page locale) : délai de démarrage du navigateur, probablement instable, non confirmé | step 84, [run 36643256429](https://github.com/WianBroes/cmux-gtk/actions/runs/36643256429) | aucun |
+| Projet dans un vrai navigateur | Manifeste, placement, restauration | vérifié | step 86 | aucun |
+| SSH : lancement et restauration de workspace | Vrai SSH et PTY, approbation de reprise depuis les Préférences (onglet Terminal), restauration | vérifié : le test envoyait `Alt+A` sur l'onglet App des Préférences ; il passe à l'onglet Terminal d'abord. Échouait avant, passe après | step 75, `tests/test_linux_workspace_launch.py`, [run 36643256429](https://github.com/WianBroes/cmux-gtk/actions/runs/36643256429) | aucun |
+| SSH : benchmark et ressources de navigateur distant | Cycle SSH mesuré ; ressources distantes via des espaces de noms isolés | vérifié : même cause et même correctif que la ligne ci-dessus | steps 80 et 87, [run 36643256429](https://github.com/WianBroes/cmux-gtk/actions/runs/36643256429) | aucun |
+| Configuration et raccourcis en fenêtre principale | Effet clavier après changement | non vérifié : issue 4 | — | — |
+| Markdown | `cmux markdown` | non vérifié | — | — |
+| Mosh | — | non vérifiable ici (hôte distant nécessaire) | — | — |
+
+## Preuve par mutation
+
+Banc : `tests/mutation_cases.json`, `tests/run_mutation.py`, `.github/workflows/mutation.yml`. Sur le code du fork ([run 36634061781](https://github.com/WianBroes/cmux-gtk/actions/runs/36634061781)) : 11 cassages sur 12 attrapés. Le cassage `hook-body-limit` a **survécu** : la limite de 8 Kio qu'il modifiait n'est plus observable, car le corps est ensuite résumé à 180 caractères. Il est remplacé par `hook-summary-length` (cassage de la longueur du résumé), pas encore exécuté. Seule la cause d'échec de `osc-body-limit` a été relue ; pour les autres cassages on sait que le test a échoué, pas que la cause est celle attendue.
+
+
+## Mise à jour du 30/09 (commit 7850165)
+
+- CI complète verte au second essai ([run 36688557862](https://github.com/WianBroes/cmux-gtk/actions/runs/36688557862)) : la première tentative avait échoué aux étapes 85 et 87 (démarrage de Chromium trop lent, puis nettoyage qui en découle) ; ces deux étapes avaient passé au run précédent et ont repassé à la relance. C'est une instabilité de la machine CI, pas prouvée comme telle par une cause racine.
+- Test « navigateur asynchrone » : l'échec venait du test (les titres de terminaux changent seuls), corrigé ; il passe.
+- Banc de mutation vert sur ce commit, `shortcut-live-reload` compris : le point 4 (raccourcis) est prouvé. Ctrl+N ouvre un dialogue et Ctrl+D coupe en deux, comme le comportement macOS attendu par le fork.
+- `send` et `read-screen` : défaut de fidélité macOS corrigé et prouvé (sonde 36679693673).
+- Panneau Fichiers : mise à jour en direct ajoutée, test unitaire vert, scénario réel avec agent pas encore écrit.

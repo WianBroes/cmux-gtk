@@ -65,12 +65,15 @@ def main():
             assert argv_output.read_text().splitlines() == ["--resume", native_id]
             app.cli("select-workspace", initial["workspace_uuid"])
             event("Stop", native_id, last_assistant_message="Build finished", stop_hook_active=False)
+            after_stop = json.loads(app.cli("notifications", "list", "--json"))["notifications"]
+            assert len(after_stop) == 1 and after_stop[0]["body"] == "Build finished"
+            # macOS keeps one notification per terminal: a later one replaces the earlier one.
             event("Notification", native_id, title="Permission needed", message="λ" * 5000, notification_type="permission_prompt")
             notifications = json.loads(app.cli("notifications", "list", "--json"))["notifications"]
-            assert len(notifications) == 2
-            assert notifications[0]["body"] == "Build finished"
-            assert notifications[1]["title"] == "Permission needed" and notifications[1]["subtitle"] == "permission_prompt"
-            assert len(notifications[1]["body"].encode()) <= 8192 and notifications[1]["body"].endswith("...")
+            assert len(notifications) == 1
+            assert notifications[0]["title"] == "Permission needed" and notifications[0]["subtitle"] == "permission_prompt"
+            # Like macOS, an attention body is one line of at most 180 characters cut with an ellipsis.
+            assert len(notifications[0]["body"]) == 180 and notifications[0]["body"].endswith("\u2026"), len(notifications[0]["body"])
             assert all(row["surface_id"] == target and not row["is_read"] for row in notifications)
             assert next(row["uuid"] for row in app.surfaces() if row["active"]) == initial["uuid"]
             assert json.loads(app.cli("surface", "resume", "show", "--surface", target, "--json"))["resume_binding"] == binding

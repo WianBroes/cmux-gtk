@@ -28,6 +28,13 @@ class Application:
         """Read current surface records through the production JSON CLI."""
         return json.loads(self.cli("list-surfaces", "--json"))["surfaces"]
 
+    def layout(self):
+        """Surface records without the terminal title, which a shell rewrites asynchronously after startup.
+
+        Layout and selection comparisons use this view: a title change is not a layout or focus change.
+        """
+        return [{key: value for key, value in row.items() if key != "title"} for row in self.surfaces()]
+
     def children(self):
         """Collect direct child PIDs across all spawning threads, tolerating concurrent thread exits."""
         return linux_child_pids(self.process.pid)

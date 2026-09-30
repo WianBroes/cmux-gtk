@@ -1,0 +1,2 @@
+tests/test_linux_agent_cli_scenarios.py
+tests/test_linux_shortcut_effect.py

@@ -54,7 +54,10 @@ def main():
             surface = opened["surface_ref"]
 
             def command(name, *arguments):
-                result = json.loads(app.cli("browser", name, surface, *arguments, timeout=20))
+                try:
+                    result = json.loads(app.cli("browser", name, surface, *arguments, timeout=20))
+                except subprocess.CalledProcessError as error:
+                    raise AssertionError(f"browser {name} {arguments} exited {error.returncode}: {error.stdout!r} {error.stderr!r}") from error
                 assert result["success"] is True, result
                 return result["data"]
 
@@ -88,9 +91,15 @@ def main():
                 "--timeout-ms", "5000",
             )
             command("click", "#unified")
-            command("wait", "--function", "document.querySelectorAll('#viewer .line').length > 0", "--timeout-ms", "1000")
+            try:
+                command("wait", "--function", "document.querySelectorAll('#viewer .line').length > 0", "--timeout-ms", "1000")
+            except AssertionError as error:
+                page = command("eval", "({unifiedActive:document.getElementById('unified').classList.contains('active'),splitActive:document.getElementById('split').classList.contains('active'),line:document.querySelectorAll('#viewer .line').length,splitLine:document.querySelectorAll('#viewer .split-line').length,viewerChildren:document.getElementById('viewer').children.length,title:document.getElementById('file-title').textContent,dialogOpen:document.getElementById('comment-dialog').open,width:innerWidth})")["result"]
+                raise AssertionError(f"unified layout did not render lines within 1s: {page}") from error
             unified = command("eval", "({unified:document.querySelectorAll('#viewer .line').length, split:document.querySelectorAll('#viewer .split-line').length})")["result"]
             assert unified["unified"] > 0 and unified["split"] == 0, unified
+            layout = command("eval", "({width:innerWidth,nav:getComputedStyle(document.getElementById('files')).display,box:document.querySelector('#files button:nth-child(2)').getBoundingClientRect().width})")["result"]
+            assert layout["nav"] != "none" and layout["box"] > 0, f"file list is not clickable: {layout}"
             command("click", "#files button:nth-child(2)")
             assert "another marker" in command("eval", "document.body.innerText")["result"]
             assert selected_surface(app) == terminal, "default diff open stole terminal focus"

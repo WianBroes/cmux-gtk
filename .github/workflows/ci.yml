@@ -158,6 +158,10 @@ jobs:
         if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_diff_viewer.py
 
+      - name: Test agent terminal I/O verbs against a real shell
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
+        run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_agent_terminal_io.py
+
       - name: Test Linux project inspection, placement and restore lifecycle
         if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_project_view.py
@@ -325,6 +329,10 @@ jobs:
           CMUX_CHURN_REPORT: target/benchmarks/memory-churn.json
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
         run: dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1200x24' python3 tests/test_linux_memory_churn.py
+
+      - name: Test a rebound split shortcut takes effect in the main window after a live reload
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
+        run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_shortcut_effect.py
 
       - name: Test Linux clipboard, keybinding and paste routing
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}

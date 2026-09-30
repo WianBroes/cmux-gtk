@@ -136,20 +136,20 @@ def main():
                 with pending_open(app, browser_dir) as pending:
                     subprocess.run(command(app, "ping"), env=app.environment, check=True, capture_output=True, timeout=2)
                     target = json.loads(app.cli("new-workspace", "--json"))["uuid"]
-                    before = app.surfaces()
+                    before = app.layout()
                     finish_open(pending, browser_dir, True)
-                    assert [row for row in app.surfaces() if row["workspace_uuid"] == target] == [row for row in before if row["workspace_uuid"] == target], "browser completion changed the new workspace"
+                    assert [row for row in app.layout() if row["workspace_uuid"] == target] == [row for row in before if row["workspace_uuid"] == target], "browser completion changed the new workspace"
                     assert json.loads(app.cli("current-workspace", "--json"))["uuid"] == target
 
                 for invalid in (str(uuid.uuid4()), 17):
-                    before = app.surfaces()
+                    before = app.layout()
                     try:
                         app.cli("raw", "browser.open", "--params", json.dumps({"url": "about:blank", "workspace": invalid}))
                     except subprocess.CalledProcessError:
                         pass
                     else:
                         raise AssertionError("invalid explicit browser workspace was accepted")
-                    assert app.surfaces() == before
+                    assert app.layout() == before
                 # Target a third workspace while the observer stays selected.
                 third = json.loads(app.cli("new-workspace", "--name", "explicit browser target", "--json"))["uuid"]
                 app.cli("select-workspace", target)
@@ -174,10 +174,10 @@ def main():
                     app.cli("split", "--direction", "horizontal")
                     changed_terminal = next(row["uuid"] for row in app.surfaces() if row["active"])
                     app.cli("select-workspace", target)
-                    before_surfaces = app.surfaces()
+                    before_surfaces = app.layout()
                     error = finish_open(pending, browser_dir, False)
                     assert "changed" in error.lower(), error
-                    assert app.surfaces() == before_surfaces, "stale project browser changed layout or focus"
+                    assert app.layout() == before_surfaces, "stale project browser changed layout or focus"
                 app.wait_for(lambda: set(browser_dir.glob("*.pid")) == before_daemons,
                              "stale project browser daemon retirement")
                 app.cli("close-surface", changed_terminal)
@@ -219,10 +219,10 @@ def main():
                 with pending_open(app, browser_dir) as pending:
                     app.cli("select-workspace", target)
                     app.cli("close-workspace", source)
-                    before = app.surfaces()
+                    before = app.layout()
                     error = finish_open(pending, browser_dir, False)
                     assert "closed during browser startup" in error, error
-                    assert app.surfaces() == before, "stale completion mutated another workspace"
+                    assert app.layout() == before, "stale completion mutated another workspace"
                 app.wait_for(lambda: not list(browser_dir.glob("*.pid")), "closed workspace and cancelled startup daemon exit")
                 app.cli("ping")
         finally:

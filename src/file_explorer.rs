@@ -170,6 +170,51 @@ fn nodes_from(dir: &Path) -> std::io::Result<Vec<Node>> {
         .collect())
 }
 
+/// Re-list `dir` and merge it into `old`: surviving folders keep their loaded children
+/// and expansion (refreshed recursively), new entries appear collapsed, gone ones drop.
+/// An unreadable directory keeps `old` untouched rather than emptying the tree.
+fn refreshed(dir: &Path, old: Vec<Node>) -> Vec<Node> {
+    let Ok(entries) = read_entries(dir) else {
+        return old;
+    };
+    let mut previous: HashMap<PathBuf, Node> = old
+        .into_iter()
+        .map(|node| (node.path.clone(), node))
+        .collect();
+    entries
+        .into_iter()
+        .map(|entry| match previous.remove(&entry.path) {
+            Some(mut node) if node.is_dir == entry.is_dir => {
+                node.is_symlink = entry.is_symlink;
+                if let Some(children) = node.children.take() {
+                    node.children = Some(refreshed(&node.path, children));
+                }
+                node
+            }
+            _ => Node {
+                name: entry.name,
+                path: entry.path,
+                is_dir: entry.is_dir,
+                is_symlink: entry.is_symlink,
+                children: None,
+                expanded: false,
+            },
+        })
+        .collect()
+}
+
+/// Flat description of every loaded row, used to tell whether a refresh changed anything.
+fn listing_signature(nodes: &[Node]) -> Vec<(PathBuf, bool, bool)> {
+    let mut out = Vec::new();
+    for node in nodes {
+        out.push((node.path.clone(), node.is_dir, node.is_symlink));
+        if let Some(children) = &node.children {
+            out.extend(listing_signature(children));
+        }
+    }
+    out
+}
+
 /// Find the node for a filesystem path inside the loaded tree.
 fn find_node_mut<'a>(nodes: &'a mut [Node], path: &Path) -> Option<&'a mut Node> {
     for node in nodes {
@@ -624,9 +669,26 @@ impl FileExplorer {
         &self.root
     }
 
+    /// Re-read the root and every loaded folder so files created, renamed or deleted
+    /// (by an agent, a build, a shell) show up live. The store is only rebuilt when the
+    /// listing really changed, so expansion, selection and scroll stay put otherwise.
+    fn refresh_contents(&self, path: &Path) {
+        let old = std::mem::take(&mut *self.state.nodes.borrow_mut());
+        let before = listing_signature(&old);
+        let fresh = refreshed(path, old);
+        let changed = listing_signature(&fresh) != before;
+        *self.state.nodes.borrow_mut() = fresh;
+        if changed {
+            rebuild(&self.store, &self.tree, &self.state);
+        }
+    }
+
     /// Point the panel at a workspace root; unchanged roots keep their tree as it is.
     pub fn apply_root(&self, root: Root) {
         if self.state.root.borrow().as_ref() == Some(&root) {
+            if let Root::Local(path) = &root {
+                self.refresh_contents(path);
+            }
             return;
         }
         crate::diagnostics::event(format_args!(
@@ -1008,6 +1070,38 @@ mod tests {
         assert!(find("sub").is_dir);
         assert!(!find("link-to-sub").is_dir);
         assert!(find("link-to-sub").is_symlink);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A refresh picks up created and deleted files, in loaded folders too, and keeps
+    /// the loaded children and expansion of folders that survive.
+    #[test]
+    fn refresh_shows_new_and_gone_files_and_keeps_expansion() {
+        let dir = std::env::temp_dir().join(format!("cmux-fx-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("old.txt"), "x").unwrap();
+        std::fs::write(dir.join("sub/inner.txt"), "x").unwrap();
+        let mut nodes = nodes_from(&dir).unwrap();
+        let sub = find_node_mut(&mut nodes, &dir.join("sub")).unwrap();
+        sub.children = Some(nodes_from(&dir.join("sub")).unwrap());
+        sub.expanded = true;
+        let before = listing_signature(&nodes);
+
+        std::fs::write(dir.join("agent-made.txt"), "x").unwrap();
+        std::fs::write(dir.join("sub/deep-new.txt"), "x").unwrap();
+        std::fs::remove_file(dir.join("old.txt")).unwrap();
+        let nodes = refreshed(&dir, nodes);
+
+        let names: Vec<&str> = nodes.iter().map(|node| node.name.as_str()).collect();
+        assert_eq!(names, ["sub", "agent-made.txt"]);
+        let sub = &nodes[0];
+        assert!(sub.expanded);
+        let inner: Vec<&str> = sub.children.as_ref().unwrap().iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(inner, ["deep-new.txt", "inner.txt"]);
+        let after = listing_signature(&nodes);
+        assert_ne!(after, before);
+        // Nothing changed since: a second refresh reports the same listing.
+        assert_eq!(listing_signature(&refreshed(&dir, nodes)), after);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
