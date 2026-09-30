@@ -55,6 +55,16 @@ jobs:
             fi
           done < tests/probe_tests.txt
 
+      - name: Run the unit tests three times and keep only their failures
+        if: always()
+        run: |
+          for round in 1 2 3; do
+            cargo test --workspace > /tmp/unit.log 2>&1 && echo "UNIT round $round: all passed" >> /tmp/summary.txt || {
+              echo "UNIT round $round: FAILED" >> /tmp/summary.txt
+              grep -E '^test .* FAILED$|panicked at|^failures:|^    [a-z_:0-9]+$|assertion|left:|right:' /tmp/unit.log | head -n 25 | cut -c1-400 | sed 's/^/     /' >> /tmp/summary.txt
+            }
+          done
+
       - name: Summary
         if: always()
         run: |
