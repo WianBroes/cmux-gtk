@@ -134,5 +134,29 @@
     "new": "        let found = settings_json::get(&value, \"no.such.key\").ok_or_else(|| {",
     "test": "tests/test_linux_config_cli.py",
     "claim": "cmux config get reads the value at the requested path"
+  },
+  {
+    "id": "config-path-location",
+    "file": "src/cli/mod.rs",
+    "old": "            let path = config_file(None, None)?;",
+    "new": "            let path = std::path::PathBuf::from(\"/tmp/cmux.json\");",
+    "test": "tests/test_linux_config_cli.py",
+    "claim": "cmux config path prints the global cmux.json under the configured home"
+  },
+  {
+    "id": "config-explicit-file",
+    "file": "src/cli/mod.rs",
+    "old": "    if let Some(path) = file {\n        return Ok(path.to_path_buf());\n    }",
+    "new": "    if let Some(path) = file {\n        let _ = path;\n    }",
+    "test": "tests/test_linux_config_cli.py",
+    "claim": "an explicit --file selects that file for cmux config set and validate"
+  },
+  {
+    "id": "markdown-heading",
+    "file": "src/cli/markdown.rs",
+    "old": "                Tag::Heading { level, .. } => {\n                    let _ = write!(html, \"<{level}>\");",
+    "new": "                Tag::Heading { level, .. } => {\n                    let _ = write!(html, \"<p data-level={level}>\");",
+    "test": "tests/test_linux_markdown_render.py",
+    "claim": "a Markdown heading becomes an h1 on the page cmux markdown writes"
   }
 ]

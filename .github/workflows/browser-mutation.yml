@@ -9,6 +9,7 @@ on:
       - tests/browser_mutation_cases.json
       - tests/run_mutation.py
       - tests/test_linux_real_browser_verbs.py
+      - tests/test_linux_real_markdown_view.py
       - .github/workflows/browser-mutation.yml
 
 jobs:
