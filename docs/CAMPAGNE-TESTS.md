@@ -15,7 +15,7 @@ Légende : **prouvé** = un test de CI joue le scénario sur ton code et il éch
 | F20 | `cmux tree`, `list-pane-surfaces` et indices par workspace | **vérifié en réel** | prouvé par la sonde 36679693673 (commit facf919) |
 | F21 | `send-key` avec noms de touches, `send` avec échappements, `read-screen` | **vérifié en réel** | prouvé par la sonde 36679693673 (commit facf919) ; défaut trouvé et corrigé : `send "cmd\n"` ne validait pas la commande (maintenant Entrée sur chaque retour à la ligne) et `read-screen` affichait du JSON (maintenant texte simple, comme macOS) |
 | F23 | Journal de barre latérale, `sidebar-state` et alias de notifications (lot 6) | **vérifié en réel** | prouvé par la sonde 36679693673 (commit facf919) |
-| F18 | Références de socket `window:N`/`workspace:N`/`surface:N`, drapeaux `--workspace/--surface/--pane`, `--id-format`, `identify`, repli `CMUX_SOCKET_PATH | **couvert par CI** | à faire |
+| F18 | Références de socket `window:N`/`workspace:N`/`surface:N`, drapeaux `--workspace/--surface/--pane`, `--id-format`, `identify`, repli `CMUX_SOCKET_PATH | **couvert par CI** | prouvé (PR 21, `tests/test_linux_agent_handles.py`, 4 cassages `handles-*` attrapés) ; le repli `CMUX_SOCKET_PATH` reste jugé par `tests/test_cli_socket_autodiscovery.py`, sans cassage |
 | F09 | Flux d'événements reconnectable (`events.stream`, `cmux events`) | **test unitaire seulement** | à faire |
 | F13 | Activité d'agent dans la barre latérale et sur l'onglet (spinner, badge non lu, dernier message, icône par agent) | **test unitaire seulement** | à faire |
 | F06 | Les hooks d'agents relient la reprise à chaque prompt (rattrape un SessionStart manqué) | **couvert par CI** | à faire |
