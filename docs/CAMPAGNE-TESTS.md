@@ -32,7 +32,7 @@ Légende : **prouvé** = un test de CI joue le scénario sur ton code et il éch
 | F15 | Barre de titre comme l'amont (barre latérale, notifications, menu nouveau workspace, Retour/Avance du focus, flèches désactivées) et bouton d'explorat | **test unitaire seulement** | à faire |
 | F16 | Preferences en onglets App/Terminal et fenêtre des raccourcis construite avec GtkBuilder | **aucun test** | à faire |
 | F17 | Focus et glisser-déposer d'onglets : le clic résout le pane à l'événement, dépôt sur la barre d'onglets = rejoindre le pane, `pane.focus` change de wo | **couvert par CI** | à faire |
-| F26 | Panneau droit et explorateur de fichiers (arbre, navigation J/K H/L, filtre, glisser vers un terminal) | **test unitaire seulement** | à faire |
+| F26 | Panneau droit et explorateur de fichiers (arbre, navigation J/K H/L, filtre, glisser vers un terminal) | **test unitaire seulement** | défaut trouvé : le contenu ne se mettait pas à jour en direct (seul le changement de dossier était suivi) ; corrigé (relecture chaque seconde des dossiers chargés) avec test unitaire ; scénario réel avec agent encore à écrire |
 | F27 | Description de workspace (champ, commandes, éditeur) | **test unitaire seulement** | à faire |
 | F32 | L'application lit `cmux.json` (raccourcis) par-dessus `config.toml`, `reload-config`, `cmux settings | **test unitaire seulement** | en cours (issue 4) |
 | F33 | Page Preferences > Shortcuts : changer, débrancher, réinitialiser ; refus des touches réservées aux terminaux et aux agents avec raison ; débranchemen | **test unitaire seulement** | à faire |

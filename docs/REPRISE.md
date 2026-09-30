@@ -32,3 +32,20 @@
 - `list_workflow_jobs` avec `perPage: 1` et `page` 1 ou 2 pour choisir le job (`linux-build` vs `remote-daemon-tests`). Les étapes CI sont numérotées (voir les noms dans `ci.yml`).
 - Chaque push sur la branche relance CI, Mutation et Probe (concurrence : un nouveau push annule l'ancien run CI) : grouper les changements avant de pousser et lire les résultats avant de repousser.
 - Le workflow `Mutation` se lance sur PR (fichiers du banc) ; `workflow_dispatch` est indisponible tant que ces workflows ne sont pas sur la branche par défaut.
+
+## Point d'arrêt du 30/09 (session stoppée pour économiser le crédit)
+
+Branche de travail : `claude/verification-on-fork` (PR 11 vers `local/wian`). Ne pas fusionner tant que la CI n'est pas entièrement verte ; prévenir l'utilisateur avant.
+
+Fait et prouvé (sonde verte sur facf919) :
+- `send "cmd\n"` exécute la commande (chaque retour à la ligne = touche Entrée) ; `read-text`/`read-screen` affichent du texte simple comme macOS.
+- Scénario lot 1 (F12 titre→nom d'espace, F19 new-split --command, F20 tree, F21 send, F23 log) passe en réel.
+- Banc de mutation vert (13 cas, dont shortcut-live-reload).
+
+En attente / à faire dans l'ordre :
+1. Lire la CI du dernier push. Sur facf919 seul le test « navigateur asynchrone » (étape 24) a échoué (déjà instable) ; `tests/probe_tests.txt` le rejoue pour voir la ligne exacte. Remettre ensuite la liste de sonde à `tests/test_linux_agent_cli_scenarios.py` + `tests/test_linux_shortcut_effect.py`.
+2. Panneau Fichiers (F26) : défaut trouvé par l'utilisateur, le contenu ne se mettait pas à jour en direct. Corrigé dans `src/file_explorer.rs` (`refresh_contents`, `refreshed`, `listing_signature`, relecture chaque seconde) + test unitaire `refresh_shows_new_and_gone_files_and_keeps_expansion`, NON encore vu passer en CI. Reste : un scénario réel (un agent crée un fichier, il apparaît) et un cas de mutation.
+3. Ajouter au CI (`ci.yml`) l'étape du scénario lot 1 (`tests/test_linux_agent_cli_scenarios.py`, avec `if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}`) et des cas de mutation pour F21 (Entrée sur retour à la ligne).
+4. Mettre à jour `docs/VERIFICATION.md` et `docs/CAMPAGNE-TESTS.md` : lot 1 prouvé, point 4 (raccourcis) prouvé, Ctrl+N ouvre un dialogue, Ctrl+D = split.
+5. Continuer les lots 2–4 (F01–F34), verbes navigateur F29/F30/F31 (issues 2, 3, 5), balayage des fichiers très touchés, puis tri des changements macOS amont depuis 7d78b6e.
+Astuce : un nouveau push annule la CI en cours ; lire les résultats avant de repousser.
