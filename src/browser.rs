@@ -96,6 +96,8 @@ pub struct BrowserManager {
     profile: Option<String>,
     remote_bridge: Option<std::sync::Arc<crate::ssh::bridge::SshBridge>>,
     navigation_gate: std::sync::Arc<tokio::sync::Semaphore>,
+    /// Total time one navigation sequence (commands plus URL refresh) may take.
+    navigation_budget: std::time::Duration,
     navigation_shutdown: tokio::sync::watch::Sender<bool>,
     binary_path: Option<PathBuf>,
     stream_task: Option<tokio::task::JoinHandle<()>>,
@@ -114,6 +116,7 @@ impl BrowserManager {
             session_name: format!("cmux-{}", Uuid::new_v4().simple()),
             profile: None,
             navigation_gate: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
+            navigation_budget: std::time::Duration::from_secs(30),
             navigation_shutdown: tokio::sync::watch::channel(false).0,
             binary_path: None,
             stream_task: None,
@@ -445,6 +448,7 @@ impl BrowserManager {
         let mut shutdown = self.navigation_shutdown.subscribe();
         let binary = self.binary_path.clone();
         let session = self.session_name.clone();
+        let budget = self.navigation_budget;
         let permit = self.navigation_gate.clone().try_acquire_owned();
         crate::diagnostics::record(
             "browser.navigation.admission",
@@ -477,11 +481,11 @@ impl BrowserManager {
             tokio::select! {
                 biased;
                 _ = shutdown.changed() => Err(cancelled()),
-                result = tokio::time::timeout(std::time::Duration::from_secs(30), operation) => {
+                result = tokio::time::timeout(budget, operation) => {
                     result.unwrap_or_else(|_| {
                         crate::diagnostics::record("browser.navigation.timeout", serde_json::json!({
                             "trace_id": trace_id,
-                            "budget_ms": 30_000,
+                            "budget_ms": budget.as_millis() as u64,
                         }));
                         Err("Browser navigation deadline exceeded".to_string())
                     })
@@ -1606,6 +1610,8 @@ fi
         cmux_platform::filesystem::set_executable_permissions(&binary).unwrap();
         let mut browser = BrowserManager::new();
         browser.binary_path = Some(binary.clone());
+        // A short budget keeps the test fast: the 8s history command leaves 7s for the refresh.
+        browser.navigation_budget = std::time::Duration::from_secs(15);
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(20),
             browser.navigate_async("back".into(), Uuid::new_v4()),

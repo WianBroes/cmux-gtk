@@ -39,7 +39,8 @@ def main():
                 print("F21 read-screen lines:", [l for l in screen(first).splitlines() if "CMUX" in l], flush=True)
 
                 # F12: a terminal title (OSC 0) names the workspace that has no explicit name.
-                app.cli("send", "--surface", first, "printf '\\033]0;CMUX_TITLE_X\\007'\\n")
+                # The shell restores its own title at the next prompt, so keep it busy while the name is read.
+                app.cli("send", "--surface", first, "printf '\\033]0;CMUX_TITLE_X\\007'; sleep 30\\n")
                 names = lambda: [row["name"] for row in json.loads(app.cli("list-workspaces", "--json"))["workspaces"]]
                 app.wait_for(lambda: "CMUX_TITLE_X" in names(), "workspace named after the terminal title")
                 print("F12 workspace names:", names(), flush=True)
