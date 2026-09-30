@@ -8,6 +8,8 @@ on:
     paths:
       - tests/test_linux_real_browser_verbs.py
       - .github/workflows/browser-verbs.yml
+      - src/browser.rs
+      - src/socket/handlers.rs
 
 jobs:
   verbs:
