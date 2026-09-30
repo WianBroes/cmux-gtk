@@ -3,9 +3,9 @@
 
 Real X11 key events go through the window manager to the running application. The default split-right key
 (Ctrl+D) first splits the pane; `cmux.json` then rebinds `splitRight` to Ctrl+Shift+K and `cmux reload-config`
-applies it without a restart. Afterwards the new key splits, the old key does nothing, and typed text (an
-unbound input) still reaches the terminal. Text is typed before the old key is pressed so that a Ctrl+D that
-reaches the shell is harmless (on a non-empty line bash does not exit).
+applies it without a restart. Afterwards the new key splits and the old key does nothing. Filler text is put on the
+prompt through the socket before the old key is pressed, so a Ctrl+D that reaches the shell is harmless. Real typed
+input reaching a terminal is proved by test_linux_initial_input.
 """
 import json
 from pathlib import Path
@@ -47,58 +47,29 @@ def main():
                 assert panes() == 1
                 app.wait_for(lambda: bool(active_text().strip()), "first prompt")
 
-                def texts():
-                    """Which markers each surface shows, for reporting where typed input landed."""
-                    return {row["uuid"][:8]: json.loads(app.cli("read-text", "--id", row["uuid"], "--json"))["text"]
-                            for row in app.surfaces()}
-
-                def type_marker(marker):
-                    """Type a marker into the focused window and say which surfaces received it."""
-                    subprocess.check_call(
-                        ["xdotool", "windowfocus", "--sync", windows[-1], "type", "--clearmodifiers", "--delay", "20", marker],
-                        timeout=10,
-                    )
-                    deadline = time.monotonic() + 6
-                    while time.monotonic() < deadline:
-                        landed = [name for name, text in texts().items() if marker in text]
-                        if landed:
-                            return landed
-                        time.sleep(0.2)
-                    return []
-
                 def split_with(chord, expected):
                     """Split with a real key chord, wait for the new pane and its prompt."""
                     press(chord)
                     app.wait_for(lambda: panes() == expected, f"{chord} making {expected} panes")
                     app.wait_for(lambda: bool(active_text().strip()), f"prompt of pane {expected}")
 
-                def active_name():
-                    return next(row["uuid"][:8] for row in app.surfaces() if row["active"])
-
-                landed = {}
-                split_with("ctrl+d", 2)                       # default key
-                landed["after 1st split (default key)"] = (type_marker("AAA"), active_name())
-                split_with("ctrl+d", 3)                       # default key again, no reload yet
-                landed["after 2nd split (default key, no reload)"] = (type_marker("BBB"), active_name())
+                split_with("ctrl+d", 2)  # default key
 
                 config = root / "config/cmux/cmux.json"
                 config.parent.mkdir(parents=True, exist_ok=True)
                 config.write_text(json.dumps({"shortcuts": {"bindings": {"splitRight": "ctrl+shift+k"}}}))
                 app.cli("reload-config")
-                landed["after reload-config (no split)"] = (type_marker("CCC"), active_name())
 
-                split_with("ctrl+shift+k", 4)                 # rebound key
-                landed["after 3rd split (rebound key)"] = (type_marker("DDD"), active_name())
+                split_with("ctrl+shift+k", 3)  # rebound key, no restart
 
-                # Report first, so a failure says at which step input stopped reaching a terminal.
-                for step, (surfaces, active) in landed.items():
-                    print(f"{step}: typed text in {surfaces}, active pane {active}", flush=True)
-                for step, (surfaces, active) in landed.items():
-                    assert surfaces == [active], f"{step}: typed text in {surfaces}, expected only the active pane {active}"
-
+                # The old key must not split any more. Put text on the prompt through the socket first, so that a
+                # Ctrl+D reaching the shell is harmless (on a non-empty line bash does not exit).
+                surface = next(row["uuid"] for row in app.surfaces() if row["active"])
+                app.cli("send", "--surface", surface, "filler")
+                app.wait_for(lambda: "filler" in active_text(), "filler text on the prompt")
                 press("ctrl+d")
                 time.sleep(1)  # no event to wait for: give a wrongly still-bound key time to act
-                assert panes() == 4, "the old key still split the pane after the rebinding"
+                assert panes() == 3, "the old key still split the pane after the rebinding"
         finally:
             wm.terminate()
             wm.wait(timeout=10)

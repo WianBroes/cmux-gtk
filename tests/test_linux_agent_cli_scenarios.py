@@ -30,7 +30,12 @@ def main():
 
                 # F21: send expands \n, read-screen shows the executed output on its own line.
                 app.cli("send", "--surface", first, "echo CMUX_SEND_OK\\n")
-                app.wait_for(lambda: "CMUX_SEND_OK" in screen(first).splitlines(), "send then read-screen")
+                try:
+                    app.wait_for(lambda: "CMUX_SEND_OK" in screen(first).splitlines(), "send then read-screen")
+                except AssertionError as error:
+                    raw = screen(first)
+                    text = json.loads(app.cli("read-text", "--id", first, "--json"))["text"]
+                    raise AssertionError(f"send/read-screen: read-screen={raw!r} read-text={text!r}") from error
                 print("F21 read-screen lines:", [l for l in screen(first).splitlines() if "CMUX" in l], flush=True)
 
                 # F12: a terminal title (OSC 0) names the workspace that has no explicit name.
