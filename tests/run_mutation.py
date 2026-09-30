@@ -6,6 +6,7 @@ Usage: run_mutation.py <case id>. Exit 0 means the test caught the change (mutat
 2 means the mutation itself is invalid (stale search text or the broken code does not compile).
 """
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -15,7 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def main():
     """Apply the named mutation, rebuild, run the test under Xvfb and report kill or survival."""
-    case = next(row for row in json.loads((ROOT / "tests/mutation_cases.json").read_text()) if row["id"] == sys.argv[1])
+    case = next(row for row in json.loads((ROOT / os.environ.get("MUTATION_CASES", "tests/mutation_cases.json")).read_text()) if row["id"] == sys.argv[1])
     path = ROOT / case["file"]
     source = path.read_text()
     if source.count(case["old"]) != 1:

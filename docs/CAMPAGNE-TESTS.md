@@ -69,3 +69,13 @@ Légende : **prouvé** = un test de CI joue le scénario sur ton code et il éch
 1. Lot 1 : lire les résultats CI, ajouter l'étape CI et les cassages du banc de mutation.
 2. Lots 2 à 4 dans l'ordre. Les fonctions du navigateur (lot 3) demandent un vrai daemon agent-browser en version 0.38.1 ou plus.
 3. Balayage final des fichiers touchés par plusieurs fonctionnalités à la fois (`src/cli/mod.rs`, `src/socket/handlers.rs`…) : c'est là qu'une régression se cache le plus facilement.
+
+
+### Commandes navigateur (issues 2, 3, 5)
+
+| Commande | Statut |
+|---|---|
+| `browser geolocation` | défaut trouvé et corrigé (la page ne pouvait pas lire la position), prouvé avant/après en réel |
+| `browser offline`, `network route/unroute` | comportement vérifié en réel ; preuve par mutation en cours |
+| `browser trace`, `har` | ajoutés au scénario réel ; preuve par mutation en cours |
+| viewport, cookies, storage, addinitscript, addstyle, addscript, download, markdown, config, settings (issue 5) | audit pas encore fait |
