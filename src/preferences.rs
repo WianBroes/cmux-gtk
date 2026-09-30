@@ -366,8 +366,21 @@ fn page(notebook: &gtk4::Notebook, title: &str) -> gtk4::Box {
     content
 }
 
+thread_local! {
+    /// The live Preferences dialog, so a second request brings the open one forward.
+    static OPEN_PREFERENCES: std::cell::RefCell<Option<glib::WeakRef<gtk4::Dialog>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// Display the font-size editor and apply successful changes to live terminal surfaces.
+///
+/// One Preferences dialog exists at a time: when it is already open, a second request brings it
+/// forward instead of stacking another one (upstream shows a single settings window).
 pub fn show(parent: &gtk4::ApplicationWindow, state: &crate::app_state::AppStateRef) {
+    if let Some(open) = OPEN_PREFERENCES.with(|open| open.borrow().as_ref().and_then(|weak| weak.upgrade())) {
+        open.present();
+        return;
+    }
     let dialog = gtk4::Dialog::builder()
         .title("Preferences")
         .transient_for(parent)
@@ -483,6 +496,7 @@ pub fn show(parent: &gtk4::ApplicationWindow, state: &crate::app_state::AppState
             dialog.close();
         }
     });
+    OPEN_PREFERENCES.with(|open| *open.borrow_mut() = Some(dialog.downgrade()));
     dialog.present();
 }
 

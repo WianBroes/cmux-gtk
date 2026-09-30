@@ -342,6 +342,10 @@ jobs:
         if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_shortcut_effect.py
 
+      - name: Test the settings and shortcuts verbs open the Preferences window
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
+        run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_settings_window.py
+
       - name: Test Linux clipboard, keybinding and paste routing
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
         run: dbus-run-session -- xvfb-run -a env GDK_BACKEND=x11 LIBGL_ALWAYS_SOFTWARE=1 cargo test --bin cmux-app linux_clipboard_shortcuts_primary_and_surface_routing -- --ignored --test-threads=1
