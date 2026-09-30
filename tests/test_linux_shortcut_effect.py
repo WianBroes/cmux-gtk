@@ -64,7 +64,16 @@ def main():
                     ["xdotool", "windowfocus", "--sync", windows[-1], "type", "--clearmodifiers", "--delay", "1", "Q7Z"],
                     timeout=10,
                 )
-                app.wait_for(lambda: "Q7Z" in active_text(), "typed text reaching the terminal")
+                try:
+                    app.wait_for(lambda: "Q7Z" in active_text(), "typed text reaching the terminal")
+                except AssertionError as error:
+                    # Say where the text went: another pane means keyboard focus and the active surface differ.
+                    where = {
+                        row["uuid"][:8]: {"active": row["active"],
+                                          "has_text": "Q7Z" in json.loads(app.cli("read-text", "--id", row["uuid"], "--json"))["text"]}
+                        for row in app.surfaces()
+                    }
+                    raise AssertionError(f"typed text did not reach the active terminal; per surface: {where}") from error
 
                 press("ctrl+d")
                 time.sleep(1)  # no event to wait for: give a wrongly still-bound key time to act
