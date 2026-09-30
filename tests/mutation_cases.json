@@ -158,5 +158,13 @@
     "new": "                Tag::Heading { level, .. } => {\n                    let _ = write!(html, \"<p data-level={level}>\");",
     "test": "tests/test_linux_markdown_render.py",
     "claim": "a Markdown heading becomes an h1 on the page cmux markdown writes"
+  },
+  {
+    "id": "settings-window-action",
+    "file": "src/socket/handlers.rs",
+    "old": "window.activate_action(\"win.preferences\", None).is_ok()",
+    "new": "window.activate_action(\"win.preferences_disabled\", None).is_ok()",
+    "test": "tests/test_linux_settings_window.py",
+    "claim": "cmux settings and cmux shortcuts open the app's Preferences window"
   }
 ]

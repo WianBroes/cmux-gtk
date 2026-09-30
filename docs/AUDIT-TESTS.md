@@ -30,10 +30,11 @@ Scénarios : `tests/test_linux_real_browser_verbs.py` (banc `tests/browser_mutat
 | `config set --file` | seul le fichier nommé est écrit | oui (cassage `config-explicit-file`) | `config get --file` sans cassage dédié |
 | `config list-supported`, `config docs` | affichent leur contenu | non | contenu vérifié minimalement |
 | `markdown` | la page écrite porte le titre du fichier en `<h1>`, sa liste en `<li>`, un seul lien cliquable (le `javascript:` reste du texte), aucun `<script>` ; la même page est ensuite rendue dans un vrai Chromium, où le terminal garde le focus | oui (cassage `markdown-heading`) | titres de niveau 2 et suivants, tableaux, notes de bas de page non testés |
+| `settings` / `shortcuts` | les deux ouvrent **une seule** fenêtre Préférences (ce port n'a pas de page Raccourcis séparée), et la réponse de la commande dit `opened` | oui (cassage `settings-window-action`) | contenu des onglets non vérifié (ni lisible par le gestionnaire de fenêtres ni par AT-SPI : `GTK_A11Y=none`) |
 
 ## Pas encore audité
 
-`shortcuts`, `settings` (fenêtre Préférences : à vérifier sur ce qui est observable, il n'y a pas de page Raccourcis séparée dans ce port), `reload-config` en cas de fichier cassé (l'effet d'un raccourci changé puis rechargé est prouvé par `tests/test_linux_shortcut_effect.py`, mais pas ce que devient le raccourci déjà appliqué quand le fichier ne se relit plus).
+`reload-config` en cas de fichier cassé (l'effet d'un raccourci changé puis rechargé est prouvé par `tests/test_linux_shortcut_effect.py`, mais pas ce que devient le raccourci déjà appliqué quand le fichier ne se relit plus ; le comportement voulu doit être tranché).
 
 ## Défauts par gravité
 
