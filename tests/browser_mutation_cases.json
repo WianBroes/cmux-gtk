@@ -46,5 +46,69 @@
     "new": "json!({\"permissions\": [\"notifications\"]})",
     "test": "tests/test_linux_real_browser_verbs.py",
     "claim": "browser geolocation grants the page the geolocation permission so it can read the position"
+  },
+  {
+    "id": "verb-viewport",
+    "file": "src/browser.rs",
+    "old": "            \"viewport\"\n        }\n        // Dotted cookie",
+    "new": "            \"viewport_disabled\"\n        }\n        // Dotted cookie",
+    "test": "tests/test_linux_real_browser_verbs.py",
+    "claim": "browser viewport resizes the real page"
+  },
+  {
+    "id": "verb-cookies-set",
+    "file": "src/browser.rs",
+    "old": "        \"cookies.set\" => \"cookies_set\",",
+    "new": "        \"cookies.set\" => \"cookies_set_disabled\",",
+    "test": "tests/test_linux_real_browser_verbs.py",
+    "claim": "browser cookies set puts the cookie on the page"
+  },
+  {
+    "id": "verb-cookies-clear",
+    "file": "src/browser.rs",
+    "old": "        \"cookies.clear\" => \"cookies_clear\",",
+    "new": "        \"cookies.clear\" => \"cookies_clear_disabled\",",
+    "test": "tests/test_linux_real_browser_verbs.py",
+    "claim": "browser cookies clear removes the cookies"
+  },
+  {
+    "id": "verb-storage",
+    "file": "src/browser.rs",
+    "old": "            \"storage_get\"\n",
+    "new": "            \"storage_get_disabled\"\n",
+    "test": "tests/test_linux_real_browser_verbs.py",
+    "claim": "browser storage returns the page's web storage"
+  },
+  {
+    "id": "verb-addstyle",
+    "file": "src/browser.rs",
+    "old": "        \"addstyle\" => \"addstyle\",",
+    "new": "        \"addstyle\" => \"addstyle_disabled\",",
+    "test": "tests/test_linux_real_browser_verbs.py",
+    "claim": "browser addstyle changes the page style"
+  },
+  {
+    "id": "verb-addscript",
+    "file": "src/browser.rs",
+    "old": "        \"addscript\" => \"addscript\",",
+    "new": "        \"addscript\" => \"addscript_disabled\",",
+    "test": "tests/test_linux_real_browser_verbs.py",
+    "claim": "browser addscript runs a script in the page"
+  },
+  {
+    "id": "verb-addinitscript",
+    "file": "src/browser.rs",
+    "old": "        \"addinitscript\" => \"addinitscript\",",
+    "new": "        \"addinitscript\" => \"addinitscript_disabled\",",
+    "test": "tests/test_linux_real_browser_verbs.py",
+    "claim": "browser addinitscript runs before page scripts on navigation"
+  },
+  {
+    "id": "verb-download",
+    "file": "src/browser.rs",
+    "old": "        \"download\" => \"download\",",
+    "new": "        \"download\" => \"download_disabled\",",
+    "test": "tests/test_linux_real_browser_verbs.py",
+    "claim": "browser download saves the clicked download"
   }
 ]

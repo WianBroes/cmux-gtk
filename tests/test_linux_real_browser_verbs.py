@@ -10,13 +10,14 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import time
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from linux_app import running_app
 
-PAGE = b"<!doctype html><title>verbs</title><h1 id=x>verbs page</h1>"
+PAGE = b'<!doctype html><title>verbs</title><h1 id=x>verbs page</h1><a id=dl href="/file.txt" download>get</a>'
 DATA = b'{"who": "real-server"}'
 
 
@@ -24,8 +25,15 @@ class Handler(BaseHTTPRequestHandler):
     """Serve the page and one JSON endpoint, uncached so an offline or route change is never masked."""
 
     def do_GET(self):
-        body, kind = (PAGE, "text/html") if self.path.startswith("/page") else (DATA, "application/json")
+        if self.path.startswith("/file"):
+            body, kind = b"download-body", "text/plain"
+        elif self.path.startswith("/page"):
+            body, kind = PAGE, "text/html"
+        else:
+            body, kind = DATA, "application/json"
         self.send_response(200)
+        if self.path.startswith("/file"):
+            self.send_header("Content-Disposition", 'attachment; filename="file.txt"')
         self.send_header("Content-Type", kind)
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
@@ -125,6 +133,43 @@ def main():
             except (OSError, ValueError, KeyError) as error:
                 urls = [f"unreadable HAR: {error!r}"]
             check("har start/stop: valid HAR containing the request made", any(url.endswith("/data.json") for url in urls), urls[:5])
+
+            # Issue 5: emulation, cookies, storage, scripts, styles and downloads must change the real page.
+            verb("viewport", surface, "800", "600")
+            seen = page("innerWidth+'x'+innerHeight")
+            check("viewport: page sees the requested size", seen == "800x600", seen)
+
+            verb("cookies", surface, "set", "cmuxk", "cmuxv", "--url", base)
+            seen = page("document.cookie")
+            check("cookies set: page sees the cookie", seen and "cmuxk=cmuxv" in seen, seen)
+            got = verb("cookies", surface, "get")
+            check("cookies get: the cookie is listed", "cmuxk" in json.dumps(got), json.dumps(got)[:200])
+            verb("cookies", surface, "clear")
+            seen = page("document.cookie")
+            check("cookies clear: page has no cookie left", seen == "", seen)
+
+            page("localStorage.setItem('storek','storev'); 'set'")
+            got = verb("storage", surface, "local")
+            check("storage local: the stored key is returned", "storek" in json.dumps(got) and "storev" in json.dumps(got), json.dumps(got)[:200])
+
+            verb("addstyle", surface, "#x{color:rgb(1,2,3)}")
+            seen = page("getComputedStyle(document.getElementById('x')).color")
+            check("addstyle: the page style changes", seen == "rgb(1, 2, 3)", seen)
+
+            verb("addscript", surface, "window.__added = 42")
+            seen = page("String(window.__added)")
+            check("addscript: the script ran in the page", seen == "42", seen)
+
+            verb("addinitscript", surface, "window.__init = 'yes'")
+            page("setTimeout(()=>location.reload(),50); 'reloading'")
+            time.sleep(2)
+            seen = page("String(window.__init)")
+            check("addinitscript: runs before page scripts after a reload", seen == "yes", seen)
+
+            download_file = root / "downloaded.txt"
+            verb("download", surface, "#dl", str(download_file))
+            content = download_file.read_text() if download_file.exists() else None
+            check("download: the clicked link is saved to the file", content == "download-body", content)
     server.shutdown()
     failed = [name for name, ok, _ in results if not ok]
     print(f"\n{len(results) - len(failed)}/{len(results)} verb checks passed", flush=True)
