@@ -330,7 +330,7 @@ jobs:
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
         run: dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1200x24' python3 tests/test_linux_memory_churn.py
 
-      - name: Test configured shortcut takes effect in the main window after a live reload
+      - name: Test a rebound split shortcut takes effect in the main window after a live reload
         if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_shortcut_effect.py
 

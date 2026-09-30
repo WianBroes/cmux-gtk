@@ -101,6 +101,6 @@
     "old": "    *live.borrow_mut() = fresh;\n    true",
     "new": "    let _ = fresh;\n    true",
     "test": "tests/test_linux_shortcut_effect.py",
-    "claim": "a shortcut rebound in cmux.json takes effect in the main window after reload-config, and the old key stops working"
+    "claim": "a split shortcut rebound in cmux.json takes effect in the main window after reload-config, and the old key stops working"
   }
 ]
