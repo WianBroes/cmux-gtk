@@ -66,32 +66,39 @@ def main():
                         time.sleep(0.2)
                     return []
 
-                press("ctrl+d")
-                app.wait_for(lambda: panes() == 2, "default Ctrl+D splitting the pane")
-                app.wait_for(lambda: bool(active_text().strip()), "prompt of the second pane")
-                after_default_split = type_marker("AAA")
+                def split_with(chord, expected):
+                    """Split with a real key chord, wait for the new pane and its prompt."""
+                    press(chord)
+                    app.wait_for(lambda: panes() == expected, f"{chord} making {expected} panes")
+                    app.wait_for(lambda: bool(active_text().strip()), f"prompt of pane {expected}")
+
+                def active_name():
+                    return next(row["uuid"][:8] for row in app.surfaces() if row["active"])
+
+                landed = {}
+                split_with("ctrl+d", 2)                       # default key
+                landed["after 1st split (default key)"] = (type_marker("AAA"), active_name())
+                split_with("ctrl+d", 3)                       # default key again, no reload yet
+                landed["after 2nd split (default key, no reload)"] = (type_marker("BBB"), active_name())
 
                 config = root / "config/cmux/cmux.json"
                 config.parent.mkdir(parents=True, exist_ok=True)
                 config.write_text(json.dumps({"shortcuts": {"bindings": {"splitRight": "ctrl+shift+k"}}}))
                 app.cli("reload-config")
+                landed["after reload-config (no split)"] = (type_marker("CCC"), active_name())
 
-                press("ctrl+shift+k")
-                app.wait_for(lambda: panes() == 3, "rebound Ctrl+Shift+K splitting the pane")
-                app.wait_for(lambda: bool(active_text().strip()), "prompt of the third pane")
-                after_rebound_split = type_marker("BBB")
-                active = next(row["uuid"][:8] for row in app.surfaces() if row["active"])
+                split_with("ctrl+shift+k", 4)                 # rebound key
+                landed["after 3rd split (rebound key)"] = (type_marker("DDD"), active_name())
 
-                # Report before asserting, so a failure says where input went (empty = no terminal got it).
-                print(f"typed after default split -> {after_default_split}; after rebound split -> "
-                      f"{after_rebound_split}; active pane {active}", flush=True)
-                assert after_rebound_split == [active], (
-                    f"typed text did not reach only the active terminal: default split {after_default_split}, "
-                    f"rebound split {after_rebound_split}, active {active}")
+                # Report first, so a failure says at which step input stopped reaching a terminal.
+                for step, (surfaces, active) in landed.items():
+                    print(f"{step}: typed text in {surfaces}, active pane {active}", flush=True)
+                for step, (surfaces, active) in landed.items():
+                    assert surfaces == [active], f"{step}: typed text in {surfaces}, expected only the active pane {active}"
 
                 press("ctrl+d")
                 time.sleep(1)  # no event to wait for: give a wrongly still-bound key time to act
-                assert panes() == 3, "the old key still split the pane after the rebinding"
+                assert panes() == 4, "the old key still split the pane after the rebinding"
         finally:
             wm.terminate()
             wm.wait(timeout=10)
