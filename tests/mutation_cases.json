@@ -114,8 +114,8 @@
   {
     "id": "config-set-value",
     "file": "src/cli/mod.rs",
-    "old": "        let value = raw.map(|raw| parse_setting_value(raw));",
-    "new": "        let value = raw.map(|_| serde_json::Value::Null);",
+    "old": "    let value = raw.map(|raw| parse_setting_value(raw));",
+    "new": "    let value = raw.map(|_| serde_json::Value::Null);",
     "test": "tests/test_linux_config_cli.py",
     "claim": "cmux config set writes the requested value to the file"
   },
