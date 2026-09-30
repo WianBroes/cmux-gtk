@@ -317,6 +317,10 @@ jobs:
         if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_nested_split_routing.py
 
+      - name: Test socket reference handles and identity shaping
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
+        run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_agent_handles.py
+
       - name: Test prompt diagnostic against GTK
         if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_prompt_probe.py
