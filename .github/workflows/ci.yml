@@ -429,6 +429,11 @@ jobs:
         timeout-minutes: 5
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_real_project_view.py
 
+      - name: Test real browser markdown surface DOM
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
+        timeout-minutes: 5
+        run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_real_markdown_view.py
+
       - name: Verify remote browser resources through isolated SSH namespaces
         if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         timeout-minutes: 5

@@ -134,5 +134,21 @@
     "new": "        let found = settings_json::get(&value, \"no.such.key\").ok_or_else(|| {",
     "test": "tests/test_linux_config_cli.py",
     "claim": "cmux config get reads the value at the requested path"
+  },
+  {
+    "id": "config-path-location",
+    "file": "src/cli/mod.rs",
+    "old": "            let path = config_file(None, None)?;",
+    "new": "            let path = std::path::PathBuf::from(\"/tmp/cmux.json\");",
+    "test": "tests/test_linux_config_cli.py",
+    "claim": "cmux config path prints the global cmux.json under the configured home"
+  },
+  {
+    "id": "config-explicit-file",
+    "file": "src/cli/mod.rs",
+    "old": "    if let Some(path) = file {\n        return Ok(path.to_path_buf());\n    }",
+    "new": "    if let Some(path) = file {\n        let _ = path;\n    }",
+    "test": "tests/test_linux_config_cli.py",
+    "claim": "an explicit --file selects that file for cmux config set and validate"
   }
 ]

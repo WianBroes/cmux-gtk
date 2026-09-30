@@ -110,5 +110,21 @@
     "new": "        \"download\" => \"download_disabled\",",
     "test": "tests/test_linux_real_browser_verbs.py",
     "claim": "browser download saves the clicked download"
+  },
+  {
+    "id": "verb-cookies-get",
+    "file": "src/browser.rs",
+    "old": "        \"cookies.get\" => \"cookies_get\",",
+    "new": "        \"cookies.get\" => \"cookies_get_absent\",",
+    "test": "tests/test_linux_real_browser_verbs.py",
+    "claim": "browser cookies get lists the cookie the page set"
+  },
+  {
+    "id": "markdown-heading",
+    "file": "src/cli/markdown.rs",
+    "old": "                Tag::Heading { level, .. } => {\n                    let _ = write!(html, \"<{level}>\");",
+    "new": "                Tag::Heading { level, .. } => {\n                    let _ = write!(html, \"<p data-level={level}>\");",
+    "test": "tests/test_linux_real_markdown_view.py",
+    "claim": "cmux markdown renders the file's heading as an h1 on the page"
   }
 ]
