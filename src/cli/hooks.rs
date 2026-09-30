@@ -2329,8 +2329,8 @@ mod tests {
         assert!(line.ends_with('…'));
         assert_eq!(summary_line("  short  reply ", 200), "short reply");
         assert_eq!(
-            completed_subtitle(&json!({"cwd": "/home/raw/Documents/Continuum/"})),
-            "Completed in Continuum"
+            completed_subtitle(&json!({"cwd": "/home/developer/projects/demo/"})),
+            "Completed in demo"
         );
         assert_eq!(completed_subtitle(&json!({})), "Completed");
     }
