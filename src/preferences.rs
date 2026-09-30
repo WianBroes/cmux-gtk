@@ -377,7 +377,12 @@ thread_local! {
 /// One Preferences dialog exists at a time: when it is already open, a second request brings it
 /// forward instead of stacking another one (upstream shows a single settings window).
 pub fn show(parent: &gtk4::ApplicationWindow, state: &crate::app_state::AppStateRef) {
-    if let Some(open) = OPEN_PREFERENCES.with(|open| open.borrow().as_ref().and_then(|weak| weak.upgrade())) {
+    // A closed dialog can outlive its window (its own buttons hold a strong reference), so only a
+    // still-visible one is brought forward; presenting a closed modal dialog freezes the UI.
+    if let Some(open) = OPEN_PREFERENCES
+        .with(|open| open.borrow().as_ref().and_then(|weak| weak.upgrade()))
+        .filter(|open| open.is_visible())
+    {
         open.present();
         return;
     }
