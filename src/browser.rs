@@ -338,10 +338,10 @@ impl BrowserManager {
             tokio::select! {
                 biased;
                 _ = shutdown.changed() => Err("Browser manager stopped".to_string().into()),
-                result = tokio::time::timeout(std::time::Duration::from_secs(15), prepare) => {
+                result = tokio::time::timeout(std::time::Duration::from_secs(30), prepare) => {
                     result.unwrap_or_else(|_| {
                         crate::diagnostics::record("browser.preview.startup.timeout", serde_json::json!({
-                            "trace_id": trace_id, "budget_ms": 15_000,
+                            "trace_id": trace_id, "budget_ms": 30_000,
                         }));
                         Err("Browser preview startup deadline exceeded".to_string().into())
                     })
@@ -477,11 +477,11 @@ impl BrowserManager {
             tokio::select! {
                 biased;
                 _ = shutdown.changed() => Err(cancelled()),
-                result = tokio::time::timeout(std::time::Duration::from_secs(15), operation) => {
+                result = tokio::time::timeout(std::time::Duration::from_secs(30), operation) => {
                     result.unwrap_or_else(|_| {
                         crate::diagnostics::record("browser.navigation.timeout", serde_json::json!({
                             "trace_id": trace_id,
-                            "budget_ms": 15_000,
+                            "budget_ms": 30_000,
                         }));
                         Err("Browser navigation deadline exceeded".to_string())
                     })
