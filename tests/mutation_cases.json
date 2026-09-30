@@ -102,5 +102,37 @@
     "new": "    let _ = fresh;\n    true",
     "test": "tests/test_linux_shortcut_effect.py",
     "claim": "a split shortcut rebound in cmux.json takes effect in the main window after reload-config, and the old key stops working"
+  },
+  {
+    "id": "config-validate-exit",
+    "file": "src/cli/mod.rs",
+    "old": "            if errors > 0 {\n                return Err(CliError::Command(format!(\n                    \"cmux config validate found",
+    "new": "            if errors > 999 {\n                return Err(CliError::Command(format!(\n                    \"cmux config validate found",
+    "test": "tests/test_linux_config_cli.py",
+    "claim": "cmux config validate exits non-zero when the file has errors"
+  },
+  {
+    "id": "config-set-value",
+    "file": "src/cli/mod.rs",
+    "old": "    let value = raw.map(|raw| parse_setting_value(raw));",
+    "new": "    let value = raw.map(|_| serde_json::Value::Null);",
+    "test": "tests/test_linux_config_cli.py",
+    "claim": "cmux config set writes the requested value to the file"
+  },
+  {
+    "id": "config-unset-noop",
+    "file": "src/cli/mod.rs",
+    "old": "        } => write_config(key, None, file.as_deref(), scope.map(Into::into)),",
+    "new": "        } => Ok(()),",
+    "test": "tests/test_linux_config_cli.py",
+    "claim": "cmux config unset removes the value from the file"
+  },
+  {
+    "id": "config-get-key",
+    "file": "src/cli/mod.rs",
+    "old": "        let found = settings_json::get(&value, key).ok_or_else(|| {",
+    "new": "        let found = settings_json::get(&value, \"no.such.key\").ok_or_else(|| {",
+    "test": "tests/test_linux_config_cli.py",
+    "claim": "cmux config get reads the value at the requested path"
   }
 ]

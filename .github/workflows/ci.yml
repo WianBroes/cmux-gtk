@@ -130,6 +130,10 @@ jobs:
         if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_cli_sigpipe_ignore.py
 
+      - name: Test cmux config verbs against the real binary and files
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
+        run: python3 tests/test_linux_config_cli.py
+
       - name: Test Linux socket access boundaries
         if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_socket_access.py
