@@ -58,6 +58,8 @@ def main():
                 second = windows(app, "Preferences")
                 check("cmux shortcuts leaves exactly one Preferences window, not a second", len(second) == 1,
                       f"before {first} after {second}")
+                check("cmux shortcuts brings the open window forward instead of replacing it", second == first,
+                      f"before {first} after {second}")
         finally:
             wm.terminate()
             wm.wait(timeout=10)

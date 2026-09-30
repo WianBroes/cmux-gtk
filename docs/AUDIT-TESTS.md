@@ -30,7 +30,7 @@ Scénarios : `tests/test_linux_real_browser_verbs.py` (banc `tests/browser_mutat
 | `config set --file` | seul le fichier nommé est écrit | oui (cassage `config-explicit-file`) | `config get --file` sans cassage dédié |
 | `config list-supported`, `config docs` | affichent leur contenu | non | contenu vérifié minimalement |
 | `markdown` | la page écrite porte le titre du fichier en `<h1>`, sa liste en `<li>`, un seul lien cliquable (le `javascript:` reste du texte), aucun `<script>` ; la même page est ensuite rendue dans un vrai Chromium, où le terminal garde le focus | oui (cassage `markdown-heading`) | titres de niveau 2 et suivants, tableaux, notes de bas de page non testés |
-| `settings` / `shortcuts` | les deux ouvrent **une seule** fenêtre Préférences (ce port n'a pas de page Raccourcis séparée), et la réponse de la commande dit `opened` | oui (cassage `settings-window-action`) | contenu des onglets non vérifié (ni lisible par le gestionnaire de fenêtres ni par AT-SPI : `GTK_A11Y=none`) |
+| `settings` / `shortcuts` | les deux ouvrent **une seule** fenêtre Préférences (ce port n'a pas de page Raccourcis séparée) : la deuxième commande ramène la fenêtre déjà ouverte au premier plan, et la réponse de la commande dit `opened` ; **défaut trouvé et corrigé** (la deuxième commande empilait une seconde fenêtre) | oui (cassage `settings-window-action`) | contenu des onglets non vérifié (ni lisible par le gestionnaire de fenêtres ni par AT-SPI : `GTK_A11Y=none`) |
 
 ## Pas encore audité
 
@@ -39,5 +39,6 @@ Scénarios : `tests/test_linux_real_browser_verbs.py` (banc `tests/browser_mutat
 ## Défauts par gravité
 
 1. **Corrigé** : `browser geolocation` répondait « succès » alors que la page ne pouvait pas lire la position.
-2. Aucun autre défaut de produit trouvé sur les commandes auditées ci-dessus.
-3. **Ouvert, à trancher** : `cmux.json` invalide. D'après la lecture du code (non vérifié en CI), au rechargement le fichier illisible est signalé sur la sortie d'erreur puis ignoré, donc la carte des raccourcis est reconstruite **sans** lui : un raccourci posé par `cmux.json` reviendrait à sa valeur par défaut au lieu de rester tel quel. Comportement voulu à confirmer (voir `docs/REPRISE.md`, T1).
+2. **Corrigé** : demander les Préférences deux fois (`cmux settings` puis `cmux shortcuts`, ou `Ctrl+,`) empilait une deuxième fenêtre Préférences au lieu de ramener celle déjà ouverte. `src/preferences.rs` garde maintenant la fenêtre vivante et la remet au premier plan.
+3. Aucun autre défaut de produit trouvé sur les commandes auditées ci-dessus.
+4. **Ouvert, à trancher** : `cmux.json` invalide. D'après la lecture du code (non vérifié en CI), au rechargement le fichier illisible est signalé sur la sortie d'erreur puis ignoré, donc la carte des raccourcis est reconstruite **sans** lui : un raccourci posé par `cmux.json` reviendrait à sa valeur par défaut au lieu de rester tel quel. Comportement voulu à confirmer (voir `docs/REPRISE.md`, T1).
