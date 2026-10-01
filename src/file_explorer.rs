@@ -285,6 +285,10 @@ fn visible_rows<'a>(nodes: &'a [Node], filter: &str) -> Vec<(String, &'a Node)> 
 struct ExplorerState {
     /// The applied root; `None` until the first `apply_root`.
     root: RefCell<Option<Root>>,
+    /// Root resolved from the workspace (what the tree follows by default).
+    followed: RefCell<Option<Root>>,
+    /// Directory the user climbed to, overriding `followed` until it changes.
+    pinned: RefCell<Option<PathBuf>>,
     /// Loaded nodes of the applied root.
     nodes: RefCell<Vec<Node>>,
     /// Selected row, kept across rebuilds so filtering can restore the cursor.
@@ -293,11 +297,33 @@ struct ExplorerState {
     filter: RefCell<String>,
 }
 
+/// Navigation above the workspace directory: the tree follows `incoming` (the
+/// workspace's current directory) until the user climbs elsewhere (`pinned`); a change
+/// of the followed root drops the pin, so the tree moves again with the work.
+/// Returns the root to display.
+fn follow_or_pinned(
+    followed: &mut Option<Root>,
+    pinned: &mut Option<PathBuf>,
+    incoming: &Root,
+) -> Root {
+    if followed.as_ref() != Some(incoming) {
+        *followed = Some(incoming.clone());
+        *pinned = None;
+    }
+    pinned
+        .as_ref()
+        .map_or_else(|| incoming.clone(), |path| Root::Local(path.clone()))
+}
+
 /// The Files panel: root path header, lazy file tree, status label.
+#[derive(Clone)]
 pub struct FileExplorer {
     /// Outer widget placed in the right sidebar's content stack.
     root: gtk4::Box,
     header: gtk4::Label,
+    header_row: gtk4::Box,
+    up_button: gtk4::Button,
+    reset_button: gtk4::Button,
     filter_entry: gtk4::SearchEntry,
     tree: gtk4::TreeView,
     scrolled: gtk4::ScrolledWindow,
@@ -371,6 +397,8 @@ impl FileExplorer {
 
         let state = Rc::new(ExplorerState {
             root: RefCell::new(None),
+            followed: RefCell::new(None),
+            pinned: RefCell::new(None),
             nodes: RefCell::new(Vec::new()),
             selected: RefCell::new(None),
             filter: RefCell::new(String::new()),
@@ -378,7 +406,18 @@ impl FileExplorer {
 
         let root_widget = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
         root_widget.add_css_class("file-explorer");
-        root_widget.append(&header);
+        let up_button = gtk4::Button::from_icon_name("go-up-symbolic");
+        up_button.add_css_class("flat");
+        up_button.set_tooltip_text(Some("Dossier parent"));
+        let reset_button = gtk4::Button::from_icon_name("go-jump-symbolic");
+        reset_button.add_css_class("flat");
+        reset_button.set_tooltip_text(Some("Revenir au dossier du workspace"));
+        header.set_hexpand(true);
+        let header_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+        header_row.append(&up_button);
+        header_row.append(&header);
+        header_row.append(&reset_button);
+        root_widget.append(&header_row);
         root_widget.append(&filter_entry);
         root_widget.append(&scrolled);
         root_widget.append(&status);
@@ -386,6 +425,9 @@ impl FileExplorer {
         let explorer = FileExplorer {
             root: root_widget,
             header,
+            header_row,
+            up_button,
+            reset_button,
             filter_entry,
             tree: tree.clone(),
             scrolled,
@@ -398,7 +440,48 @@ impl FileExplorer {
         explorer.connect_filter();
         explorer.connect_keys();
         explorer.connect_drag();
+        explorer.connect_navigation();
         explorer
+    }
+
+    /// Climb to the parent folder (outside the workspace if need be) or go back to
+    /// the workspace's own folder.
+    fn connect_navigation(&self) {
+        self.up_button.connect_clicked({
+            let explorer = self.clone();
+            move |_| {
+                let current = explorer.state.root.borrow().clone();
+                let Some(Root::Local(path)) = current else {
+                    return;
+                };
+                if let Some(parent) = path.parent() {
+                    *explorer.state.pinned.borrow_mut() = Some(parent.to_path_buf());
+                    explorer.show_root(Root::Local(parent.to_path_buf()));
+                    explorer.update_navigation();
+                }
+            }
+        });
+        self.reset_button.connect_clicked({
+            let explorer = self.clone();
+            move |_| {
+                *explorer.state.pinned.borrow_mut() = None;
+                let followed = explorer.state.followed.borrow().clone();
+                if let Some(root) = followed {
+                    explorer.show_root(root);
+                }
+                explorer.update_navigation();
+            }
+        });
+    }
+
+    fn update_navigation(&self) {
+        let has_parent = matches!(
+            self.state.root.borrow().as_ref(),
+            Some(Root::Local(path)) if path.parent().is_some()
+        );
+        self.up_button.set_sensitive(has_parent);
+        self.reset_button
+            .set_visible(self.state.pinned.borrow().is_some());
     }
 
     /// Wire expansion, collapse and selection tracking.
@@ -684,7 +767,18 @@ impl FileExplorer {
     }
 
     /// Point the panel at a workspace root; unchanged roots keep their tree as it is.
+    /// A folder the user climbed to stays until the workspace's directory changes.
     pub fn apply_root(&self, root: Root) {
+        let shown = {
+            let mut followed = self.state.followed.borrow_mut();
+            let mut pinned = self.state.pinned.borrow_mut();
+            follow_or_pinned(&mut followed, &mut pinned, &root)
+        };
+        self.show_root(shown);
+        self.update_navigation();
+    }
+
+    fn show_root(&self, root: Root) {
         if self.state.root.borrow().as_ref() == Some(&root) {
             if let Root::Local(path) = &root {
                 self.refresh_contents(path);
@@ -710,7 +804,7 @@ impl FileExplorer {
                     Ok(nodes) => {
                         *self.state.nodes.borrow_mut() = nodes;
                         self.status.hide();
-                        self.header.show();
+                        self.header_row.show();
                         self.scrolled.show();
                         rebuild(&self.store, &self.tree, &self.state);
                     }
@@ -737,7 +831,7 @@ impl FileExplorer {
                 *self.state.selected.borrow_mut() = None;
                 self.store.clear();
                 self.scrolled.hide();
-                self.header.hide();
+                self.header_row.hide();
                 self.status.set_text(message);
                 self.status.show();
             }
@@ -1001,6 +1095,22 @@ mod tests {
     }
 
     /// The header shortens the home directory and leaves other paths alone.
+    #[test]
+    fn climbing_sticks_until_the_workspace_directory_changes() {
+        let a = Root::Local("/w/a".into());
+        let b = Root::Local("/w/b".into());
+        let (mut followed, mut pinned) = (None, None);
+        assert_eq!(follow_or_pinned(&mut followed, &mut pinned, &a), a);
+        // The user climbs above the workspace: the next ticks keep that folder.
+        pinned = Some("/w".into());
+        let up = Root::Local("/w".into());
+        assert_eq!(follow_or_pinned(&mut followed, &mut pinned, &a), up);
+        assert_eq!(follow_or_pinned(&mut followed, &mut pinned, &a), up);
+        // The agent moves elsewhere: the tree follows again.
+        assert_eq!(follow_or_pinned(&mut followed, &mut pinned, &b), b);
+        assert_eq!(pinned, None);
+    }
+
     #[test]
     fn display_path_shrinks_home() {
         let home = Path::new("/home/wian");
