@@ -39,6 +39,9 @@ const REMOTE_MESSAGE: &str = "Non disponible — workspace distant (SSH)";
 /// Shown when the workspace has no current directory to list.
 const NO_DIRECTORY_MESSAGE: &str = "Aucun dossier courant pour ce workspace";
 
+/// Types a string into the focused terminal.
+type InsertHandler = Rc<dyn Fn(&str)>;
+
 /// What the tree shows for one workspace.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Root {
@@ -292,7 +295,7 @@ struct ExplorerState {
     /// Workspace the tree was last applied for; a switch drops `pinned`.
     workspace: RefCell<Option<u64>>,
     /// Types text into the focused terminal (set by the app; "Insert Path").
-    insert: RefCell<Option<Rc<dyn Fn(&str)>>>,
+    insert: RefCell<Option<InsertHandler>>,
     /// Loaded nodes of the applied root.
     nodes: RefCell<Vec<Node>>,
     /// Selected row, kept across rebuilds so filtering can restore the cursor.
@@ -504,7 +507,7 @@ impl FileExplorer {
             glib::idle_add_local_once(move || popover.unparent());
         });
         let list = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-        let mut add = |label: &str, action: Box<dyn Fn()>| {
+        let add = |label: &str, action: Box<dyn Fn()>| {
             let button = gtk4::Button::with_label(label);
             button.add_css_class("flat");
             if let Some(child) = button.child().and_downcast::<gtk4::Label>() {
