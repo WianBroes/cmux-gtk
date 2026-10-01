@@ -62,6 +62,24 @@ pub struct Inbox {
 }
 
 impl Inbox {
+    /// Drop every message of a closed workspace; returns the removed records.
+    pub fn purge_workspace(&mut self, workspace: Uuid) -> Vec<Record> {
+        let (removed, kept) = std::mem::take(&mut self.records)
+            .into_iter()
+            .partition(|record| record.workspace_id == workspace);
+        self.records = kept;
+        removed
+    }
+
+    /// Drop messages whose terminal no longer exists in `live`; workspace-only messages stay.
+    pub fn purge_dead_surfaces(&mut self, live: &std::collections::HashSet<Uuid>) -> Vec<Record> {
+        let (kept, removed) = std::mem::take(&mut self.records)
+            .into_iter()
+            .partition(|record| record.surface_id.is_none_or(|id| live.contains(&id)));
+        self.records = kept;
+        removed
+    }
+
     /// Validate restored content and enforce the same retained-memory bounds as live delivery.
     pub fn validated(mut self) -> Self {
         self.records
@@ -281,6 +299,47 @@ pub fn parse(method: &str, params: &Value) -> Result<Action, &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn record(workspace: Uuid, surface: Option<Uuid>) -> Record {
+        Record {
+            id: Uuid::new_v4(),
+            workspace_id: workspace,
+            surface_id: surface,
+            content: Content::default(),
+            created_at: "now".into(),
+            is_read: false,
+        }
+    }
+
+    /// Closing a terminal drops its messages only (upstream macOS clears them on close);
+    /// workspace-only messages and other terminals' messages stay.
+    #[test]
+    fn closed_surface_messages_are_purged() {
+        let (ws, alive, dead) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let mut inbox = Inbox::default();
+        inbox.push(record(ws, Some(alive)));
+        inbox.push(record(ws, Some(dead)));
+        inbox.push(record(ws, None));
+        let removed = inbox.purge_dead_surfaces(&[alive].into_iter().collect());
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].surface_id, Some(dead));
+        assert_eq!(inbox.records.len(), 2);
+        assert!(inbox.records.iter().all(|r| r.surface_id != Some(dead)));
+    }
+
+    /// Closing a workspace drops all its messages, terminal-bound or not, and no other's.
+    #[test]
+    fn closed_workspace_messages_are_purged() {
+        let (gone, kept) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut inbox = Inbox::default();
+        inbox.push(record(gone, Some(Uuid::new_v4())));
+        inbox.push(record(gone, None));
+        inbox.push(record(kept, Some(Uuid::new_v4())));
+        let removed = inbox.purge_workspace(gone);
+        assert_eq!(removed.len(), 2);
+        assert_eq!(inbox.records.len(), 1);
+        assert_eq!(inbox.records[0].workspace_id, kept);
+    }
 
     /// Repeated large deliveries evict history and malformed selectors fail before GTK admission.
     #[test]

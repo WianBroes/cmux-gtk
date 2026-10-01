@@ -701,6 +701,7 @@ impl AppState {
 
         let workspace = self.workspaces.remove(index);
         self.workspace_bridges.remove(&workspace.id);
+        crate::inbox_actions::purge_workspace(self, workspace.uuid);
         crate::events::publish(
             "workspace.closed",
             "workspace.lifecycle",
@@ -1566,6 +1567,7 @@ impl AppState {
         };
         let result = self.split_engines[index].close_surface_and_empty_pane(id);
         if matches!(result, CloseSurfaceResult::Closed) {
+            crate::inbox_actions::purge_closed_surfaces(self);
             self.shutdown_browser_surface(id);
             self.trigger_session_save();
         }
@@ -1659,6 +1661,12 @@ impl AppState {
         }
         let source_workspace = self.workspaces[source_index].uuid;
         let detached = self.split_engines[source_index].detach_surface(id)?;
+        // Re-home its messages before closing an emptied source workspace, which purges that workspace's messages.
+        for record in &mut self.inbox.records {
+            if record.surface_id == Some(id) {
+                record.workspace_id = destination_workspace;
+            }
+        }
         let source_pane = detached.source_pane;
         let source_position = detached.position;
 
@@ -1676,11 +1684,6 @@ impl AppState {
             position,
             focus,
         );
-        for record in &mut self.inbox.records {
-            if record.surface_id == Some(id) {
-                record.workspace_id = destination_workspace;
-            }
-        }
         let route_restarted = self.rebind_browser_route(id, destination_workspace);
         if focus {
             self.switch_to_index(destination_index);

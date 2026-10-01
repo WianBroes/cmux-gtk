@@ -340,7 +340,9 @@ pub fn handle_close_pane(state: &Rc<RefCell<AppState>>, app: &gtk4::Application)
     let close_workspace = {
         let mut s = state.borrow_mut();
         if let Some(engine) = s.active_split_engine_mut() {
-            engine.close_active().is_none() // Last pane: close the workspace.
+            let last = engine.close_active().is_none(); // Last pane: close the workspace.
+            crate::inbox_actions::purge_closed_surfaces(&mut s);
+            last
         } else {
             false
         }
@@ -366,6 +368,7 @@ pub fn handle_close_surface_tab(
     ));
     match result {
         Some(crate::split_engine::CloseSurfaceResult::Closed) => {
+            crate::inbox_actions::purge_closed_surfaces(&mut state.borrow_mut());
             state.borrow().trigger_session_save();
         }
         Some(crate::split_engine::CloseSurfaceResult::LastSurfaceInPane) => {

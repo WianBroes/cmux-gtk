@@ -750,6 +750,7 @@ fn build_ui(
                             {
                                 s.close_workspace(index);
                             }
+                            crate::inbox_actions::purge_closed_surfaces(&mut s);
                             s.trigger_session_save();
                         }
                     }

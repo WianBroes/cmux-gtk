@@ -229,6 +229,39 @@ fn open(state: &mut AppState, id: Uuid) -> Result<Value, Error> {
     Ok(result)
 }
 
+/// Announce purged records, then reconcile badge and rings (upstream clears on close).
+fn purged(state: &AppState, removed: Vec<Record>) {
+    for record in &removed {
+        publish(
+            "notification.removed",
+            Some(record.workspace_id),
+            record.surface_id,
+            json!({"notification_id": record.id}),
+        );
+    }
+    if !removed.is_empty() {
+        refresh(state);
+    }
+}
+
+/// Drop the messages of a workspace that was just closed.
+pub fn purge_workspace(state: &mut AppState, workspace: Uuid) {
+    let removed = state.inbox.purge_workspace(workspace);
+    purged(state, removed);
+}
+
+/// Drop the messages of terminals that no longer exist; call after any tab or pane closure.
+pub fn purge_closed_surfaces(state: &mut AppState) {
+    let live: std::collections::HashSet<Uuid> = state
+        .split_engines
+        .iter()
+        .flat_map(|engine| engine.pane_info())
+        .flat_map(|pane| pane.surface_ids)
+        .collect();
+    let removed = state.inbox.purge_dead_surfaces(&live);
+    purged(state, removed);
+}
+
 /// Reconcile unread rings and sidebar dots without disturbing independent terminal BEL attention.
 pub fn refresh(state: &AppState) {
     if let Some(badge) = &state.notifications_badge {
