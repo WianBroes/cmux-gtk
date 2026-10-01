@@ -72,8 +72,8 @@ impl RightSidebar {
     }
 
     /// Point the Files tree at the resolved root of the focused workspace.
-    pub fn show_root(&self, root: crate::file_explorer::Root) {
-        self.explorer.apply_root(root);
+    pub fn show_root(&self, workspace: Option<u64>, root: crate::file_explorer::Root) {
+        self.explorer.apply_root(workspace, root);
     }
 
     /// Move widget focus into the Files tree (upstream ⌘⇧E entering the panel).

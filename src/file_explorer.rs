@@ -289,6 +289,8 @@ struct ExplorerState {
     followed: RefCell<Option<Root>>,
     /// Directory the user climbed to, overriding `followed` until it changes.
     pinned: RefCell<Option<PathBuf>>,
+    /// Workspace the tree was last applied for; a switch drops `pinned`.
+    workspace: RefCell<Option<u64>>,
     /// Loaded nodes of the applied root.
     nodes: RefCell<Vec<Node>>,
     /// Selected row, kept across rebuilds so filtering can restore the cursor.
@@ -399,6 +401,7 @@ impl FileExplorer {
             root: RefCell::new(None),
             followed: RefCell::new(None),
             pinned: RefCell::new(None),
+            workspace: RefCell::new(None),
             nodes: RefCell::new(Vec::new()),
             selected: RefCell::new(None),
             filter: RefCell::new(String::new()),
@@ -768,7 +771,10 @@ impl FileExplorer {
 
     /// Point the panel at a workspace root; unchanged roots keep their tree as it is.
     /// A folder the user climbed to stays until the workspace's directory changes.
-    pub fn apply_root(&self, root: Root) {
+    pub fn apply_root(&self, workspace: Option<u64>, root: Root) {
+        if self.state.workspace.replace(workspace) != workspace {
+            *self.state.pinned.borrow_mut() = None;
+        }
         let shown = {
             let mut followed = self.state.followed.borrow_mut();
             let mut pinned = self.state.pinned.borrow_mut();

@@ -135,7 +135,10 @@ impl AppState {
         let workspace = self.workspaces.get(index);
         let is_remote = workspace.is_some_and(|workspace| workspace.remote_target.is_some());
         let directory = self.local_workspace_directory(index);
-        sidebar.show_root(crate::file_explorer::resolve_root(is_remote, directory));
+        sidebar.show_root(
+            workspace.map(|workspace| workspace.id),
+            crate::file_explorer::resolve_root(is_remote, directory),
+        );
     }
 
     /// Create a new AppState. Does NOT create the first workspace — caller must call
