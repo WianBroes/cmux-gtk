@@ -76,6 +76,11 @@ impl RightSidebar {
         self.explorer.apply_root(workspace, root);
     }
 
+    /// Give the Files tree a way to type into the focused terminal.
+    pub fn set_insert_handler(&self, handler: std::rc::Rc<dyn Fn(&str)>) {
+        self.explorer.set_insert_handler(handler);
+    }
+
     /// Move widget focus into the Files tree (upstream ⌘⇧E entering the panel).
     pub fn focus_tree(&self) {
         self.explorer.focus_tree();

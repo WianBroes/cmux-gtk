@@ -435,6 +435,26 @@ fn build_ui(
         app.clone(),
     );
     // The right sidebar is driven from shortcuts, the menu and the socket through AppState.
+    {
+        let weak = std::rc::Rc::downgrade(&state);
+        right_sidebar.set_insert_handler(std::rc::Rc::new(move |text: &str| {
+            let Some(state) = weak.upgrade() else { return };
+            let s = state.borrow();
+            let Some(engine) = s.split_engines.get(s.active_index) else {
+                return;
+            };
+            let Some(pane_id) = engine.root.find_active_pane_id() else {
+                return;
+            };
+            let Some(surface) = engine.root.find_surface_for_pane(pane_id) else {
+                return;
+            };
+            if !surface.is_null() {
+                // SAFETY: GTK main thread, surface read from the live model just above.
+                let _ = unsafe { crate::ghostty::text::send_literal(surface, text) };
+            }
+        }));
+    }
     state.borrow_mut().right_sidebar = Some(right_sidebar);
 
     // Wire sidebar click-to-switch.

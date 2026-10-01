@@ -291,6 +291,8 @@ struct ExplorerState {
     pinned: RefCell<Option<PathBuf>>,
     /// Workspace the tree was last applied for; a switch drops `pinned`.
     workspace: RefCell<Option<u64>>,
+    /// Types text into the focused terminal (set by the app; "Insert Path").
+    insert: RefCell<Option<Rc<dyn Fn(&str)>>>,
     /// Loaded nodes of the applied root.
     nodes: RefCell<Vec<Node>>,
     /// Selected row, kept across rebuilds so filtering can restore the cursor.
@@ -402,6 +404,7 @@ impl FileExplorer {
             followed: RefCell::new(None),
             pinned: RefCell::new(None),
             workspace: RefCell::new(None),
+            insert: RefCell::new(None),
             nodes: RefCell::new(Vec::new()),
             selected: RefCell::new(None),
             filter: RefCell::new(String::new()),
@@ -444,7 +447,117 @@ impl FileExplorer {
         explorer.connect_keys();
         explorer.connect_drag();
         explorer.connect_navigation();
+        explorer.connect_context_menu();
         explorer
+    }
+
+    /// Let the panel type into the focused terminal (context menu "Insérer le chemin").
+    pub fn set_insert_handler(&self, handler: Rc<dyn Fn(&str)>) {
+        *self.state.insert.borrow_mut() = Some(handler);
+    }
+
+    /// Right-click menu, the upstream list: open, reveal, insert and copy paths.
+    fn connect_context_menu(&self) {
+        let click = gtk4::GestureClick::new();
+        click.set_button(3);
+        let explorer = self.clone();
+        click.connect_pressed(move |_, _, x, y| {
+            let tree = &explorer.tree;
+            let (bx, by) = tree.convert_widget_to_bin_window_coords(x as i32, y as i32);
+            let Some((Some(tree_path), _, _, _)) = tree.path_at_pos(bx, by) else {
+                return;
+            };
+            let Some(iter) = explorer.store.iter(&tree_path) else {
+                return;
+            };
+            let node_path: String = explorer
+                .store
+                .get_value(&iter, COL_PATH as i32)
+                .get()
+                .unwrap_or_default();
+            if node_path == DUMMY_PATH {
+                return;
+            }
+            let is_dir: bool = explorer
+                .store
+                .get_value(&iter, COL_IS_DIR as i32)
+                .get()
+                .unwrap_or(false);
+            tree.selection().select_path(&tree_path);
+            explorer.show_context_menu(PathBuf::from(node_path), is_dir, x, y);
+        });
+        self.tree.add_controller(click);
+    }
+
+    fn show_context_menu(&self, path: PathBuf, is_dir: bool, x: f64, y: f64) {
+        let base = match self.state.followed.borrow().as_ref() {
+            Some(Root::Local(dir)) => Some(dir.clone()),
+            _ => None,
+        };
+        let relative = relative_to(&path, base.as_deref());
+        let popover = gtk4::Popover::new();
+        popover.set_parent(&self.tree);
+        popover.set_has_arrow(false);
+        popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+        popover.connect_closed(|popover| {
+            let popover = popover.clone();
+            glib::idle_add_local_once(move || popover.unparent());
+        });
+        let list = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        let mut add = |label: &str, action: Box<dyn Fn()>| {
+            let button = gtk4::Button::with_label(label);
+            button.add_css_class("flat");
+            if let Some(child) = button.child().and_downcast::<gtk4::Label>() {
+                child.set_xalign(0.0);
+            }
+            let popover = popover.clone();
+            button.connect_clicked(move |_| {
+                popover.popdown();
+                action();
+            });
+            list.append(&button);
+        };
+        if !is_dir {
+            let path = path.clone();
+            add("Ouvrir", Box::new(move || open_logged(&path)));
+        }
+        {
+            let parent = path.parent().map(Path::to_path_buf);
+            add(
+                "Ouvrir le dossier parent",
+                Box::new(move || {
+                    if let Some(parent) = &parent {
+                        open_logged(parent);
+                    }
+                }),
+            );
+        }
+        let absolute = path.to_string_lossy().into_owned();
+        let insert = self.state.insert.borrow().clone();
+        if let Some(insert) = insert {
+            let (a, r) = (absolute.clone(), relative.clone());
+            let insert_relative = insert.clone();
+            add(
+                "Insérer le chemin",
+                Box::new(move || insert(&crate::ghostty::text::shell_escape(&a))),
+            );
+            add(
+                "Insérer le chemin relatif",
+                Box::new(move || insert_relative(&crate::ghostty::text::shell_escape(&r))),
+            );
+        }
+        let clipboard = self.tree.clipboard();
+        let copy_absolute = clipboard.clone();
+        add(
+            "Copier le chemin",
+            Box::new(move || copy_absolute.set_text(&absolute)),
+        );
+        add(
+            "Copier le chemin relatif",
+            Box::new(move || clipboard.set_text(&relative)),
+        );
+        popover.set_child(Some(&list));
+        popover.popup();
     }
 
     /// Climb to the parent folder (outside the workspace if need be) or go back to
@@ -845,6 +958,24 @@ impl FileExplorer {
     }
 }
 
+/// Path relative to the workspace folder, or the absolute path when outside it.
+pub(crate) fn relative_to(path: &Path, base: Option<&Path>) -> String {
+    base.and_then(|base| path.strip_prefix(base).ok())
+        .filter(|relative| !relative.as_os_str().is_empty())
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn open_logged(path: &Path) {
+    if let Err(error) = open_with_default_application(path) {
+        crate::diagnostics::event(format_args!(
+            "file_explorer.open_failed os_error={}",
+            error.raw_os_error().unwrap_or(-1)
+        ));
+    }
+}
+
 /// Open a file with the desktop's default application. Upstream opens its own
 /// preview panel; the Linux v1 hands the path straight to `xdg-open`, never through
 /// a shell. The launch is fire-and-forget, like upstream's background open.
@@ -1115,6 +1246,15 @@ mod tests {
         // The agent moves elsewhere: the tree follows again.
         assert_eq!(follow_or_pinned(&mut followed, &mut pinned, &b), b);
         assert_eq!(pinned, None);
+    }
+
+    #[test]
+    fn relative_path_is_inside_the_workspace_only() {
+        let base = Path::new("/w/a");
+        assert_eq!(relative_to(Path::new("/w/a/src/x.rs"), Some(base)), "src/x.rs");
+        assert_eq!(relative_to(Path::new("/w/b/x.rs"), Some(base)), "/w/b/x.rs");
+        assert_eq!(relative_to(Path::new("/w/a"), Some(base)), "/w/a");
+        assert_eq!(relative_to(Path::new("/x"), None), "/x");
     }
 
     #[test]
