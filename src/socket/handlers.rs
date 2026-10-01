@@ -1376,6 +1376,7 @@ fn handle_socket_command_traced(
                             closed += 1;
                         }
                     }
+                    crate::inbox_actions::purge_closed_surfaces(&mut s);
                     s.trigger_session_save();
                     extras["closed"] = json!(closed);
                 }
@@ -1960,6 +1961,7 @@ fn handle_socket_command_traced(
             };
             match closed {
                 Some(crate::split_engine::CloseSurfaceResult::Closed) => {
+                    crate::inbox_actions::purge_closed_surfaces(&mut state.borrow_mut());
                     state.borrow().trigger_session_save();
                     let _ = resp_tx.send(ok(req_id, json!({})));
                 }
