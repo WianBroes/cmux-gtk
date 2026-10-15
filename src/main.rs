@@ -164,9 +164,6 @@ paned > separator:hover { background-color: #5b8dd9; }
 .headerbar-btn:hover { background-color: rgba(255, 255, 255, 0.08); }
 .headerbar-btn:active { background-color: rgba(255, 255, 255, 0.12); }
 .header-badge { background-color: #3584e4; color: #ffffff; border-radius: 8px; min-width: 14px; padding: 0 3px; font-size: 9px; font-weight: bold; margin: 1px; }
-/* Phase 9: Sidebar add button (D-01) */
-.sidebar-add-btn { min-height: 36px; padding: 8px 16px; background-color: transparent; color: #cccccc; border: none; border-top: 1px solid #3a3a3a; font-size: 16px; }
-.sidebar-add-btn:hover { background-color: #2e2e2e; }
 /* Phase 9: Sidebar close button (D-02) */
 .sidebar-close-btn { min-width: 20px; min-height: 20px; padding: 0; margin: 0; background-color: transparent; color: #888888; border: none; font-size: 14px; opacity: 0; }
 .workspace-list row:hover .sidebar-close-btn { opacity: 1; }

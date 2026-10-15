@@ -249,11 +249,8 @@ pub fn rebuild_grouped_sidebar(state: &crate::app_state::AppStateRef) {
     }
 }
 
-/// Build the sidebar widget: outer Box(V) > [ScrolledWindow(ListBox), Button(+)].
+/// Build the sidebar widget: outer Box(V) > [ScrolledWindow(ListBox)].
 /// Returns (sidebar_box, scrolled_window, list_box).
-///
-/// Per Pitfall 5 from RESEARCH.md: the '+' button is OUTSIDE the ScrolledWindow
-/// so it doesn't scroll away.
 ///
 /// Per UI-SPEC:
 /// - Width: dragged on the divider like upstream (240 minimum, 600 or a third of the window at
@@ -277,17 +274,12 @@ pub fn build_sidebar() -> (gtk4::Box, gtk4::ScrolledWindow, gtk4::ListBox) {
     scrolled.set_child(Some(&list_box));
     scrolled.set_vexpand(true);
 
-    // Sidebar container: Box(V) > [ScrolledWindow(ListBox), Button(+)]
+    // Sidebar container: Box(V) > [ScrolledWindow(ListBox)]
     let sidebar_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
     sidebar_box.add_css_class("sidebar");
     sidebar_box.append(&scrolled);
-
-    // '+' button at the bottom (D-01)
-    let add_btn = gtk4::Button::with_label("+");
-    add_btn.add_css_class("sidebar-add-btn");
-    add_btn.set_tooltip_text(Some("New Workspace (Ctrl+N)"));
-    add_btn.set_action_name(Some("win.new-workspace"));
-    sidebar_box.append(&add_btn);
+    // No '+' bar at the bottom (Wian, 2026-10-15): it ate list space, and the header bar's '+'
+    // and Ctrl+N already make a workspace.
 
     (sidebar_box, scrolled, list_box)
 }
