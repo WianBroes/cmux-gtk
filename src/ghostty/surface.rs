@@ -289,6 +289,40 @@ fn terminal_identity(area: &gtk4::GLArea) -> Option<String> {
 /// Native surface creation waits for realization and non-zero allocation. The widget
 /// owns initialization and cleanup callbacks; the returned shared cell exposes the
 /// current surface pointer and becomes empty when the native surface is released.
+/// Pass a key event through the input method first (Ghostty GTK's `keyEvent`).
+/// Returns true when the input method took it, so Ghostty must not encode it;
+/// otherwise a commit of this key's own text is left in `ime` for the key event.
+fn ime_filter(
+    ctrl: &gtk4::EventControllerKey,
+    im: &gtk4::IMMulticontext,
+    ime: &crate::ghostty::input::ImeState,
+    surface: ffi::ghostty_surface_t,
+) -> bool {
+    use crate::ghostty::input::{ime_takes_key, KeyPhase};
+    use gtk4::prelude::*;
+    let Some(event) = ctrl.current_event() else {
+        return false;
+    };
+    // Where candidate windows of an IME should appear.
+    let (mut x, mut y, mut w, mut h) = (0.0, 0.0, 0.0, 0.0);
+    // SAFETY: live surface on the GTK thread; out-parameters are local.
+    unsafe { ffi::ghostty_surface_ime_point(surface, &mut x, &mut y, &mut w, &mut h) };
+    im.set_cursor_location(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1));
+    let phase = if ime.composing.get() {
+        KeyPhase::Composing
+    } else {
+        KeyPhase::NotComposing
+    };
+    ime.phase.set(phase);
+    let handled = im.filter_keypress(&event);
+    ime.phase.set(KeyPhase::Outside);
+    let taken = ime_takes_key(handled, ime.composing.get(), phase, ime.committed_len());
+    if taken {
+        ime.clear();
+    }
+    taken
+}
+
 pub fn create_surface(
     ghostty_app: ffi::ghostty_app_t,
     inherited_config: Option<super::inherited::InheritedConfig>,
@@ -581,12 +615,81 @@ pub fn create_surface(
         }
     });
 
+    // ── Input method ─────────────────────────────────────────────────────────────
+    // Every key goes through a GtkIMMulticontext before Ghostty, as in Ghostty's GTK
+    // runtime (ghostty/src/apprt/gtk/class/surface.zig: keyEvent, imPreedit*, imCommit)
+    // and macOS's interpretKeyEvents: without it, dead keys (^ ¨ ~ ` ´ on AZERTY) are lost.
+    let im = gtk4::IMMulticontext::new();
+    let ime = Rc::new(crate::ghostty::input::ImeState::default());
+    im.set_client_widget(Some(&gl_area));
+    gl_area.connect_realize({
+        let im = im.clone();
+        move |area| im.set_client_widget(Some(area))
+    });
+    gl_area.connect_unrealize({
+        let im = im.clone();
+        move |_| im.set_client_widget(None::<&gtk4::Widget>)
+    });
+    im.connect_preedit_start({
+        let ime = ime.clone();
+        move |_| {
+            ime.composing.set(true);
+            ime.clear();
+        }
+    });
+    im.connect_preedit_changed({
+        let cell = surface_cell.clone();
+        let ime = ime.clone();
+        move |ctx| {
+            ime.composing.set(true);
+            let Some(surface) = *cell.borrow() else {
+                return;
+            };
+            let (text, _, _) = ctx.preedit_string();
+            // SAFETY: live surface on the GTK thread; the text is copied synchronously.
+            unsafe { ffi::ghostty_surface_preedit(surface, text.as_ptr().cast(), text.len()) };
+        }
+    });
+    im.connect_preedit_end({
+        let cell = surface_cell.clone();
+        let ime = ime.clone();
+        move |_| {
+            ime.composing.set(false);
+            if let Some(surface) = *cell.borrow() {
+                // SAFETY: live surface on the GTK thread.
+                unsafe { ffi::ghostty_surface_preedit(surface, std::ptr::null(), 0) };
+            }
+        }
+    });
+    im.connect_commit({
+        let cell = surface_cell.clone();
+        let ime = ime.clone();
+        move |_, text| {
+            use crate::ghostty::input::KeyPhase;
+            // A plain key's own text: sent with its key event, which keeps the keycode.
+            if ime.phase.get() == KeyPhase::NotComposing && ime.store(text) {
+                return;
+            }
+            // A finished composition (ê after ^ e) or text from outside a key event.
+            ime.composing.set(false);
+            if let Some(surface) = *cell.borrow() {
+                // SAFETY: live surface on the GTK thread; the text is copied synchronously.
+                unsafe {
+                    ffi::ghostty_surface_preedit(surface, std::ptr::null(), 0);
+                    ffi::ghostty_surface_text_input(surface, text.as_ptr().cast(), text.len());
+                }
+            }
+        }
+    });
+
     // ── Key input (GHOST-03) ─────────────────────────────────────────────────────
     // EventControllerKey fires key-pressed and key-released events.
     // CRITICAL: no allocations in this path — per CLAUDE.md typing-latency-sensitive paths.
     let key_controller = gtk4::EventControllerKey::new();
     key_controller.connect_key_pressed({
         let cell = surface_cell.clone();
+        let im = im.clone();
+        let ime = ime.clone();
         move |ctrl, keyval, keycode, state| {
             use crate::ghostty::input::{key_event_details, key_text_char, map_mods};
 
@@ -621,12 +724,19 @@ pub fn create_surface(
                 }
             }
 
-            // text field: UTF-8 from the keyval (what the key produces with modifiers applied).
-            // Must be a C string. Use a stack-allocated buffer to avoid heap allocation.
+            if ime_filter(ctrl, &im, &ime, surface) {
+                return gtk4::glib::Propagation::Stop;
+            }
+
+            // text field: the input method's commit for this key, else UTF-8 from the keyval
+            // (GTK gives no commit for e.g. Ctrl+Shift+1). Must be a C string.
+            // Use a stack-allocated buffer to avoid heap allocation.
             // Control characters are left to Ghostty's encoder (as in its GTK runtime).
             let unicode = key_text_char(keyval.to_unicode());
             let mut text_buf = [0u8; 8]; // UTF-8: max 4 bytes + null
-            let text_ptr = if let Some(ch) = unicode {
+            let text_ptr = if ime.committed_len() > 0 {
+                ime.committed_ptr()
+            } else if let Some(ch) = unicode {
                 let mut s = [0u8; 5];
                 let encoded = ch.encode_utf8(&mut s[..4]);
                 let len = encoded.len();
@@ -651,15 +761,22 @@ pub fn create_surface(
             let (unshifted, consumed) = key_event_details(ctrl, keycode);
             input.unshifted_codepoint = unshifted;
             input.consumed_mods = consumed;
+            input.composing = ime.composing.get();
 
-            unsafe {
-                ffi::ghostty_surface_key(surface, input);
+            let used = unsafe { ffi::ghostty_surface_key(surface, input) };
+            ime.clear();
+            // A key Ghostty used (a keybind) ends any composition, as in its GTK runtime.
+            if used && ime.composing.get() {
+                im.reset();
+                unsafe { ffi::ghostty_surface_preedit(surface, std::ptr::null(), 0) };
             }
             gtk4::glib::Propagation::Stop // Inhibit: prevent GTK from handling the key
         }
     });
     key_controller.connect_key_released({
         let cell = surface_cell.clone();
+        let im = im.clone();
+        let ime = ime.clone();
         move |ctrl, _keyval, keycode, state| {
             use crate::ghostty::input::{key_event_details, map_mods};
 
@@ -667,6 +784,10 @@ pub fn create_surface(
                 Some(s) => s,
                 None => return,
             };
+            if ime_filter(ctrl, &im, &ime, surface) {
+                return;
+            }
+            ime.clear();
 
             let mut input = unsafe { std::mem::zeroed::<ffi::ghostty_input_key_s>() };
             input.keycode = keycode;
@@ -780,7 +901,9 @@ pub fn create_surface(
     focus_controller.connect_enter({
         let cell = surface_cell.clone();
         let gl_area_for_focus = gl_area.downgrade();
+        let im = im.clone();
         move |_ctrl| {
+            im.focus_in();
             let identity = gl_area_for_focus
                 .upgrade()
                 .and_then(|area| terminal_identity(&area));
@@ -810,6 +933,7 @@ pub fn create_surface(
     focus_controller.connect_leave({
         let cell = surface_cell.clone();
         move |_ctrl| {
+            im.focus_out();
             if let Some(surface) = *cell.borrow() {
                 unsafe {
                     ffi::ghostty_surface_set_focus(surface, false);
