@@ -382,6 +382,16 @@ pub enum SocketCommand {
         req_id: Value,
         resp_tx: RespTx,
     },
+    DebugTerminalIsFocused {
+        req_id: Value,
+        surface_id: String,
+        resp_tx: RespTx,
+    },
+    DebugShortcutSimulate {
+        req_id: Value,
+        combo: String,
+        resp_tx: RespTx,
+    },
     DebugAppActivate {
         req_id: Value,
         resp_tx: RespTx,

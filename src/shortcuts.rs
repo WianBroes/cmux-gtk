@@ -30,10 +30,10 @@ pub fn install_shortcuts(
     let sidebar_clone = sidebar.clone();
     let app_clone = app.clone();
 
-    key_ctrl.connect_key_pressed({
+    let dispatch: Rc<KeyDispatch> = Rc::new({
         let state = state.clone();
         let window = window.downgrade();
-        move |_ctrl, keyval, _keycode, mods| {
+        move |keyval: gtk4::gdk::Key, mods: gtk4::gdk::ModifierType| {
             match shortcut_map.borrow().lookup(mods, keyval) {
                 // -- Workspace shortcuts --
                 Some(ShortcutAction::NewWorkspace) => {
@@ -271,8 +271,31 @@ pub fn install_shortcuts(
             }
         }
     });
+    key_ctrl.connect_key_pressed({
+        let dispatch = dispatch.clone();
+        move |_ctrl, keyval, _keycode, mods| dispatch(keyval, mods)
+    });
+    KEY_DISPATCH.with(|slot| *slot.borrow_mut() = Some(dispatch));
 
     window.add_controller(key_ctrl);
+}
+
+type KeyDispatch = dyn Fn(gtk4::gdk::Key, gtk4::gdk::ModifierType) -> gtk4::glib::Propagation;
+
+thread_local! {
+    /// The window's shortcut matcher, shared with `debug.shortcut.simulate` so a simulated
+    /// combo takes the same matcher and dispatch order as a real key press (upstream:
+    /// `AppDelegate.debugHandleCustomShortcut`).
+    static KEY_DISPATCH: RefCell<Option<Rc<KeyDispatch>>> = const { RefCell::new(None) };
+}
+
+/// Run a `cmux.json`-style combo ("cmd+[", "ctrl+shift+t") through the shortcut matcher.
+/// `Ok(true)` when a shortcut consumed it, `Ok(false)` when it would pass through to the
+/// terminal, `Err` when the combo is not a key GTK knows.
+pub fn simulate_shortcut(combo: &str) -> Result<bool, ()> {
+    let (key, mods) = crate::config::parse_combo(combo).ok_or(())?;
+    let dispatch = KEY_DISPATCH.with(|slot| slot.borrow().clone()).ok_or(())?;
+    Ok(dispatch(key, mods) == gtk4::glib::Propagation::Stop)
 }
 
 /// Create a new workspace with an initial GLArea pane and add it to AppState + GtkStack.

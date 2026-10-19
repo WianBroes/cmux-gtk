@@ -381,6 +381,11 @@ fn shortcut_slot<'a>(cfg: &'a mut ShortcutConfig, id: &str) -> Option<&'a mut Op
     })
 }
 
+/// Parse a `cmux.json`-style combo into the key and modifiers a key press would carry.
+pub fn parse_combo(text: &str) -> Option<(Key, ModifierType)> {
+    gtk4::accelerator_parse(to_gtk_accelerator(text)).filter(|(key, _)| *key != Key::VoidSymbol)
+}
+
 /// Turn a `cmux.json` shortcut ("cmd+shift+b") into a GTK accelerator ("<Ctrl><Shift>b").
 /// `cmd`/`ctrl` both mean Ctrl (Linux has no Command key); an invalid result is caught later by
 /// `ShortcutMap::from_config`, which warns and keeps the default.

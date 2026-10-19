@@ -1283,6 +1283,36 @@ async fn dispatch_request(
             req_id: req_id.clone(),
             resp_tx,
         },
+        // Upstream ControlCommandCoordinator+Debug(2).swift: trimmed, non-empty string or
+        // invalid_params with these exact messages.
+        "debug.terminal.is_focused" | "debug.shortcut.simulate" => {
+            let (field, message) = if method == "debug.shortcut.simulate" {
+                ("combo", "Missing combo")
+            } else {
+                ("surface_id", "Missing surface_id")
+            };
+            let Some(value) = params
+                .get(field)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                return err(req_id, "invalid_params", message);
+            };
+            if method == "debug.shortcut.simulate" {
+                commands::SocketCommand::DebugShortcutSimulate {
+                    req_id: req_id.clone(),
+                    combo: value.to_owned(),
+                    resp_tx,
+                }
+            } else {
+                commands::SocketCommand::DebugTerminalIsFocused {
+                    req_id: req_id.clone(),
+                    surface_id: value.to_owned(),
+                    resp_tx,
+                }
+            }
+        }
         "debug.layout" => commands::SocketCommand::DebugLayout {
             req_id: req_id.clone(),
             resp_tx,

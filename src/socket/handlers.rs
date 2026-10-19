@@ -770,6 +770,8 @@ fn handle_socket_command_traced(
                 "browser.state.load",
                 // Debug
                 "debug.app.activate",
+                "debug.shortcut.simulate",
+                "debug.terminal.is_focused",
                 "window.focus",
                 "debug.layout",
                 "debug.type",
@@ -1750,6 +1752,57 @@ fn handle_socket_command_traced(
                 window.present();
             }
             let _ = resp_tx.send(ok(req_id, json!({})));
+        }
+
+        // Upstream `isTerminalFocused`: only the selected workspace counts; an unknown surface
+        // is `false`, not an error. GTK's focus widget of the window plays the first responder.
+        SocketCommand::DebugTerminalIsFocused {
+            req_id,
+            surface_id,
+            resp_tx,
+        } => {
+            let area = state
+                .borrow()
+                .active_split_engine()
+                .and_then(|engine| engine.gl_area_for_surface(&surface_id));
+            let focused = area.is_some_and(|area| area.is_focus());
+            let _ = resp_tx.send(ok(req_id, json!({"focused": focused})));
+        }
+
+        // Upstream `simulateShortcut`: the app's shortcut matcher first; an unmatched combo
+        // goes on as a key press to the focused terminal. Either way the answer is `{}`.
+        SocketCommand::DebugShortcutSimulate {
+            req_id,
+            combo,
+            resp_tx,
+        } => {
+            let response = match crate::shortcuts::simulate_shortcut(&combo) {
+                Err(()) => err(
+                    req_id,
+                    "internal_error",
+                    "ERROR: Invalid combo. Example: cmd+ctrl+h",
+                ),
+                Ok(true) => ok(req_id, json!({})),
+                Ok(false) => {
+                    let key = combo.to_ascii_lowercase().replace("cmd", "ctrl").replace('+', "-");
+                    let mut characters = key.chars();
+                    if let Ok(surface) = terminal_target(state, None) {
+                        // SAFETY: resolution releases the model borrow and returns a
+                        // live GTK-owned terminal; no teardown occurs before input.
+                        unsafe {
+                            if let Some(named) = crate::ghostty::named_key::parse(&key) {
+                                crate::ghostty::named_key::send(surface, named);
+                            } else if let (Some(character), None) =
+                                (characters.next(), characters.next())
+                            {
+                                let _ = crate::ghostty::text::send_character(surface, character);
+                            }
+                        }
+                    }
+                    ok(req_id, json!({}))
+                }
+            };
+            let _ = resp_tx.send(response);
         }
 
         SocketCommand::DebugLayout { req_id, resp_tx } => {
