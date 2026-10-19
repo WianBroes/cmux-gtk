@@ -332,6 +332,9 @@ pub enum Commands {
         /// Text typed into the first terminal's shell, followed by Enter
         #[arg(long)]
         command: Option<String>,
+        /// Select the new workspace (true) or keep the current one selected (false, default)
+        #[arg(long, value_name = "true|false", action = clap::ArgAction::Set)]
+        focus: Option<bool>,
     },
     /// Create a first-class remote workspace with SSH management
     Ssh {
@@ -810,6 +813,9 @@ pub enum Commands {
         /// Target surface ID, ref (surface:N) or index (default: focused)
         #[arg(long, visible_alias = "surface")]
         id: Option<String>,
+        /// Workspace UUID, ref (workspace:N) or index; without a surface, its focused terminal
+        #[arg(long)]
+        workspace: Option<String>,
     },
     /// Send a key name or one literal character to a terminal surface
     SendKey {
@@ -818,6 +824,9 @@ pub enum Commands {
         /// Target surface ID, ref (surface:N) or index (default: focused)
         #[arg(long, visible_alias = "surface")]
         id: Option<String>,
+        /// Workspace UUID, ref (workspace:N) or index; without a surface, its focused terminal
+        #[arg(long)]
+        workspace: Option<String>,
     },
     /// Read current terminal viewport text (up to 256 KiB)
     ReadText {
@@ -830,6 +839,9 @@ pub enum Commands {
         /// Target surface ID, ref (surface:N) or index (default: focused)
         #[arg(long, visible_alias = "surface")]
         id: Option<String>,
+        /// Workspace UUID, ref (workspace:N) or index; without a surface, its focused terminal
+        #[arg(long)]
+        workspace: Option<String>,
         /// Read the scrollback instead of the visible viewport
         #[arg(long)]
         scrollback: bool,
@@ -1179,6 +1191,9 @@ pub enum WorkspaceCommands {
         /// Text typed into the first terminal's shell, followed by Enter
         #[arg(long)]
         command: Option<String>,
+        /// Select the new workspace (true) or keep the current one selected (false, default)
+        #[arg(long, value_name = "true|false", action = clap::ArgAction::Set)]
+        focus: Option<bool>,
     },
     /// Close a workspace (same options as `close-workspace`)
     Close {
@@ -2399,14 +2414,14 @@ mod handle_argument_tests {
     #[test]
     fn send_read_screen_and_named_key_forms_parse() {
         match parse(&["send", "--surface", "surface:2", "echo", "hi\\n"]) {
-            Commands::Send { text, id } => {
+            Commands::Send { text, id, .. } => {
                 assert_eq!(text, vec!["echo", "hi\\n"]);
                 assert_eq!(id.as_deref(), Some("surface:2"));
             }
             _ => panic!("wrong command variant"),
         }
         match parse(&["send", "--", "-n"]) {
-            Commands::Send { text, id } => {
+            Commands::Send { text, id, .. } => {
                 assert_eq!(text, vec!["-n"]);
                 assert!(id.is_none());
             }
@@ -2417,6 +2432,7 @@ mod handle_argument_tests {
                 id,
                 scrollback,
                 lines,
+                ..
             } => {
                 assert!(id.is_none());
                 assert!(!scrollback);
@@ -2434,7 +2450,7 @@ mod handle_argument_tests {
             _ => panic!("wrong command variant"),
         }
         match parse(&["send-key", "--surface", "surface:1", "enter"]) {
-            Commands::SendKey { key, id } => {
+            Commands::SendKey { key, id, .. } => {
                 assert_eq!(key, "enter");
                 assert_eq!(id.as_deref(), Some("surface:1"));
             }
@@ -2908,7 +2924,9 @@ mod handle_argument_tests {
             "--command",
             "ls",
         ]) {
-            Commands::Workspace(WorkspaceCommands::Create { name, cwd, command }) => {
+            Commands::Workspace(WorkspaceCommands::Create {
+                name, cwd, command, ..
+            }) => {
                 assert_eq!(name.as_deref(), Some("Plan"));
                 assert_eq!(cwd.as_deref(), Some("/srv"));
                 assert_eq!(command.as_deref(), Some("ls"));

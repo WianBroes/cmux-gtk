@@ -312,12 +312,15 @@ pub enum SocketCommand {
     SurfaceSendText {
         req_id: Value,
         id: Option<String>,
+        /// Without `id`: the focused terminal of this workspace instead of the selected one.
+        workspace: Option<String>,
         text: String,
         resp_tx: RespTx,
     },
     SurfaceSendKey {
         req_id: Value,
         id: Option<String>,
+        workspace: Option<String>,
         key: String,
         resp_tx: RespTx,
     },
@@ -325,6 +328,7 @@ pub enum SocketCommand {
         req_id: Value,
         scrollback: bool,
         id: Option<String>,
+        workspace: Option<String>,
         resp_tx: RespTx,
     },
     SurfaceHealth {

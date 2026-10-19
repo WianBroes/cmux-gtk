@@ -64,6 +64,7 @@ async fn terminal_input_reaches_gtk_unchanged() {
                     id,
                     text,
                     resp_tx,
+                    ..
                 } => {
                     assert_eq!(method, "surface.send_text");
                     assert_eq!(id.as_deref(), Some("target-uuid"));
@@ -75,6 +76,7 @@ async fn terminal_input_reaches_gtk_unchanged() {
                     id,
                     key,
                     resp_tx,
+                    ..
                 } => {
                     assert_eq!(method, "surface.send_key");
                     assert_eq!(id.as_deref(), Some("target-uuid"));

@@ -328,12 +328,13 @@ pub fn format_mutation(command_name: &str, result: &Value) -> String {
         .unwrap_or("");
 
     match command_name {
+        // Upstream `runWorkspaceCreateCommand`: `OK <workspace_ref, else workspace_id>`.
         "workspace.create" => {
-            if title.is_empty() {
-                format!("Created workspace: {}", id)
-            } else {
-                format!("Created workspace: {} ({})", title, id)
-            }
+            let workspace = ["workspace_ref", "workspace_id"]
+                .iter()
+                .find_map(|key| result.get(*key).and_then(Value::as_str))
+                .unwrap_or("");
+            format!("OK {workspace}")
         }
         "workspace.close" => format!("Closed workspace: {}", id),
         "workspace.rename" => {

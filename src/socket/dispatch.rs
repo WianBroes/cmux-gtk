@@ -7,7 +7,8 @@ use super::{
 
 /// Decode a nullable optional target without silently turning malformed IDs into active-pane fallback.
 fn optional_target(params: &serde_json::Value) -> Result<Option<String>, &'static str> {
-    match params.get("id") {
+    // Upstream clients name the target `surface_id`; `id` is our older spelling.
+    match params.get("surface_id").or_else(|| params.get("id")) {
         None | Some(serde_json::Value::Null) => Ok(None),
         Some(serde_json::Value::String(id)) => Ok(Some(id.clone())),
         _ => Err("id must be a string or null"),
@@ -1156,6 +1157,10 @@ async fn dispatch_request(
             }
         }
         "surface.send_text" | "surface.send_key" | "debug.type" => {
+            let workspace = match optional_text(&params, "workspace_id", "workspace_id") {
+                Ok(workspace) => workspace,
+                Err(message) => return err(req_id, "invalid_params", &message),
+            };
             let field = if method == "surface.send_key" {
                 "key"
             } else {
@@ -1173,12 +1178,14 @@ async fn dispatch_request(
                 "surface.send_text" => commands::SocketCommand::SurfaceSendText {
                     req_id: req_id.clone(),
                     id: target,
+                    workspace,
                     text: input,
                     resp_tx,
                 },
                 "surface.send_key" => commands::SocketCommand::SurfaceSendKey {
                     req_id: req_id.clone(),
                     id: target,
+                    workspace,
                     key: input,
                     resp_tx,
                 },
@@ -1190,10 +1197,15 @@ async fn dispatch_request(
             }
         }
         "surface.read_text" | "surface.read_scrollback" => {
+            let workspace = match optional_text(&params, "workspace_id", "workspace_id") {
+                Ok(workspace) => workspace,
+                Err(message) => return err(req_id, "invalid_params", &message),
+            };
             commands::SocketCommand::SurfaceReadText {
                 scrollback: method == "surface.read_scrollback",
                 req_id: req_id.clone(),
                 id: target,
+                workspace,
                 resp_tx,
             }
         }

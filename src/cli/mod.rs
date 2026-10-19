@@ -1472,9 +1472,17 @@ fn browser_command_to_rpc(cmd: &BrowserCommand) -> (&'static str, serde_json::Va
 fn expand_workspace_namespace(command: Commands) -> Commands {
     use args::WorkspaceCommands;
     match command {
-        Commands::Workspace(WorkspaceCommands::Create { name, cwd, command }) => {
-            Commands::NewWorkspace { name, cwd, command }
-        }
+        Commands::Workspace(WorkspaceCommands::Create {
+            name,
+            cwd,
+            command,
+            focus,
+        }) => Commands::NewWorkspace {
+            name,
+            cwd,
+            command,
+            focus,
+        },
         Commands::Workspace(WorkspaceCommands::Close { id, workspace }) => {
             Commands::CloseWorkspace { id, workspace }
         }
@@ -1583,8 +1591,15 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
 
         Commands::Raw { .. } => unreachable!("Raw handled separately"),
 
-        Commands::NewWorkspace { name, cwd, command } => {
+        Commands::NewWorkspace {
+            name,
+            cwd,
+            command,
+            focus,
+        } => {
             let mut params = serde_json::Map::new();
+            // Upstream `applyFocusOption(defaultValue: false)`: always sent.
+            params.insert("focus".into(), json!(focus.unwrap_or(false)));
             if let Some(name) = name {
                 params.insert("name".into(), json!(name));
             }
@@ -1962,19 +1977,29 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             }
             ("surface.send_text", Value::Object(p))
         }
-        Commands::Send { text, id } => {
+        Commands::Send {
+            text,
+            id,
+            workspace,
+        } => {
             let mut p = serde_json::Map::new();
             p.insert("text".into(), json!(send_text(text)));
             if let Some(ref id) = id {
                 p.insert("id".into(), json!(id));
             }
+            if let Some(workspace) = workspace {
+                p.insert("workspace_id".into(), json!(workspace));
+            }
             ("surface.send_text", Value::Object(p))
         }
-        Commands::SendKey { key, id } => {
+        Commands::SendKey { key, id, workspace } => {
             let mut p = serde_json::Map::new();
             p.insert("key".into(), json!(key));
             if let Some(ref id) = id {
                 p.insert("id".into(), json!(id));
+            }
+            if let Some(workspace) = workspace {
+                p.insert("workspace_id".into(), json!(workspace));
             }
             ("surface.send_key", Value::Object(p))
         }
@@ -1987,12 +2012,16 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
         }
         Commands::ReadScreen {
             id,
+            workspace,
             scrollback,
             lines,
         } => {
             let mut p = serde_json::Map::new();
             if let Some(ref id) = id {
                 p.insert("id".into(), json!(id));
+            }
+            if let Some(workspace) = workspace {
+                p.insert("workspace_id".into(), json!(workspace));
             }
             // `--lines` reads the scrollback too; the trailing rows are trimmed after the read.
             let method = if *scrollback || lines.is_some() {

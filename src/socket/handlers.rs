@@ -271,6 +271,7 @@ fn identify_location(
 fn terminal_target(
     state: &crate::app_state::AppStateRef,
     id: Option<&str>,
+    workspace: Option<&str>,
 ) -> Result<crate::ghostty::ffi::ghostty_surface_t, (&'static str, &'static str)> {
     let surface = {
         let state = state.borrow();
@@ -279,15 +280,46 @@ fn terminal_target(
                 .split_engines
                 .iter()
                 .find_map(|engine| engine.find_surface_by_uuid(id)),
-            None => state
-                .split_engines
-                .get(state.active_index)
-                .and_then(|engine| engine.root.find_surface_for_pane(engine.active_pane_id)),
+            // Upstream: without a surface, the focused terminal of `workspace_id`, else of the
+            // selected workspace.
+            None => match workspace {
+                Some(workspace) => state
+                    .workspaces
+                    .iter()
+                    .position(|ws| ws.uuid.to_string() == workspace),
+                None => Some(state.active_index),
+            }
+            .and_then(|index| state.split_engines.get(index))
+            .and_then(|engine| engine.root.find_surface_for_pane(engine.active_pane_id)),
         }
     }
     .filter(|surface| !surface.is_null())
     .ok_or(("not_found", "live terminal surface not found"))?;
     Ok(surface)
+}
+
+/// Workspace index and surface UUID that `terminal_target` resolves for the same arguments.
+fn terminal_location(
+    state: &crate::app_state::AppState,
+    id: Option<&str>,
+    workspace: Option<&str>,
+) -> Option<(usize, uuid::Uuid)> {
+    let index = match (id, workspace) {
+        (Some(id), _) => state
+            .split_engines
+            .iter()
+            .position(|engine| engine.find_surface_by_uuid(id).is_some())?,
+        (None, Some(workspace)) => state
+            .workspaces
+            .iter()
+            .position(|ws| ws.uuid.to_string() == workspace)?,
+        (None, None) => state.active_index,
+    };
+    let surface = match id {
+        Some(id) => id.to_owned(),
+        None => state.split_engines.get(index)?.active_pane_uuid()?,
+    };
+    Some((index, uuid::Uuid::parse_str(&surface).ok()?))
 }
 
 /// Split text at CR, LF or CRLF breaks into `(segment, ends_with_break)` parts.
@@ -315,6 +347,7 @@ fn split_at_line_breaks(text: &str) -> Vec<(&str, bool)> {
 fn send_terminal_text(
     state: &crate::app_state::AppStateRef,
     id: Option<&str>,
+    workspace: Option<&str>,
     text: &str,
 ) -> Result<(), (&'static str, &'static str)> {
     if text.contains('\0') {
@@ -322,7 +355,7 @@ fn send_terminal_text(
     }
     let enter = crate::ghostty::named_key::parse("enter")
         .ok_or(("not_supported", "the Enter key is unavailable"))?;
-    let surface = terminal_target(state, id)?;
+    let surface = terminal_target(state, id, workspace)?;
     for (segment, has_break) in split_at_line_breaks(text) {
         if !segment.is_empty() {
             // SAFETY: target resolution found a live native terminal on GTK and released
@@ -1786,7 +1819,7 @@ fn handle_socket_command_traced(
                 Ok(false) => {
                     let key = combo.to_ascii_lowercase().replace("cmd", "ctrl").replace('+', "-");
                     let mut characters = key.chars();
-                    if let Ok(surface) = terminal_target(state, None) {
+                    if let Ok(surface) = terminal_target(state, None, None) {
                         // SAFETY: resolution releases the model borrow and returns a
                         // live GTK-owned terminal; no teardown occurs before input.
                         unsafe {
@@ -2498,10 +2531,11 @@ fn handle_socket_command_traced(
         SocketCommand::SurfaceSendText {
             req_id,
             id,
+            workspace,
             text,
             resp_tx,
         } => {
-            let response = match send_terminal_text(state, id.as_deref(), &text) {
+            let response = match send_terminal_text(state, id.as_deref(), workspace.as_deref(), &text) {
                 Ok(()) => ok(req_id, json!({})),
                 Err((code, message)) => err(req_id, code, message),
             };
@@ -2511,6 +2545,7 @@ fn handle_socket_command_traced(
         SocketCommand::SurfaceSendKey {
             req_id,
             id,
+            workspace,
             key,
             resp_tx,
         } => {
@@ -2518,13 +2553,13 @@ fn handle_socket_command_traced(
             // characters use typed input; an unknown key is never reported as delivered.
             let mut characters = key.chars();
             let result = if let Some(named) = crate::ghostty::named_key::parse(&key) {
-                terminal_target(state, id.as_deref()).map(|surface| {
+                terminal_target(state, id.as_deref(), workspace.as_deref()).map(|surface| {
                     // SAFETY: resolution releases the model borrow and returns a
                     // live GTK-owned terminal; no teardown occurs before input.
                     unsafe { crate::ghostty::named_key::send(surface, named) }
                 })
             } else if let (Some(character), None) = (characters.next(), characters.next()) {
-                terminal_target(state, id.as_deref()).and_then(|surface| {
+                terminal_target(state, id.as_deref(), workspace.as_deref()).and_then(|surface| {
                     // SAFETY: resolution releases the model borrow and returns a
                     // live GTK-owned terminal; no teardown occurs before input.
                     unsafe { crate::ghostty::text::send_character(surface, character) }
@@ -2547,9 +2582,10 @@ fn handle_socket_command_traced(
             req_id,
             scrollback,
             id,
+            workspace,
             resp_tx,
         } => {
-            let result = terminal_target(state, id.as_deref()).and_then(|surface| {
+            let result = terminal_target(state, id.as_deref(), workspace.as_deref()).and_then(|surface| {
                 // SAFETY: resolution found a live GTK-owned terminal. No model
                 // borrow or event-loop iteration spans this bounded native read.
                 unsafe {
@@ -2562,7 +2598,31 @@ fn handle_socket_command_traced(
                 .map_err(|message| ("read_failed", message))
             });
             let response = match result {
-                Ok(text) => ok(req_id, json!({"text": text})),
+                Ok(text) => {
+                    use base64::Engine as _;
+                    let mut payload = json!({
+                        "text": text,
+                        "base64": base64::engine::general_purpose::STANDARD.encode(&text),
+                    });
+                    let s = state.borrow();
+                    let location = terminal_location(&s, id.as_deref(), workspace.as_deref())
+                        .and_then(|(index, surface)| identify_location(&s, index, Some(surface)));
+                    if let (Some(location), Some(fields)) = (location, payload.as_object_mut()) {
+                        for key in [
+                            "workspace_id",
+                            "workspace_ref",
+                            "surface_id",
+                            "surface_ref",
+                            "window_id",
+                            "window_ref",
+                        ] {
+                            if let Some(value) = location.get(key) {
+                                fields.insert(key.into(), value.clone());
+                            }
+                        }
+                    }
+                    ok(req_id, payload)
+                }
                 Err((code, message)) => err(req_id, code, message),
             };
             let _ = resp_tx.send(response);

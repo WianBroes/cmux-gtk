@@ -573,13 +573,17 @@ fn collect_targets<'a>(command: &'a mut Commands, targets: &mut Vec<Target<'a>>)
         | Commands::CloseSurface { id, .. }
         | Commands::Split { id, .. }
         | Commands::SendText { id, .. }
-        | Commands::Send { id, .. }
-        | Commands::SendKey { id, .. }
         | Commands::ReadText { id }
-        | Commands::ReadScreen { id, .. }
         | Commands::ReadScrollback { id }
         | Commands::Health { id }
         | Commands::Refresh { id } => targets.push(Target::Optional(HandleKind::Surface, id)),
+
+        Commands::Send { id, workspace, .. }
+        | Commands::SendKey { id, workspace, .. }
+        | Commands::ReadScreen { id, workspace, .. } => {
+            targets.push(Target::Optional(HandleKind::Surface, id));
+            targets.push(Target::Optional(HandleKind::Workspace, workspace));
+        }
 
         Commands::SurfaceHealth {
             workspace, window, ..
