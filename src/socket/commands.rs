@@ -382,6 +382,15 @@ pub enum SocketCommand {
         req_id: Value,
         resp_tx: RespTx,
     },
+    DebugAppActivate {
+        req_id: Value,
+        resp_tx: RespTx,
+    },
+    WindowFocus {
+        req_id: Value,
+        window: String,
+        resp_tx: RespTx,
+    },
     DebugType {
         req_id: Value,
         text: String,

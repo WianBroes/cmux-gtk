@@ -565,7 +565,8 @@ async fn dispatch_request(
         "workspace.select" => commands::SocketCommand::WorkspaceSelect {
             req_id: req_id.clone(),
             id: params
-                .get("id")
+                .get("workspace_id")
+                .or_else(|| params.get("id"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),
@@ -574,7 +575,8 @@ async fn dispatch_request(
         "workspace.close" => commands::SocketCommand::WorkspaceClose {
             req_id: req_id.clone(),
             id: params
-                .get("id")
+                .get("workspace_id")
+                .or_else(|| params.get("id"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),
@@ -583,7 +585,8 @@ async fn dispatch_request(
         "workspace.rename" => commands::SocketCommand::WorkspaceRename {
             req_id: req_id.clone(),
             id: params
-                .get("id")
+                .get("workspace_id")
+                .or_else(|| params.get("id"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),
@@ -598,7 +601,8 @@ async fn dispatch_request(
             commands::SocketCommand::WorkspaceDescription {
                 req_id: req_id.clone(),
                 id: params
-                    .get("id")
+                    .get("workspace_id")
+                    .or_else(|| params.get("id"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
@@ -924,7 +928,8 @@ async fn dispatch_request(
         "surface.focus" => commands::SocketCommand::SurfaceFocus {
             req_id: req_id.clone(),
             id: params
-                .get("id")
+                .get("surface_id")
+                .or_else(|| params.get("id"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),
@@ -933,7 +938,8 @@ async fn dispatch_request(
         "surface.close" => commands::SocketCommand::SurfaceClose {
             req_id: req_id.clone(),
             id: params
-                .get("id")
+                .get("surface_id")
+                .or_else(|| params.get("id"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),
@@ -1025,7 +1031,12 @@ async fn dispatch_request(
             let Some(action) = params.get("action").and_then(serde_json::Value::as_str) else {
                 return err(req_id, "invalid_params", "action must be a string");
             };
+            // Upstream names the tab `tab_id`; it is the surface.
             let surface = match optional_text(&params, "surface_id", "surface_id") {
+                Ok(None) => optional_text(&params, "tab_id", "tab_id"),
+                other => other,
+            };
+            let surface = match surface {
                 Ok(surface) => surface,
                 Err(message) => return err(req_id, "invalid_params", &message),
             };
@@ -1057,7 +1068,11 @@ async fn dispatch_request(
             }
         }
 "surface.drag_to_split" => {
-            let Some(id) = params.get("id").and_then(serde_json::Value::as_str) else {
+            let Some(id) = params
+                .get("surface_id")
+                .or_else(|| params.get("id"))
+                .and_then(serde_json::Value::as_str)
+            else {
                 return err(req_id, "invalid_params", "id must be a surface UUID");
             };
             let Some(target_pane) = params.get("pane").and_then(serde_json::Value::as_str) else {
@@ -1254,6 +1269,20 @@ async fn dispatch_request(
             resp_tx,
         },
 
+        "window.focus" => {
+            let Some(window) = params.get("window_id").and_then(|value| value.as_str()) else {
+                return err(req_id, "invalid_params", "Missing or invalid window_id");
+            };
+            commands::SocketCommand::WindowFocus {
+                req_id: req_id.clone(),
+                window: window.to_owned(),
+                resp_tx,
+            }
+        }
+        "debug.app.activate" => commands::SocketCommand::DebugAppActivate {
+            req_id: req_id.clone(),
+            resp_tx,
+        },
         "debug.layout" => commands::SocketCommand::DebugLayout {
             req_id: req_id.clone(),
             resp_tx,

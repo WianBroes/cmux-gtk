@@ -192,6 +192,36 @@ fn window_record(state: &crate::app_state::AppState) -> Value {
     })
 }
 
+/// Add upstream's `workspace.create` identity (window, workspace, group and focused surface,
+/// ids beside refs) to a creation reply.
+fn created_identity(state: &crate::app_state::AppState, id: u64, payload: &mut Value) {
+    let Some(index) = state.workspaces.iter().position(|workspace| workspace.id == id) else {
+        return;
+    };
+    let surface = state
+        .split_engines
+        .get(index)
+        .and_then(|engine| engine.active_pane_uuid())
+        .and_then(|surface| uuid::Uuid::parse_str(&surface).ok());
+    let identity = identify_location(state, index, surface)
+        .or_else(|| identify_location(state, index, None));
+    let (Some(identity), Some(fields)) = (identity, payload.as_object_mut())
+    else {
+        return;
+    };
+    for key in [
+        "window_id",
+        "window_ref",
+        "workspace_id",
+        "workspace_ref",
+        "surface_id",
+        "surface_ref",
+    ] {
+        fields.insert(key.into(), identity[key].clone());
+    }
+    fields.insert("group_id".into(), json!(state.workspaces[index].group_id));
+}
+
 /// Window, workspace, pane and surface of one location, ids beside refs (upstream identify payload).
 /// None when `surface` is given but not in that workspace.
 fn identify_location(
@@ -739,6 +769,8 @@ fn handle_socket_command_traced(
                 "browser.state.save",
                 "browser.state.load",
                 // Debug
+                "debug.app.activate",
+                "window.focus",
                 "debug.layout",
                 "debug.type",
             ];
@@ -758,9 +790,24 @@ fn handle_socket_command_traced(
         SocketCommand::WorkspaceCurrent { req_id, resp_tx } => {
             // SOCK-05: No focus side effects.
             let s = state.borrow();
-            let response = match workspace_record(&s, s.active_index) {
-                Some(workspace) => ok(req_id, workspace),
-                None => err(req_id, "no_workspace", "no active workspace"),
+            // Upstream shape: window and workspace ids beside refs, the summary under `workspace`;
+            // the record's own fields stay at the top level for existing clients.
+            let response = match (
+                workspace_record(&s, s.active_index),
+                identify_location(&s, s.active_index, None),
+            ) {
+                (Some(workspace), Some(mut payload)) => {
+                    if let (Some(fields), Some(record)) =
+                        (payload.as_object_mut(), workspace.as_object())
+                    {
+                        for (key, value) in record {
+                            fields.entry(key.clone()).or_insert(value.clone());
+                        }
+                        fields.insert("workspace".into(), workspace.clone());
+                    }
+                    ok(req_id, payload)
+                }
+                _ => err(req_id, "not_found", "No workspace selected"),
             };
             let _ = resp_tx.send(response);
         }
@@ -814,11 +861,10 @@ fn handle_socket_command_traced(
                         .and_then(|value| uuid::Uuid::parse_str(value).ok()),
                     "rpc",
                 );
-                let _ = resp_tx.send(ok(
-                    req_id,
-                    json!({"uuid": uuid_str, "remote": true,
-                    "terminal_transport":terminal_transport,"terminal_profile":terminal_profile}),
-                ));
+                let mut payload = json!({"uuid": uuid_str, "remote": true,
+                    "terminal_transport":terminal_transport,"terminal_profile":terminal_profile});
+                created_identity(&state.borrow(), id, &mut payload);
+                let _ = resp_tx.send(ok(req_id, payload));
             } else {
                 let id = if let Some(path) = working_directory {
                     state.borrow_mut().create_workspace_with_input(
@@ -842,13 +888,12 @@ fn handle_socket_command_traced(
                 let directory = workspace
                     .and_then(|ws| ws.working_directory.as_ref())
                     .map(|path| path.to_string_lossy());
-                let _ = resp_tx.send(ok(
-                    req_id,
-                    json!({
-                        "uuid": uuid_str,
-                        "working_directory": directory,
-                    }),
-                ));
+                let mut payload = json!({
+                    "uuid": uuid_str,
+                    "working_directory": directory,
+                });
+                created_identity(&s, id, &mut payload);
+                let _ = resp_tx.send(ok(req_id, payload));
             }
             let (list, app) = {
                 let s = state.borrow();
@@ -1679,6 +1724,34 @@ fn handle_socket_command_traced(
         }
 
         // -- debug.* --
+        // Upstream `window.focus`: one window here, named by id or ref.
+        SocketCommand::WindowFocus {
+            req_id,
+            window,
+            resp_tx,
+        } => {
+            use super::handles::{HandleKind, MAIN_WINDOW_ID};
+            let s = state.borrow();
+            let main_ref = s.handles.ensure_ref(HandleKind::Window, MAIN_WINDOW_ID);
+            let identity = json!({"window_id": MAIN_WINDOW_ID, "window_ref": main_ref});
+            if window == MAIN_WINDOW_ID || window == main_ref {
+                if let Some(window) = s.gtk_app.active_window() {
+                    window.present();
+                }
+                let _ = resp_tx.send(ok(req_id, identity));
+            } else {
+                let _ = resp_tx.send(err(req_id, "not_found", "Window not found"));
+            }
+        }
+
+        // Upstream `debug.app.activate`: bring the main window forward, empty result.
+        SocketCommand::DebugAppActivate { req_id, resp_tx } => {
+            if let Some(window) = state.borrow().gtk_app.active_window() {
+                window.present();
+            }
+            let _ = resp_tx.send(ok(req_id, json!({})));
+        }
+
         SocketCommand::DebugLayout { req_id, resp_tx } => {
             // SOCK-05: No focus side effects.
             let s = state.borrow();
