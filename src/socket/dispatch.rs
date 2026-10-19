@@ -1254,9 +1254,13 @@ async fn dispatch_request(
                 resp_tx,
             }
         }
+        // Upstream names the pane `pane_id`; `id` is our older spelling.
         "pane.focus" => commands::SocketCommand::PaneFocus {
             req_id: req_id.clone(),
-            id: target,
+            id: match optional_text(&params, "pane_id", "pane_id") {
+                Ok(pane) => pane.or(target),
+                Err(message) => return err(req_id, "invalid_params", &message),
+            },
             resp_tx,
         },
         "pane.last" => commands::SocketCommand::PaneLast {
