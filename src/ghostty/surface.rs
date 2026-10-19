@@ -221,8 +221,19 @@ fn initialize_surface(
             area.set_data("cmux-launch-command", command);
         }
         if surface.is_null() {
-            eprintln!("cmux: FATAL — ghostty_surface_new returned null");
-            std::process::exit(1);
+            // Like upstream (TerminalSurface+RuntimeLifecycle.swift: createSurface FAILED), only
+            // this terminal fails; the GLArea error also stops later resizes from retrying.
+            eprintln!("cmux: ghostty_surface_new returned null for pane_id={}", init.pane_id);
+            crate::diagnostics::record(
+                "ghostty.surface.create.failed",
+                serde_json::json!({"reason":"surfaceNewNil","pane_id":init.pane_id}),
+            );
+            area.set_error(Some(&gtk4::glib::Error::new(
+                gtk4::gdk::GLError::NotAvailable,
+                "Terminal could not be created",
+            )));
+            area.set_tooltip_text(Some("Terminal could not be created"));
+            return None;
         }
         let phys_width = (logical_width as f64 * scale) as u32;
         let phys_height = (logical_height as f64 * scale) as u32;
@@ -442,8 +453,8 @@ pub fn create_surface(
             );
             area.make_current();
             if let Some(err) = area.error() {
-                eprintln!("cmux: GLArea realize error: {err}");
-                std::process::exit(1); // Per D-09: no GUI error dialog in Phase 1
+                eprintln!("cmux: GLArea realize error for pane_id={pane_id_for_log}: {err}");
+                return;
             }
 
             // Check if surface already exists (re-realize after reparent).
