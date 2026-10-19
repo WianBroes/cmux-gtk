@@ -260,6 +260,11 @@ pub fn purge_closed_surfaces(state: &mut AppState) {
         .collect();
     let removed = state.inbox.purge_dead_surfaces(&live);
     purged(state, removed);
+    for index in 0..state.workspaces.len() {
+        if !state.workspaces[index].agents.is_empty() {
+            state.update_agents(index, |_| {});
+        }
+    }
 }
 
 /// Reconcile unread rings and sidebar dots without disturbing independent terminal BEL attention.

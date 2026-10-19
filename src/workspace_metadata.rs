@@ -356,7 +356,11 @@ pub fn render(container: &gtk4::Box, metadata: &Metadata) {
     }
     let mut entries: Vec<_> = metadata.statuses.iter().collect();
     entries.sort_by(|(a, av), (b, bv)| bv.priority.cmp(&av.priority).then_with(|| a.cmp(b)));
-    for (key, status) in entries {
+    // Upstream `configureMetadata`: three lines, the rest behind "Show more".
+    let expanded_statuses = container.has_css_class("metadata-expanded");
+    let total = entries.len();
+    let shown = if expanded_statuses { total } else { total.min(3) };
+    for (key, status) in entries.into_iter().take(shown) {
         let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
         if let Some(icon) = &status.icon {
             row.append(&gtk4::Image::from_icon_name(icon));
@@ -370,6 +374,29 @@ pub fn render(container: &gtk4::Box, metadata: &Metadata) {
         label.set_markup(&status_markup(status));
         row.append(&label);
         container.append(&row);
+    }
+    if total > 3 {
+        let toggle = gtk4::Button::with_label(if expanded_statuses {
+            "Show less"
+        } else {
+            "Show more"
+        });
+        toggle.set_has_frame(false);
+        toggle.set_halign(gtk4::Align::Start);
+        toggle.add_css_class("workspace-metadata-toggle");
+        let weak = container.downgrade();
+        let metadata = metadata.clone();
+        toggle.connect_clicked(move |_| {
+            if let Some(container) = weak.upgrade() {
+                if container.has_css_class("metadata-expanded") {
+                    container.remove_css_class("metadata-expanded");
+                } else {
+                    container.add_css_class("metadata-expanded");
+                }
+                render(&container, &metadata);
+            }
+        });
+        container.append(&toggle);
     }
     let mut blocks: Vec<_> = metadata.blocks.iter().collect();
     blocks.sort_by(|(a, av), (b, bv)| bv.priority.cmp(&av.priority).then_with(|| a.cmp(b)));

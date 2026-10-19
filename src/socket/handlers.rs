@@ -495,26 +495,7 @@ fn handle_socket_command_traced(
             match crate::workspace_metadata::apply(&mut state.workspaces[index].metadata, action) {
                 Ok(changed) => {
                     if changed {
-                        if let Some(row) = crate::sidebar::row_for_workspace(
-                            &state.sidebar_list,
-                            state.workspaces[index].id,
-                        ) {
-                            if let Some(vbox) = crate::sidebar::row_text(&row) {
-                                let mut child = vbox.first_child();
-                                while let Some(widget) = child {
-                                    child = widget.next_sibling();
-                                    if widget.has_css_class("workspace-metadata") {
-                                        if let Ok(container) = widget.downcast::<gtk4::Box>() {
-                                            crate::workspace_metadata::render(
-                                                &container,
-                                                &state.workspaces[index].metadata,
-                                            );
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-                        }
+                        state.render_metadata(index);
                         state.trigger_session_save();
                     }
                     let workspace = &state.workspaces[index];

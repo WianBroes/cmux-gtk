@@ -89,8 +89,8 @@ pub struct Workspace {
     pub uuid: Uuid,
     /// Phase 4 NOTF-01: true when any pane in this workspace has unread bell activity.
     pub has_attention: bool,
-    /// Terminals whose agent is mid-turn, as (surface UUID, hook source), from agent hooks.
-    pub agents_running: std::collections::HashSet<(String, String)>,
+    /// Agents by (surface UUID, hook source) and their state, from agent hooks; runtime only.
+    pub agents: std::collections::HashMap<(String, String), crate::agent_activity::AgentState>,
     /// Phase 4: rate-limit desktop notifications to 1 per workspace per 5 seconds.
     pub last_notification: Option<std::time::Instant>,
     /// SSH remote target (e.g., "user@host"). None for local workspaces.
@@ -132,7 +132,7 @@ impl Workspace {
             stack_page_name,
             uuid: Uuid::new_v4(),
             has_attention: false,
-            agents_running: Default::default(),
+            agents: Default::default(),
             last_notification: None,
             metadata: Default::default(),
             git: None,

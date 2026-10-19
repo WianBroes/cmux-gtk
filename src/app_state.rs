@@ -393,6 +393,8 @@ impl AppState {
             .custom_name
             .unwrap_or_else(|| !Workspace::is_default_name(&ws.name));
         workspace.metadata = ws.metadata.clone().validated();
+        // Upstream: statuses belong to the processes that set them, gone after a restart.
+        workspace.metadata.statuses.clear();
         workspace.describe(ws.custom_description.clone());
         workspace.uuid = uuid::Uuid::parse_str(&ws.uuid).unwrap_or_else(|_| uuid::Uuid::new_v4());
         workspace.color = ws
@@ -1336,7 +1338,10 @@ impl AppState {
             row,
             unread,
             workspace.has_attention || unread > 0,
-            !workspace.agents_running.is_empty(),
+            workspace
+                .agents
+                .values()
+                .any(|state| *state == crate::agent_activity::AgentState::Running),
             latest.as_deref(),
         );
     }
@@ -1349,10 +1354,11 @@ impl AppState {
             let workspace = &self.workspaces[index];
             let (unread, latest) = Self::inbox_row_summary(&self.inbox.records, workspace.uuid);
             // A turn counts while its terminal is still open; closed ones were pruned on hook.
-            let running = workspace.agents_running.iter().any(|(surface, _)| {
-                self.split_engines[index]
-                    .find_pane_id_by_uuid(surface)
-                    .is_some()
+            let running = workspace.agents.iter().any(|((surface, _), state)| {
+                *state == crate::agent_activity::AgentState::Running
+                    && self.split_engines[index]
+                        .find_pane_id_by_uuid(surface)
+                        .is_some()
             });
             crate::sidebar::set_row_status(
                 &row,
@@ -1498,7 +1504,13 @@ impl AppState {
     }
 
     /// Agent hook turn boundaries drive the sidebar spinner (upstream `showAgentActivity`).
-    pub fn set_agent_running(&mut self, surface: &str, source: &str, running: bool) {
+    /// Record an agent's new state (`None`: its session ended) and refresh the workspace row.
+    pub fn set_agent_state(
+        &mut self,
+        surface: &str,
+        source: &str,
+        state: Option<crate::agent_activity::AgentState>,
+    ) {
         let Some(index) = self
             .split_engines
             .iter()
@@ -1506,18 +1518,60 @@ impl AppState {
         else {
             return;
         };
-        let engine = &self.split_engines[index];
-        let agents = &mut self.workspaces[index].agents_running;
-        // Forget terminals that closed without reporting the end of their turn.
-        agents.retain(|(surface, _)| engine.find_pane_id_by_uuid(surface).is_some());
         let key = (surface.to_owned(), source.to_owned());
-        let changed = if running {
-            agents.insert(key)
-        } else {
-            agents.remove(&key)
+        self.update_agents(index, |agents| {
+            match state {
+                Some(state) => agents.insert(key, state),
+                None => agents.remove(&key),
+            };
+        });
+    }
+
+    /// Apply `change`, forget agents whose terminal closed, then redraw the workspace's agent
+    /// status lines (one per agent kind; upstream drops a pane's entry with the pane) and spinner.
+    pub(crate) fn update_agents(
+        &mut self,
+        index: usize,
+        change: impl FnOnce(
+            &mut std::collections::HashMap<(String, String), crate::agent_activity::AgentState>,
+        ),
+    ) {
+        let engine = &self.split_engines[index];
+        let workspace = &mut self.workspaces[index];
+        let before = crate::agent_activity::status_entries(&workspace.agents);
+        change(&mut workspace.agents);
+        workspace
+            .agents
+            .retain(|(surface, _), _| engine.find_pane_id_by_uuid(surface).is_some());
+        let after = crate::agent_activity::status_entries(&workspace.agents);
+        let statuses = &mut workspace.metadata.statuses;
+        for key in before.keys().filter(|key| !after.contains_key(*key)) {
+            statuses.remove(key);
+        }
+        statuses.extend(after);
+        self.render_metadata(index);
+        self.update_sidebar_attention(index);
+    }
+
+    /// Redraw the status, block, log and progress lines of workspace `index`'s row.
+    pub(crate) fn render_metadata(&self, index: usize) {
+        let Some(row) =
+            crate::sidebar::row_for_workspace(&self.sidebar_list, self.workspaces[index].id)
+        else {
+            return;
         };
-        if changed {
-            self.update_sidebar_attention(index);
+        let Some(vbox) = crate::sidebar::row_text(&row) else {
+            return;
+        };
+        let mut child = vbox.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            if widget.has_css_class("workspace-metadata") {
+                if let Ok(container) = widget.downcast::<gtk4::Box>() {
+                    crate::workspace_metadata::render(&container, &self.workspaces[index].metadata);
+                }
+                break;
+            }
         }
     }
 

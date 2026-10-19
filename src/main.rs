@@ -128,6 +128,16 @@ paned > separator:hover { background-color: #5b8dd9; }
 .workspace-list row .workspace-row-text .workspace-notification {
     font-size: 12px;
 }
+/* Upstream metadata toggle (Show more, past three status lines): 10 pt semibold, secondary. */
+.workspace-list row .workspace-metadata .workspace-metadata-toggle {
+    padding: 0 2px;
+    min-height: 0;
+}
+.workspace-list row .workspace-metadata .workspace-metadata-toggle label {
+    font-size: 10px;
+    font-weight: 600;
+    color: #a0a0a0;
+}
 /* Phase 4: SSH connection state subtitle (SSH-01, SSH-04) */
 .connection-state {
     font-size: 11px;
