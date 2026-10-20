@@ -56,7 +56,7 @@ pub fn build_header_bar(
     // A disabled arrow no longer takes clicks, so GTK hands them to the titlebar, where the
     // window manager reads them as a titlebar double-click or drag and moves the window. The
     // arrows' own box claims presses on a disabled arrow only; an enabled one keeps its click.
-    let arrows = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+    let arrows = gtk4::Box::new(gtk4::Orientation::Horizontal, 2);
     arrows.append(&back);
     arrows.append(&forward);
     let absorb = gtk4::GestureClick::new();
@@ -189,14 +189,24 @@ fn new_workspace_split_button() -> gtk4::Box {
     model.append(Some("New Terminal Tab"), Some("win.new-terminal-tab"));
     model.append(Some("New Browser Tab"), Some("win.new-browser-tab"));
     let plus = action_button("cmux-plus-symbolic", "New Workspace (Ctrl+N)", "win.new-workspace");
-    let caret = gtk4::MenuButton::new();
-    caret.set_icon_name("cmux-chevron-down-symbolic");
+    // A plain button opening the menu, not a MenuButton: the MenuButton's own box made the caret
+    // wider than the other square buttons (Wian, 2026-10-20).
+    let caret = gtk4::Button::from_icon_name("cmux-chevron-down-symbolic");
     caret.set_tooltip_text(Some("New workspace options"));
-    caret.set_menu_model(Some(&model));
     caret.add_css_class("headerbar-btn");
-    // Frameless like the other titlebar buttons (Wian, 2026-10-20: the framed caret stood out).
-    caret.set_has_frame(false);
-    let group = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+    let menu = gtk4::PopoverMenu::from_model(Some(&model));
+    menu.set_parent(&caret);
+    menu.set_has_arrow(false);
+    caret.connect_clicked({
+        let menu = menu.downgrade();
+        move |_| {
+            if let Some(menu) = menu.upgrade() {
+                menu.popup();
+            }
+        }
+    });
+    caret.connect_destroy(move |_| menu.unparent());
+    let group = gtk4::Box::new(gtk4::Orientation::Horizontal, 2);
     group.append(&plus);
     group.append(&caret);
     let right_click = gtk4::GestureClick::new();
@@ -206,7 +216,7 @@ fn new_workspace_split_button() -> gtk4::Box {
         move |gesture, _, _, _| {
             gesture.set_state(gtk4::EventSequenceState::Claimed);
             if let Some(caret) = caret.upgrade() {
-                caret.popup();
+                caret.emit_clicked();
             }
         }
     });
