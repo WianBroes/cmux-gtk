@@ -2935,7 +2935,14 @@ fn handle_socket_command_traced(
             // SOCK-05: health is NOT focus-intent — NO focus change.
             let response = {
                 let s = state.borrow();
-                match workspace.as_deref() {
+                // Upstream lists the selected workspace when nothing is named; a targeted
+                // surface keeps this port's single-record answer (`health --id`).
+                let listed = workspace.clone().or_else(|| {
+                    id.is_none()
+                        .then(|| s.workspaces.get(s.active_index).map(|row| row.uuid.to_string()))
+                        .flatten()
+                });
+                match listed.as_deref() {
                     // Upstream `surface-health`: one record per surface of one workspace.
                     Some(workspace) => {
                         let found = uuid::Uuid::parse_str(workspace)
@@ -2956,8 +2963,18 @@ fn handle_socket_command_traced(
                                             pane.surface_ids.iter().zip(&pane.browser_urls)
                                         {
                                             let id = uuid.to_string();
+                                            // Upstream `in_window`: the hosted view is in a window;
+                                            // here, the terminal's GL area is mapped.
+                                            let in_window = match browser {
+                                                None => json!(engine
+                                                    .gl_area_for_surface(&id)
+                                                    .is_some_and(|area| area.is_mapped())),
+                                                Some(_) => Value::Null,
+                                            };
                                             let mut record = json!({
+                                                "index": surfaces.len(),
                                                 "id": id,
+                                                "in_window": in_window,
                                                 "ref": s.handles.ensure_ref(
                                                     super::handles::HandleKind::Surface, &id),
                                                 "type": if browser.is_some() { "browser" } else { "terminal" },
@@ -2994,6 +3011,11 @@ fn handle_socket_command_traced(
                                         "workspace_id": workspace_uuid,
                                         "workspace_ref": workspace_ref,
                                         "surfaces": surfaces,
+                                        "window_id": super::handles::MAIN_WINDOW_ID,
+                                        "window_ref": s.handles.ensure_ref(
+                                            super::handles::HandleKind::Window,
+                                            super::handles::MAIN_WINDOW_ID,
+                                        ),
                                     }),
                                 )
                             }
