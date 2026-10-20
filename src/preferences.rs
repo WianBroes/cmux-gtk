@@ -60,12 +60,30 @@ pub fn sidebar_minimum() -> f64 {
     f64::from_bits(SIDEBAR_MINIMUM.load(Ordering::Relaxed))
 }
 
-/// Bound a left sidebar width by the adjustable minimum and the maximum.
+/// Width the titlebar controls need above the sidebar (`header_bar::align_with_sidebar`): the
+/// sidebar never goes narrower, so the menus always start at its edge (Wian, 2026-10-20).
+static SIDEBAR_FLOOR: AtomicU64 = AtomicU64::new(0);
+
+/// The left sidebar's effective minimum: the setting, or the controls' width when larger.
+fn left_sidebar_minimum() -> f64 {
+    sidebar_minimum().max(f64::from_bits(SIDEBAR_FLOOR.load(Ordering::Relaxed)))
+}
+
+/// Record the controls' width and apply it to the sidebar divider when it changed.
+pub fn set_sidebar_floor(floor: f64, paned: &gtk4::Paned) {
+    if floor.to_bits() == SIDEBAR_FLOOR.load(Ordering::Relaxed) {
+        return;
+    }
+    SIDEBAR_FLOOR.store(floor.to_bits(), Ordering::Relaxed);
+    apply_left_minimum(paned);
+}
+
+/// Bound a left sidebar width by the effective minimum and the maximum.
 fn clamp_left_sidebar_width(value: f64) -> f64 {
     if value.is_finite() {
-        value.clamp(sidebar_minimum(), SIDEBAR_WIDTH_MAX)
+        value.clamp(left_sidebar_minimum(), SIDEBAR_WIDTH_MAX.max(left_sidebar_minimum()))
     } else {
-        sidebar_minimum()
+        left_sidebar_minimum()
     }
 }
 
@@ -175,7 +193,7 @@ fn save_current() -> Result<(), String> {
 /// narrower than the minimum and never wider than a third of the window (`ContentView.swift`).
 pub fn attach_sidebar_resize(paned: &gtk4::Paned) {
     if let Some(sidebar) = paned.start_child() {
-        sidebar.set_size_request(sidebar_minimum() as i32, -1);
+        sidebar.set_size_request(left_sidebar_minimum() as i32, -1);
     }
     // Upstream keeps the sidebar width when the window resizes. GTK's defaults scale it with the
     // window and let it fall below its minimum, where it is allocated anyway and clipped.
@@ -193,7 +211,7 @@ pub fn attach_sidebar_resize(paned: &gtk4::Paned) {
         let position = paned.position() as f64;
         let available = paned.width() as f64;
         if available > 1.0 {
-            let cap = (available / 3.0).clamp(sidebar_minimum(), SIDEBAR_WIDTH_MAX);
+            let cap = (available / 3.0).clamp(left_sidebar_minimum(), SIDEBAR_WIDTH_MAX.max(left_sidebar_minimum()));
             if position > cap {
                 paned.set_position(cap.round() as i32);
                 return;
@@ -221,11 +239,15 @@ pub fn attach_sidebar_resize(paned: &gtk4::Paned) {
 /// when it was narrower than allowed or held at the old minimum.
 fn apply_sidebar_minimum(state: &crate::app_state::AppStateRef) {
     let list = state.borrow().sidebar_list.clone();
-    let Some(paned) = list.ancestor(gtk4::Paned::static_type()).and_downcast::<gtk4::Paned>() else {
-        return;
-    };
+    if let Some(paned) = list.ancestor(gtk4::Paned::static_type()).and_downcast::<gtk4::Paned>() {
+        apply_left_minimum(&paned);
+    }
+}
+
+/// Give the sidebar its effective minimum, widening it when it is now too narrow.
+fn apply_left_minimum(paned: &gtk4::Paned) {
     if let Some(sidebar) = paned.start_child() {
-        sidebar.set_size_request(sidebar_minimum() as i32, -1);
+        sidebar.set_size_request(left_sidebar_minimum() as i32, -1);
     }
     let width = clamp_left_sidebar_width(paned.position() as f64);
     if width as i32 != paned.position() {

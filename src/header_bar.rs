@@ -145,6 +145,15 @@ fn align_with_sidebar(controls: &gtk4::Box, menus: &gtk4::PopoverMenuBar, sideba
                     floor += widget.measure(gtk4::Orientation::Horizontal, -1).0;
                     child = widget.next_sibling();
                 }
+                // Where the menus would start with the controls at their narrowest: the sidebar
+                // may not get narrower than that.
+                if let Some(divider) = sidebar.parent().and_downcast::<gtk4::Paned>() {
+                    let origin = sidebar.compute_point(&root, &gtk4::graphene::Point::new(0.0, 0.0));
+                    if let Some(origin) = origin {
+                        let needed = start.x() - controls.width() as f32 + floor as f32 - origin.x();
+                        crate::preferences::set_sidebar_floor(f64::from(needed.ceil()), &divider);
+                    }
+                }
                 let width = (controls.width() + shift).max(floor);
                 if width != controls.width_request() {
                     controls.set_size_request(width, -1);

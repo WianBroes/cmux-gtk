@@ -250,12 +250,11 @@ pub fn rebuild_grouped_sidebar(state: &crate::app_state::AppStateRef) {
 /// Returns (sidebar_box, scrolled_window, list_box).
 ///
 /// Per UI-SPEC:
-/// - Width: dragged on the divider like upstream (240 minimum, 600 or a third of the window at
-///   most), remembered in `preferences.json`; `set_size_request(160, -1)` below is only the
-///   scroll area's own floor
+/// - Width: dragged on the divider like upstream (an adjustable minimum, 120…260 and 240 by
+///   default, 600 or a third of the window at most), remembered in `preferences.json`
 /// - Background: #242424 (applied via global CssProvider in main.rs)
 /// - Row height: 36px min-height (CSS)
-/// - Row padding: 8px top/bottom, 16px left/right
+/// - Row padding: 8px top/bottom, 10px left/right inside a 6px inset (upstream)
 /// - Active row: darker accent #3a63a8 background, #ffffff name, details in #e3ecfa
 /// - Inactive row: transparent bg, #cccccc name, details in #a0a0a0
 /// - Hover (inactive): #2e2e2e
@@ -265,7 +264,6 @@ pub fn build_sidebar() -> (gtk4::Box, gtk4::ScrolledWindow, gtk4::ListBox) {
     list_box.add_css_class("workspace-list");
 
     let scrolled = gtk4::ScrolledWindow::new();
-    scrolled.set_size_request(160, -1);
     scrolled.set_hscrollbar_policy(gtk4::PolicyType::Never);
     scrolled.set_vscrollbar_policy(gtk4::PolicyType::Automatic);
     scrolled.set_child(Some(&list_box));
