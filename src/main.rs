@@ -175,8 +175,9 @@ paned > separator:hover { background-color: #5b8dd9; }
 /* One compact titlebar row; the menus take its colour, not the theme's own menubar one. */
 headerbar.cmux-headerbar { min-height: 0; padding-top: 0; padding-bottom: 0; }
 headerbar.cmux-headerbar > windowhandle > box { min-height: 0; padding-top: 2px; padding-bottom: 2px; }
-headerbar.cmux-headerbar popovermenubar,
-headerbar.cmux-headerbar popovermenubar > item { background-color: transparent; background-image: none; box-shadow: none; }
+headerbar.cmux-headerbar menubar,
+headerbar.cmux-headerbar menubar:backdrop,
+headerbar.cmux-headerbar menubar > item { background-color: transparent; background-image: none; box-shadow: none; }
 headerbar.cmux-headerbar button { min-height: 24px; padding-top: 0; padding-bottom: 0; margin-top: 0; margin-bottom: 0; }
 .headerbar-btn { min-width: 24px; min-height: 24px; padding: 2px; margin: 0 1px; border-radius: 4px; background-color: transparent; color: #cccccc; border: none; }
 .headerbar-btn:hover { background-color: rgba(255, 255, 255, 0.08); }
@@ -435,7 +436,7 @@ fn build_ui(
     // One titlebar row with the menus (`header_bar::build_header_bar`). Without our header the
     // window keeps the system titlebar and GTK shows the menu bar in the window.
     let menu_bar = crate::menus::build_menu_bar();
-    let (focus_arrows, title_label) = match crate::header_bar::build_header_bar(config, &bell, &menu_bar) {
+    let (focus_arrows, title_label) = match crate::header_bar::build_header_bar(config, &bell, &menu_bar, &sidebar_box) {
         Some((header, arrows, title)) => {
             window.set_titlebar(Some(&header));
             (Some(arrows), Some(title))

@@ -12,6 +12,7 @@ pub fn build_header_bar(
     config: &crate::config::Config,
     bell: &gtk4::Overlay,
     menu_bar: &gtk4::gio::Menu,
+    sidebar: &gtk4::Box,
 ) -> Option<(gtk4::HeaderBar, [gtk4::Button; 2], gtk4::Label)> {
     if config.ui.header_bar.style == "none" {
         return None;
@@ -28,13 +29,24 @@ pub fn build_header_bar(
     ] {
         header.pack_end(&action_button(icon, tooltip, action));
     }
-    header.pack_start(&action_button(
+    // The controls sit above the sidebar, spread over its width, so the menus start at the
+    // sidebar's edge (Wian, 2026-10-20); see `align_with_sidebar`.
+    let controls = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+    let spacer = || {
+        let spacer = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+        spacer.set_hexpand(true);
+        spacer
+    };
+    controls.append(&action_button(
         "cmux-sidebar-symbolic",
         "Toggle Sidebar (Ctrl+B)",
         "win.toggle-sidebar",
     ));
-    header.pack_start(bell);
-    header.pack_start(&new_workspace_split_button());
+    controls.append(&spacer());
+    controls.append(bell);
+    controls.append(&spacer());
+    controls.append(&new_workspace_split_button());
+    controls.append(&spacer());
     let back = action_button(
         "cmux-back-symbolic",
         "Focus Back (Ctrl+Alt+Left)",
@@ -70,8 +82,11 @@ pub fn build_header_bar(
         }
     });
     arrows.add_controller(absorb);
-    header.pack_start(&arrows);
-    header.pack_start(&gtk4::PopoverMenuBar::from_model(Some(menu_bar)));
+    controls.append(&arrows);
+    header.pack_start(&controls);
+    let menus = gtk4::PopoverMenuBar::from_model(Some(menu_bar));
+    header.pack_start(&menus);
+    align_with_sidebar(&controls, &menus, sidebar);
     let title = gtk4::Label::new(None);
     title.add_css_class("title");
     title.set_ellipsize(gtk4::pango::EllipsizeMode::End);
@@ -88,6 +103,59 @@ pub fn build_header_bar(
         "win.toggle-right-sidebar",
     ));
     Some((header, [back, forward], title))
+}
+
+/// Widen the controls so the menus begin where the sidebar ends, following the sidebar as it is
+/// resized. A hidden sidebar keeps the last width: the controls and menus never move with it.
+fn align_with_sidebar(controls: &gtk4::Box, menus: &gtk4::PopoverMenuBar, sidebar: &gtk4::Box) {
+    let align = {
+        let (controls, menus, sidebar) = (controls.downgrade(), menus.downgrade(), sidebar.downgrade());
+        move || {
+            let (Some(controls), Some(menus), Some(sidebar)) =
+                (controls.upgrade(), menus.upgrade(), sidebar.upgrade())
+            else {
+                return;
+            };
+            if !sidebar.is_visible() || sidebar.width() == 0 {
+                return;
+            }
+            let Some(root) = sidebar.root() else {
+                return;
+            };
+            // The divider's position, not the sidebar's width: it is current before the layout.
+            let width = sidebar
+                .parent()
+                .and_downcast::<gtk4::Paned>()
+                .map_or(sidebar.width(), |divider| divider.position());
+            let edge = sidebar.compute_point(&root, &gtk4::graphene::Point::new(width as f32, 0.0));
+            let start = menus.compute_point(&root, &gtk4::graphene::Point::new(0.0, 0.0));
+            let (Some(edge), Some(start)) = (edge, start) else {
+                return;
+            };
+            let shift = (edge.x() - start.x()).round() as i32;
+            if shift != 0 {
+                let width = (controls.width() + shift).max(controls.measure(gtk4::Orientation::Horizontal, -1).0);
+                if width != controls.width_request() {
+                    controls.set_size_request(width, -1);
+                }
+            }
+        }
+    };
+    // Realign after the layout that follows a sidebar resize (the divider's position) and after
+    // the first one; the shifted width settles on the next layout.
+    let align = std::rc::Rc::new(align);
+    let later = move || {
+        let align = align.clone();
+        gtk4::glib::idle_add_local_once(move || align());
+    };
+    if let Some(divider) = sidebar.parent().and_downcast::<gtk4::Paned>() {
+        let later = later.clone();
+        divider.connect_notify_local(Some("position"), move |_, _| later());
+    }
+    controls.connect_map(move |_| {
+        let later = later.clone();
+        gtk4::glib::timeout_add_local_once(std::time::Duration::from_millis(200), move || later());
+    });
 }
 
 /// Show the selected workspace's name in the titlebar; no-op when it is already shown.
