@@ -172,7 +172,14 @@ paned > separator:hover { background-color: #5b8dd9; }
 .devtools-snapshot { color: #cccccc; font-family: monospace; font-size: 12px; padding: 16px; }
 /* Phase 9: Header bar (D-04) */
 .cmux-headerbar { background-color: #242424; }
-.headerbar-btn { min-width: 28px; min-height: 28px; padding: 4px; margin: 0 2px; border-radius: 4px; background-color: transparent; color: #cccccc; border: none; }
+/* One compact titlebar row; the menus take its colour, not the theme's own menubar one. */
+headerbar.cmux-headerbar { min-height: 0; padding-top: 0; padding-bottom: 0; }
+headerbar.cmux-headerbar > windowhandle > box { min-height: 0; padding-top: 2px; padding-bottom: 2px; }
+headerbar.cmux-headerbar popovermenubar,
+headerbar.cmux-headerbar popovermenubar > item { background-color: transparent; background-image: none; box-shadow: none; }
+headerbar.cmux-headerbar button { min-height: 24px; padding-top: 0; padding-bottom: 0; margin-top: 0; margin-bottom: 0; }
+headerbar.cmux-headerbar windowcontrols button { min-width: 24px; min-height: 24px; padding: 2px; margin: 0; }
+.headerbar-btn { min-width: 24px; min-height: 24px; padding: 2px; margin: 0 1px; border-radius: 4px; background-color: transparent; color: #cccccc; border: none; }
 .headerbar-btn:hover { background-color: rgba(255, 255, 255, 0.08); }
 .headerbar-btn:active { background-color: rgba(255, 255, 255, 0.12); }
 .header-badge { background-color: #3584e4; color: #ffffff; border-radius: 8px; min-width: 14px; padding: 0 3px; font-size: 9px; font-weight: bold; margin: 1px; }
