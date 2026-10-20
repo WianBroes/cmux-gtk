@@ -32,7 +32,7 @@ jobs:
             ghostty/.zig-cache
             ghostty/zig-out
             ~/.cache/zig
-          key: ghostty-${{ runner.os }}-${{ runner.arch }}-${{ steps.ghostty_revision.outputs.revision }}-${{ hashFiles('scripts/setup-linux*.sh') }}
+          key: ghostty-${{ runner.os }}-${{ runner.arch }}-${{ steps.ghostty_revision.outputs.revision }}-${{ hashFiles('scripts/setup-linux*.sh', 'patches/ghostty/*.patch') }}
 
       - name: Install Linux dependencies and build Ghostty
         run: ./scripts/setup-linux-dev.sh

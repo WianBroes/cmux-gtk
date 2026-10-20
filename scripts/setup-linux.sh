@@ -58,6 +58,20 @@ if [ ! -f "build.zig" ]; then
     exit 1
 fi
 
+# Local fixes not yet in the submodule (idempotent: skip patches already applied)
+for patch in "$REPO_ROOT"/patches/ghostty/*.patch; do
+    [[ -e "$patch" ]] || continue
+    if git apply --reverse --check "$patch" 2>/dev/null; then
+        echo "==> Ghostty patch already applied: $(basename "$patch")"
+    elif git apply --check "$patch" 2>/dev/null; then
+        git apply "$patch"
+        echo "==> Applied Ghostty patch: $(basename "$patch")"
+    else
+        echo "ERROR: Ghostty patch does not apply: $patch" >&2
+        exit 1
+    fi
+done
+
 zig build \
     -Dapp-runtime=none \
     -Doptimize=ReleaseFast \
