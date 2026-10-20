@@ -29,27 +29,20 @@ pub fn build_header_bar(
     ] {
         header.pack_end(&action_button(icon, tooltip, action));
     }
-    // The controls sit above the sidebar, spread over its width, so the menus start at the
-    // sidebar's edge (Wian, 2026-10-20); see `align_with_sidebar`.
-    let controls = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
-    // The spacers expand inside the width set by `align_with_sidebar` only: without this, their
-    // hexpand propagates and the headerbar stretches the controls up to the centred title.
+    // The controls sit above the sidebar, side by side from its left edge, like upstream's; the
+    // gap after the last one to the sidebar's edge is free, so the menus start at that edge
+    // (Wian, 2026-10-20); see `align_with_sidebar`.
+    let controls = gtk4::Box::new(gtk4::Orientation::Horizontal, 2);
+    // The width set by `align_with_sidebar` is the controls' own; nothing in them may make the
+    // headerbar stretch them up to the centred title.
     controls.set_hexpand(false);
-    let spacer = || {
-        let spacer = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
-        spacer.set_hexpand(true);
-        spacer
-    };
     controls.append(&action_button(
         "cmux-sidebar-symbolic",
         "Toggle Sidebar (Ctrl+B)",
         "win.toggle-sidebar",
     ));
-    controls.append(&spacer());
     controls.append(bell);
-    controls.append(&spacer());
     controls.append(&new_workspace_split_button());
-    controls.append(&spacer());
     let back = action_button(
         "cmux-back-symbolic",
         "Focus Back (Ctrl+Alt+Left)",
@@ -140,11 +133,14 @@ fn align_with_sidebar(controls: &gtk4::Box, menus: &gtk4::PopoverMenuBar, sideba
                 // The floor is what the buttons need: the box's own minimum includes the width
                 // requested here, which would keep the controls from shrinking back.
                 let mut floor = 0;
+                let mut count = 0;
                 let mut child = controls.first_child();
                 while let Some(widget) = child {
                     floor += widget.measure(gtk4::Orientation::Horizontal, -1).0;
+                    count += 1;
                     child = widget.next_sibling();
                 }
+                floor += controls.spacing() * (count - 1).max(0);
                 // Where the menus would start with the controls at their narrowest: the sidebar
                 // may not get narrower than that.
                 if let Some(divider) = sidebar.parent().and_downcast::<gtk4::Paned>() {
@@ -198,8 +194,9 @@ fn new_workspace_split_button() -> gtk4::Box {
     caret.set_tooltip_text(Some("New workspace options"));
     caret.set_menu_model(Some(&model));
     caret.add_css_class("headerbar-btn");
+    // Frameless like the other titlebar buttons (Wian, 2026-10-20: the framed caret stood out).
+    caret.set_has_frame(false);
     let group = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
-    group.add_css_class("linked");
     group.append(&plus);
     group.append(&caret);
     let right_click = gtk4::GestureClick::new();
