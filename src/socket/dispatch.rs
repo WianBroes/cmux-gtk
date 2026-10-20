@@ -304,6 +304,9 @@ async fn dispatch_request(
         let Some(resolved) = response.get("result").and_then(|result| {
             serde_json::from_value::<std::collections::HashMap<String, String>>(result.clone()).ok()
         }) else {
+            if method == "browser.open_split" {
+                return err(req_id, "not_found", "Source surface not found");
+            }
             return response;
         };
         super::handles::rewrite(&mut params, &resolved);
@@ -1606,6 +1609,75 @@ async fn dispatch_request(
                     }
                     None => None,
                 },
+                resp_tx,
+            }
+        }
+        "browser.open_split" => {
+            let workspace = match params
+                .get("workspace_id")
+                .filter(|value| !value.is_null())
+                .or_else(|| params.get("workspace").filter(|value| !value.is_null()))
+            {
+                Some(value) => match value
+                    .as_str()
+                    .filter(|value| uuid::Uuid::parse_str(value).is_ok())
+                {
+                    Some(value) => Some(value.to_owned()),
+                    None => return err(req_id, "invalid_params", "invalid workspace UUID"),
+                },
+                None => None,
+            };
+            let source = match params
+                .get("surface_id")
+                .filter(|value| !value.is_null())
+                .or_else(|| params.get("tab_id").filter(|value| !value.is_null()))
+            {
+                None => None,
+                Some(serde_json::Value::String(value)) => Some(value.clone()),
+                Some(_) => {
+                    return err(
+                        req_id,
+                        "invalid_params",
+                        "source must be a surface reference",
+                    )
+                }
+            };
+            let pane = match params.get("pane_id") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::String(value)) => Some(value.clone()),
+                Some(_) => return err(req_id, "invalid_params", "pane_id must be a pane reference"),
+            };
+            let focus = match params.get("focus") {
+                None | Some(serde_json::Value::Null) => false,
+                Some(serde_json::Value::Bool(value)) => *value,
+                Some(_) => return err(req_id, "invalid_params", "focus must be a boolean"),
+            };
+            commands::SocketCommand::BrowserOpenSplit {
+                req_id: req_id.clone(),
+                url: params
+                    .get("url")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("about:blank")
+                    .to_owned(),
+                source,
+                pane,
+                workspace,
+                profile: match params.get("profile").filter(|value| !value.is_null()) {
+                    Some(value) => {
+                        match value.as_str().and_then(crate::browser::profile_selector) {
+                            Some(value) => Some(value),
+                            None => {
+                                return err(
+                                    req_id,
+                                    "invalid_params",
+                                    "invalid browser profile selector",
+                                )
+                            }
+                        }
+                    }
+                    None => None,
+                },
+                focus,
                 resp_tx,
             }
         }

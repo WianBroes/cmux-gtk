@@ -387,7 +387,7 @@ pub fn run(state: &crate::app_state::AppStateRef, request: RunRequest, mut respo
         if matches!(intent, Intent::Builtin { builtin: Builtin::NewBrowser }) {
             let Some(pane) = pane else {let _=response.send(err(req_id,"not_found","project browser target missing"));return;};
             drop(state);
-            super::handlers::start_browser_lifecycle(&owner, crate::browser::StartupRequest::Open(json!({"url":"about:blank","workspace":workspace_id})), req_id, response, trace_id, Some(pane));
+            super::handlers::start_browser_lifecycle(&owner, crate::browser::StartupRequest::Open(json!({"url":"about:blank","workspace":workspace_id})), req_id, response, trace_id, Some(pane), super::handlers::BrowserPlacement::ActivePane);
             return;
         }
         let mut result_workspace_id = workspace_id;

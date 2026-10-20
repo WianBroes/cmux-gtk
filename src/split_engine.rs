@@ -408,6 +408,31 @@ fn fit_tab_titles(notebook: &gtk4::Notebook, actions: &gtk4::ScrolledWindow) {
     }
 }
 
+/// Construct a browser surface with its persistent profile and right-click context menu.
+fn create_preview_surface(profile: Option<String>) -> crate::browser::PreviewPaneWidgets {
+    let mut widgets = crate::browser::create_preview_pane();
+    widgets.profile = profile;
+
+    // Phase 9: Attach right-click context menu to browser preview (D-09)
+    let menu_model = crate::menus::build_browser_context_menu();
+    let popover = gtk4::PopoverMenu::from_model(Some(&menu_model));
+    popover.set_parent(&widgets.container);
+    popover.set_has_arrow(false);
+
+    let gesture = gtk4::GestureClick::new();
+    gesture.set_button(3); // Right-click only
+    gesture.connect_released({
+        let popover = popover.clone();
+        move |_, _, x, y| {
+            popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            popover.popup();
+        }
+    });
+    widgets.container.add_controller(gesture);
+
+    widgets
+}
+
 /// Construct a tabbed pane and synchronize native focus when its selected page changes.
 fn create_pane(pane_id: u64, initial_surface: PaneSurface) -> SplitNode {
     let notebook = gtk4::Notebook::new();
@@ -1379,31 +1404,19 @@ impl SplitEngine {
         profile: Option<String>,
     ) -> Option<crate::browser::PreviewPaneWidgets> {
         let active_id = self.active_pane_id;
-        let mut widgets = crate::browser::create_preview_pane();
-        widgets.profile = profile;
+        self.add_preview_to_pane(active_id, select, profile)
+    }
 
-        // Phase 9: Attach right-click context menu to browser preview (D-09)
-        {
-            let menu_model = crate::menus::build_browser_context_menu();
-            let popover = gtk4::PopoverMenu::from_model(Some(&menu_model));
-            popover.set_parent(&widgets.container);
-            popover.set_has_arrow(false);
-
-            let gesture = gtk4::GestureClick::new();
-            gesture.set_button(3); // Right-click only
-            gesture.connect_released({
-                let popover = popover.clone();
-                move |_, _, x, y| {
-                    popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(
-                        x as i32, y as i32, 1, 1,
-                    )));
-                    popover.popup();
-                }
-            });
-            widgets.container.add_controller(gesture);
-        }
-
-        let (notebook, surfaces) = find_pane_tabs(&self.root, active_id)?;
+    /// Append a browser surface to a named pane, optionally selecting it and moving keyboard
+    /// focus to its address without changing the active pane.
+    pub(crate) fn add_preview_to_pane(
+        &mut self,
+        pane_id: u64,
+        select: bool,
+        profile: Option<String>,
+    ) -> Option<crate::browser::PreviewPaneWidgets> {
+        let (notebook, surfaces) = find_pane_tabs(&self.root, pane_id)?;
+        let widgets = create_preview_surface(profile);
         append_pane_surface(
             &notebook,
             &surfaces,
@@ -1413,13 +1426,99 @@ impl SplitEngine {
             },
             select,
         );
-        self.root.update_focus_css(active_id);
+        self.root.update_focus_css(self.active_pane_id);
         if select {
             widgets.url_entry.grab_focus();
             widgets.url_entry.select_region(0, -1);
         }
 
         Some(widgets)
+    }
+
+    /// Split `target_pane` with a new browser surface on `direction`'s side of it.
+    pub(crate) fn split_pane_browser(
+        &mut self,
+        target_pane: u64,
+        direction: FocusDirection,
+        profile: Option<String>,
+        focus: bool,
+    ) -> Result<(u64, crate::browser::PreviewPaneWidgets), &'static str> {
+        if self.root.find_node(target_pane).is_none() {
+            return Err("pane not found");
+        }
+        let orientation = match direction {
+            FocusDirection::Left | FocusDirection::Right => gtk4::Orientation::Horizontal,
+            FocusDirection::Up | FocusDirection::Down => gtk4::Orientation::Vertical,
+        };
+        let before = matches!(direction, FocusDirection::Left | FocusDirection::Up);
+        let widgets = create_preview_surface(profile);
+        let new_pane_id = self.next_pane_id;
+        self.next_pane_id += 1;
+        let new_leaf = create_pane(
+            new_pane_id,
+            PaneSurface::Browser {
+                widgets: widgets.clone(),
+                uuid: widgets.uuid,
+            },
+        );
+        let stack_slot = if matches!(self.root, SplitNode::Leaf { .. }) {
+            self.root
+                .widget()
+                .parent()
+                .and_then(|parent| parent.downcast::<gtk4::Stack>().ok())
+                .and_then(|stack| {
+                    let name = stack.page(&self.root.widget()).name()?.to_string();
+                    Some((stack, name))
+                })
+        } else {
+            None
+        };
+        self.replace_leaf_with_split_position(target_pane, new_leaf, orientation, before)
+            .ok_or("pane not found")?;
+        if let Some((stack, name)) = stack_slot {
+            let root = self.root.widget();
+            stack.add_named(&root, Some(&name));
+            stack.set_visible_child_name(&name);
+        }
+        if focus {
+            if let Some(surface) = self.find_surface(self.active_pane_id) {
+                // SAFETY: the active pane's native surface is live on GTK.
+                unsafe { ffi::ghostty_surface_set_focus(surface, false) };
+            }
+            self.active_pane_id = new_pane_id;
+            self.root.update_focus_css(new_pane_id);
+            widgets.url_entry.grab_focus();
+            widgets.url_entry.select_region(0, -1);
+        }
+        Ok((new_pane_id, widgets))
+    }
+
+    /// Pane directly to the right of `pane_id` in the same row, preserving split topology
+    /// even before GTK realizes new panes.
+    pub(crate) fn right_neighbor(&self, pane_id: u64) -> Option<u64> {
+        let mut slots = Vec::new();
+        collect_pane_slots(&self.root, 0.0, 0.0, 1.0, 1.0, &mut slots);
+        let source = slots.iter().find(|slot| slot.0 == pane_id)?;
+        let source_right = source.1 + source.3;
+        slots
+            .iter()
+            .filter(|slot| slot.0 != pane_id)
+            .filter_map(|slot| {
+                let vertical_overlap =
+                    (source.2 + source.4).min(slot.2 + slot.4) - source.2.max(slot.2);
+                let horizontal_gap = slot.1 - source_right;
+                (vertical_overlap > 0.0 && horizontal_gap >= -f32::EPSILON).then_some((
+                    horizontal_gap,
+                    -vertical_overlap,
+                    slot.0,
+                ))
+            })
+            .min_by(|left, right| {
+                left.0
+                    .total_cmp(&right.0)
+                    .then(left.1.total_cmp(&right.1))
+            })
+            .map(|(_, _, pane_id)| pane_id)
     }
 
     /// Replace the leaf with `target_pane_id` with a Split(orientation) node.
@@ -2478,6 +2577,39 @@ fn collect_pane_geometry(node: &SplitNode, ancestor: &gtk4::Widget, panes: &mut 
             collect_pane_geometry(start, ancestor, panes);
             collect_pane_geometry(end, ancestor, panes);
         }
+    }
+}
+
+/// Assign each pane an abstract left/top/width/height slot from the split tree. A horizontal
+/// split places `start` left and `end` right; a vertical split places `start` above `end`.
+fn collect_pane_slots(
+    node: &SplitNode,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    out: &mut Vec<(u64, f32, f32, f32, f32)>,
+) {
+    match node {
+        SplitNode::Leaf { pane_id, .. } => out.push((*pane_id, x, y, width, height)),
+        SplitNode::Split {
+            orientation,
+            start,
+            end,
+            ..
+        } => match orientation {
+            gtk4::Orientation::Horizontal => {
+                let half = width / 2.0;
+                collect_pane_slots(start, x, y, half, height, out);
+                collect_pane_slots(end, x + half, y, half, height, out);
+            }
+            gtk4::Orientation::Vertical => {
+                let half = height / 2.0;
+                collect_pane_slots(start, x, y, width, half, out);
+                collect_pane_slots(end, x, y + half, width, half, out);
+            }
+            _ => {}
+        },
     }
 }
 

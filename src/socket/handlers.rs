@@ -437,6 +437,89 @@ fn browser_target(state: &crate::app_state::AppState, target: Option<&str>) -> O
         .or_else(|| (surfaces.len() == 1).then(|| surfaces[0]))
 }
 
+/// Resolve a surface UUID or `surface:N` ref; callers use explicit ids unless a ref remains
+/// (dispatch rewrites `surface_id`, but `tab_id` keeps its original spelling).
+fn resolve_surface_identifier(
+    state: &crate::app_state::AppState,
+    value: &str,
+) -> Option<uuid::Uuid> {
+    if let Ok(id) = uuid::Uuid::parse_str(value) {
+        return Some(id);
+    }
+    if let Some((super::handles::HandleKind::Surface, ordinal)) =
+        super::handles::parse_ref(value)
+    {
+        return state
+            .handles
+            .resolve(super::handles::HandleKind::Surface, ordinal)
+            .and_then(|id| uuid::Uuid::parse_str(&id).ok());
+    }
+    resolve_surface_ref(value, &state.browser_surface_refs)
+        .ok()
+        .and_then(|id| uuid::Uuid::parse_str(&id).ok())
+}
+
+/// Workspace, pane and selected surface a `browser.open_split` source names, in upstream's
+/// precedence: `surface_id`/`tab_id`, then `pane_id`, then the focused surface.
+fn open_split_source(
+    state: &crate::app_state::AppState,
+    source: Option<&str>,
+    pane: Option<&str>,
+    workspace: Option<&str>,
+) -> Result<(usize, uuid::Uuid, u64, uuid::Uuid), (&'static str, &'static str)> {
+    if let Some(reference) = source {
+        let Some(surface) = resolve_surface_identifier(state, reference) else {
+            return Err(("not_found", "Source surface not found"));
+        };
+        for (index, engine) in state.split_engines.iter().enumerate() {
+            if let Some(pane_id) = engine.find_pane_id_by_uuid(&surface.to_string()) {
+                return Ok((index, state.workspaces[index].uuid, pane_id, surface));
+            }
+        }
+        return Err(("not_found", "Source surface not found"));
+    }
+
+    if let Some(reference) = pane {
+        for (index, engine) in state.split_engines.iter().enumerate() {
+            let pane_id = engine.pane_for_ref(reference).or_else(|| {
+                resolve_surface_identifier(state, reference)
+                    .and_then(|surface| engine.find_pane_id_by_uuid(&surface.to_string()))
+            });
+            if let Some(pane_id) = pane_id {
+                let surface = engine
+                    .pane_info()
+                    .into_iter()
+                    .find(|pane| pane.id == pane_id)
+                    .and_then(|pane| pane.selected_surface)
+                    .ok_or(("not_found", "Source surface not found"))?;
+                return Ok((index, state.workspaces[index].uuid, pane_id, surface));
+            }
+        }
+        return Err(("not_found", "Source surface not found"));
+    }
+
+    let index = match workspace {
+        Some(workspace) => state
+            .workspaces
+            .iter()
+            .position(|candidate| candidate.uuid.to_string() == workspace)
+            .ok_or(("not_found", "Source surface not found"))?,
+        None => state.active_index,
+    };
+    let engine = state
+        .split_engines
+        .get(index)
+        .ok_or(("not_found", "No focused surface to split"))?;
+    let surface = engine
+        .active_pane_uuid()
+        .and_then(|surface| uuid::Uuid::parse_str(&surface).ok())
+        .ok_or(("not_found", "No focused surface to split"))?;
+    let pane_id = engine
+        .find_pane_id_by_uuid(&surface.to_string())
+        .ok_or(("not_found", "No focused surface to split"))?;
+    Ok((index, state.workspaces[index].uuid, pane_id, surface))
+}
+
 /// Dispatch a SocketCommand on the GTK main thread.
 /// SOCK-05: Only focus-intent commands (workspace.select, workspace.next/previous/last,
 /// pane.focus, pane.last, surface.focus) may call grab_active_focus() or focus_active_surface().
@@ -744,6 +827,7 @@ fn handle_socket_command_traced(
                 "notification.jump_to_unread",
                 // Browser lifecycle + streaming
                 "browser.open",
+                "browser.open_split",
                 "browser.close",
                 "browser.list",
                 "browser.stream.enable",
@@ -3189,6 +3273,60 @@ fn handle_socket_command_traced(
                 resp_tx,
                 trace_id,
                 None,
+                BrowserPlacement::ActivePane,
+            );
+        }
+
+        SocketCommand::BrowserOpenSplit {
+            req_id,
+            url,
+            source,
+            pane,
+            workspace,
+            profile,
+            focus,
+            resp_tx,
+        } => {
+            let prepared = {
+                let s = state.borrow();
+                open_split_source(
+                    &s,
+                    source.as_deref(),
+                    pane.as_deref(),
+                    workspace.as_deref(),
+                )
+                .map(|(index, workspace, pane, surface)| {
+                    let target = s.split_engines[index].right_neighbor(pane);
+                    (workspace, pane, surface, target)
+                })
+            };
+            let (workspace, source_pane, source_surface, target_pane) = match prepared {
+                Ok(prepared) => prepared,
+                Err((code, message)) => {
+                    let _ = resp_tx.send(err(req_id, code, message));
+                    return;
+                }
+            };
+            let mut params = json!({
+                "url": crate::browser_address::normalize(&url),
+                "workspace": workspace,
+            });
+            if let Some(profile) = profile {
+                params["profile"] = json!(profile);
+            }
+            start_browser_lifecycle(
+                state,
+                crate::browser::StartupRequest::Open(params),
+                req_id,
+                resp_tx,
+                trace_id,
+                None,
+                BrowserPlacement::OpenSplit {
+                    source_surface,
+                    source_pane,
+                    target_pane,
+                    focus,
+                },
             );
         }
 
@@ -3235,6 +3373,7 @@ fn handle_socket_command_traced(
                 resp_tx,
                 trace_id,
                 None,
+                BrowserPlacement::ActivePane,
             );
         }
 
@@ -3462,6 +3601,20 @@ fn handle_socket_command_traced(
     }
 }
 
+/// Where a completed browser lifecycle installs its new surface.
+#[derive(Clone, Copy)]
+pub(super) enum BrowserPlacement {
+    /// The active pane of the request's workspace, as `browser.open` has always done.
+    ActivePane,
+    /// A source pane and its right neighbor, or a new split to the source's right.
+    OpenSplit {
+        source_surface: uuid::Uuid,
+        source_pane: u64,
+        target_pane: Option<u64>,
+        focus: bool,
+    },
+}
+
 /// Initialize and command the daemon on Tokio, then apply surviving results on GTK without stealing focus.
 pub(super) fn start_browser_lifecycle(
     state: &std::rc::Rc<std::cell::RefCell<crate::app_state::AppState>>,
@@ -3470,6 +3623,7 @@ pub(super) fn start_browser_lifecycle(
     mut resp_tx: super::commands::RespTx,
     trace_id: Option<String>,
     project_surface: Option<String>,
+    placement: BrowserPlacement,
 ) {
     let started = std::time::Instant::now();
     let initial_url = match &request {
@@ -3572,6 +3726,7 @@ pub(super) fn start_browser_lifecycle(
         let Some(state) = state.upgrade() else {
             return;
         };
+        let mut placement_outcome = None;
         let new_widgets = {
             let mut s = state.borrow_mut();
             if !s
@@ -3602,42 +3757,149 @@ pub(super) fn start_browser_lifecycle(
                 let _ = resp_tx.send(err(req_id, "changed", "project browser target changed during startup"));
                 return;
             }
-            let widgets = s
-                .split_engines
-                .get_mut(index)
-                .and_then(|engine| engine.add_preview_with_profile(false, initial_profile.clone()));
-            if let Some(widgets) = &widgets {
-                if let Some(url) = &initial_url {
-                    widgets.url_entry.set_text(url);
+            let Some(engine) = s.split_engines.get_mut(index) else {
+                activity.finish("missing_workspace");
+                let _ = resp_tx.send(err(
+                    req_id,
+                    "not_found",
+                    "Target workspace closed during browser startup",
+                ));
+                return;
+            };
+            let created = match placement {
+                BrowserPlacement::ActivePane => {
+                    let pane = engine.active_pane();
+                    engine
+                        .add_preview_with_profile(false, initial_profile.clone())
+                        .map(|widgets| (widgets, pane, false))
                 }
-                let id = widgets.uuid;
-                let ref_id = s
-                    .handles
-                    .ordinal(super::handles::HandleKind::Surface, &id.to_string());
-                s.browser_surface_refs.insert(ref_id, id.to_string());
-                if let Some(fields) = result.as_object_mut() {
-                    fields.insert("surface_ref".into(), json!(format!("surface:{ref_id}")));
-                    fields.insert("uuid".into(), json!(id));
+                BrowserPlacement::OpenSplit {
+                    source_pane,
+                    target_pane,
+                    focus,
+                    ..
+                } => {
+                    if !engine.contains_pane(source_pane) {
+                        None
+                    } else if let Some(target) =
+                        target_pane.filter(|target| engine.contains_pane(*target))
+                    {
+                        engine
+                            .add_preview_to_pane(target, focus, initial_profile.clone())
+                            .map(|widgets| (widgets, target, false))
+                    } else {
+                        engine
+                            .split_pane_browser(
+                                source_pane,
+                                crate::split_engine::FocusDirection::Right,
+                                initial_profile.clone(),
+                                focus,
+                            )
+                            .ok()
+                            .map(|(pane, widgets)| (widgets, pane, true))
+                    }
                 }
+            };
+            match created {
+                Some((widgets, target_pane, created_split)) => {
+                    placement_outcome = Some((target_pane, created_split));
+                    if let Some(url) = &initial_url {
+                        widgets.url_entry.set_text(url);
+                    }
+                    let id = widgets.uuid;
+                    let ref_id = s
+                        .handles
+                        .ordinal(super::handles::HandleKind::Surface, &id.to_string());
+                    s.browser_surface_refs.insert(ref_id, id.to_string());
+                    if let Some(fields) = result.as_object_mut() {
+                        fields.insert("surface_ref".into(), json!(format!("surface:{ref_id}")));
+                        fields.insert("uuid".into(), json!(id));
+                    }
+                    Some(widgets)
+                }
+                None => None,
             }
-            widgets
         };
-        if let Some(widgets) = new_widgets {
+        let Some(widgets) = new_widgets else {
+            activity.finish("missing_surface");
+            let (code, message) = match placement {
+                BrowserPlacement::OpenSplit { .. } => {
+                    ("internal_error", "Failed to create browser")
+                }
+                BrowserPlacement::ActivePane => {
+                    ("not_found", "Could not create browser surface")
+                }
+            };
+            let _ = resp_tx.send(err(req_id, code, message));
+            return;
+        };
+        {
             let surface = widgets.uuid;
             crate::browser::ui::wire_browser_tab(&state, widgets, activity.id);
-            if project_surface.is_some() {
-                let mut s = state.borrow_mut();
-                if let Some(index) = s.workspaces.iter().position(|row| Some(row.uuid) == workspace) {
-                    s.switch_to_index(index);
-                    s.split_engines[index].focus_surface(&surface.to_string());
+            match placement {
+                BrowserPlacement::OpenSplit {
+                    source_surface,
+                    source_pane,
+                    focus,
+                    ..
+                } => {
+                    let Some((target_pane, created_split)) = placement_outcome else {
+                        activity.finish("missing_surface");
+                        let _ = resp_tx.send(err(
+                            req_id,
+                            "internal_error",
+                            "Failed to create browser",
+                        ));
+                        return;
+                    };
+                    let mut s = state.borrow_mut();
+                    if focus {
+                        if let Some(index) = s
+                            .workspaces
+                            .iter()
+                            .position(|row| Some(row.uuid) == workspace)
+                        {
+                            s.switch_to_index(index);
+                            s.split_engines[index].focus_surface(&surface.to_string());
+                        }
+                    }
+                    use super::handles::{HandleKind, MAIN_WINDOW_ID};
+                    result = json!({
+                        "surface_id": surface.to_string(),
+                        "surface_ref": s.handles.ensure_ref(HandleKind::Surface, &surface.to_string()),
+                        "workspace_id": workspace.map(|id| id.to_string()),
+                        "workspace_ref": workspace.map(|id| s.handles.ensure_ref(HandleKind::Workspace, &id.to_string())),
+                        "window_id": MAIN_WINDOW_ID,
+                        "window_ref": s.handles.ensure_ref(HandleKind::Window, MAIN_WINDOW_ID),
+                        "pane_id": format!("pane:{target_pane}"),
+                        "pane_ref": format!("pane:{target_pane}"),
+                        "source_surface_id": source_surface.to_string(),
+                        "source_surface_ref": s.handles.ensure_ref(HandleKind::Surface, &source_surface.to_string()),
+                        "source_pane_id": format!("pane:{source_pane}"),
+                        "source_pane_ref": format!("pane:{source_pane}"),
+                        "target_pane_id": format!("pane:{target_pane}"),
+                        "target_pane_ref": format!("pane:{target_pane}"),
+                        "created_split": created_split,
+                        "placement_strategy": if created_split { "split_right" } else { "reuse_right_sibling" },
+                        "url": initial_url.as_deref().unwrap_or("about:blank"),
+                    });
                 }
-                result = json!({"workspace_id":workspace,"source_workspace_id":workspace,"surface_id":surface,"status":"submitted"});
-                crate::diagnostics::record("project.actions.run", json!({"trace_id":trace,"workspace_id":workspace,"source_workspace_id":workspace,"surface_id":surface,"outcome":"submitted","duration_us":started.elapsed().as_micros() as u64}));
+                BrowserPlacement::ActivePane => {
+                    if project_surface.is_some() {
+                        let mut s = state.borrow_mut();
+                        if let Some(index) = s
+                            .workspaces
+                            .iter()
+                            .position(|row| Some(row.uuid) == workspace)
+                        {
+                            s.switch_to_index(index);
+                            s.split_engines[index].focus_surface(&surface.to_string());
+                        }
+                        result = json!({"workspace_id":workspace,"source_workspace_id":workspace,"surface_id":surface,"status":"submitted"});
+                        crate::diagnostics::record("project.actions.run", json!({"trace_id":trace,"workspace_id":workspace,"source_workspace_id":workspace,"surface_id":surface,"outcome":"submitted","duration_us":started.elapsed().as_micros() as u64}));
+                    }
+                }
             }
-        } else {
-            activity.finish("missing_surface");
-            let _ = resp_tx.send(err(req_id, "not_found", "Could not create browser surface"));
-            return;
         }
         state.borrow().trigger_session_save();
         activity.finish("success");

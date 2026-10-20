@@ -448,6 +448,17 @@ pub enum SocketCommand {
         profile: Option<String>,
         resp_tx: RespTx,
     },
+    /// Open a browser to the right of a source surface or pane, reusing its right neighbor.
+    BrowserOpenSplit {
+        req_id: Value,
+        url: String,
+        source: Option<String>,
+        pane: Option<String>,
+        workspace: Option<String>,
+        profile: Option<String>,
+        focus: bool,
+        resp_tx: RespTx,
+    },
     BrowserStreamEnable {
         req_id: Value,
         resp_tx: RespTx,
