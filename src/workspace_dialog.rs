@@ -146,7 +146,6 @@ pub fn show_workspace_dialog(app: &gtk4::Application, state: AppStateRef) {
         let path_entry = path_entry.clone();
         let name_entry = name_entry.clone();
         let validation = validation.clone();
-        let app = app.clone();
         move |dialog, response| {
             if response != gtk4::ResponseType::Accept {
                 dialog.close();
@@ -169,7 +168,7 @@ pub fn show_workspace_dialog(app: &gtk4::Application, state: AppStateRef) {
             match result {
                 Ok(_) => {
                     let sidebar_list = state.borrow().sidebar_list.clone();
-                    crate::sidebar::wire_latest_row(&sidebar_list, state.clone(), &app);
+                    crate::sidebar::wire_latest_row(&sidebar_list, state.clone());
                     dialog.close();
                 }
                 Err(message) => {

@@ -1115,7 +1115,7 @@ fn handle_socket_command_traced(
                 let s = state.borrow();
                 (s.sidebar_list.clone(), s.gtk_app.clone())
             };
-            crate::sidebar::wire_latest_row(&list, state.clone(), &app);
+            crate::sidebar::wire_latest_row(&list, state.clone());
         }
 
         SocketCommand::WorkspaceSelect {

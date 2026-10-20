@@ -169,11 +169,8 @@ fn trigger_ssh_connect(
         }
         s.trigger_session_save();
     }
-    let (list, app) = {
-        let s = state.borrow();
-        (s.sidebar_list.clone(), s.gtk_app.clone())
-    };
-    crate::sidebar::wire_latest_row(&list, state.clone(), &app);
+    let list = state.borrow().sidebar_list.clone();
+    crate::sidebar::wire_latest_row(&list, state.clone());
 
     state
         .borrow_mut()

@@ -168,11 +168,10 @@ pub fn update_group_attention(state: &crate::app_state::AppState) {
 
 /// Rebuild sidebar presentation from stable model identity, including persistent group headers.
 pub fn rebuild_grouped_sidebar(state: &crate::app_state::AppStateRef) {
-    let (list, app, groups, active_id) = {
+    let (list, groups, active_id) = {
         let state = state.borrow();
         (
             state.sidebar_list.clone(),
-            state.gtk_app.clone(),
             state.workspace_groups.clone(),
             state.active_workspace().map(|workspace| workspace.id),
         )
@@ -210,7 +209,6 @@ pub fn rebuild_grouped_sidebar(state: &crate::app_state::AppStateRef) {
             if let Some(row) = row {
                 row.set_visible(!group.collapsed);
                 list.append(&row);
-                wire_row_close_button(&row, state.clone(), &app);
                 attach_sidebar_context_menu(&row, state.clone());
             }
         }
@@ -233,7 +231,6 @@ pub fn rebuild_grouped_sidebar(state: &crate::app_state::AppStateRef) {
         };
         if let Some(row) = row {
             list.append(&row);
-            wire_row_close_button(&row, state.clone(), &app);
             attach_sidebar_context_menu(&row, state.clone());
         }
     }
@@ -368,8 +365,6 @@ pub fn start_inline_rename(
             if let Some(index) = index {
                 state.borrow().update_sidebar_attention(index);
             }
-            let app = state.borrow().gtk_app.clone();
-            wire_row_close_button(&row, state.clone(), &app);
         }
     });
     entry.connect_activate({
@@ -442,53 +437,7 @@ pub fn rebuild_sidebar_row_content(name: &str) -> gtk4::Box {
     vbox.set_hexpand(true);
     hbox.append(&vbox);
 
-    // Close button (D-02) -- hidden by default, shown on row hover via CSS
-    let close_btn = gtk4::Button::with_label("\u{00D7}"); // Unicode multiplication sign
-    close_btn.add_css_class("sidebar-close-btn");
-    close_btn.set_tooltip_text(Some("Close Workspace"));
-    hbox.append(&close_btn);
-
     hbox
-}
-
-/// Wire the close button for a specific sidebar row.
-/// Called when a row is created (in app_state::create_workspace or after rename rebuild).
-pub fn wire_row_close_button(
-    row: &gtk4::ListBoxRow,
-    state: Rc<RefCell<crate::app_state::AppState>>,
-    app: &gtk4::Application,
-) {
-    let close_btn = row
-        .child()
-        .and_downcast::<gtk4::Box>()
-        .and_then(|hbox| hbox.last_child())
-        .and_downcast::<gtk4::Button>();
-
-    if let Some(btn) = close_btn {
-        btn.connect_clicked({
-            let state = Rc::downgrade(&state);
-            let app = app.clone();
-            let row = row.downgrade();
-            move |_| {
-                let Some(state) = state.upgrade() else {
-                    return;
-                };
-                let Some(row) = row.upgrade() else {
-                    return;
-                };
-                let Some(index) = workspace_index_for_row(&state.borrow(), &row) else {
-                    return;
-                };
-                let ws_count = state.borrow().workspaces.len();
-                if ws_count <= 1 {
-                    return; // Cannot close last workspace
-                }
-                // Switch to this workspace first (so close_workspace operates on the right one)
-                state.borrow_mut().switch_to_index(index);
-                crate::shortcuts::handle_close_workspace(&state, &app);
-            }
-        });
-    }
 }
 
 /// Attach right-click context menu to a sidebar row (D-03).
@@ -681,14 +630,12 @@ pub fn attach_sidebar_context_menu(
     row.add_controller(gesture);
 }
 
-/// Wire close button + context menu to the most recently added sidebar row.
+/// Wire the context menu to the most recently added sidebar row.
 pub fn wire_latest_row(
     sidebar_list: &gtk4::ListBox,
     state: Rc<RefCell<crate::app_state::AppState>>,
-    app: &gtk4::Application,
 ) {
     if let Some(row) = workspace_rows(sidebar_list).last() {
-        wire_row_close_button(row, state.clone(), app);
         attach_sidebar_context_menu(row, state);
     }
 }
@@ -961,7 +908,6 @@ mod lifecycle_tests {
             row.set_child(Some(&workspace_row_content(&workspace)));
             list.append(&row);
             state.borrow_mut().workspaces.push(workspace);
-            wire_row_close_button(&row, state.clone(), &app);
             attach_sidebar_context_menu(&row, state.clone());
             row.activate_action("workspace.color-red", None).unwrap();
             assert_eq!(

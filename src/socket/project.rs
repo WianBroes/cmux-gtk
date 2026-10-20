@@ -448,9 +448,8 @@ pub fn run(state: &crate::app_state::AppStateRef, request: RunRequest, mut respo
         state.trigger_session_save();
         if wire_row {
             let list = state.sidebar_list.clone();
-            let app = state.gtk_app.clone();
             drop(state);
-            crate::sidebar::wire_latest_row(&list, owner.clone(), &app);
+            crate::sidebar::wire_latest_row(&list, owner.clone());
             crate::browser::ui::wire_restored_browser_tabs(&owner, browser_tabs);
         }
         crate::diagnostics::record("project.actions.run",json!({"trace_id":trace_id,"workspace_id":result_workspace_id,"source_workspace_id":workspace_id,"surface_id":surface,"duration_us":started.elapsed().as_micros() as u64,"outcome":"submitted"}));
