@@ -1962,13 +1962,17 @@ fn handle_socket_command_traced(
                     .get(s.active_index)
                     .and_then(|engine| engine.gl_area_for_surface(&surface_id))
             };
-            let response = match area {
-                None => err(req_id, "internal_error", "ERROR: Terminal surface not found"),
-                Some(area) => match crate::socket::render_debug::panel_snapshot(&area, &surface_id, &label) {
+            let Some(area) = area else {
+                let _ = resp_tx.send(err(req_id, "internal_error", "ERROR: Terminal surface not found"));
+                return;
+            };
+            let id = surface_id.clone();
+            crate::socket::render_debug::panel_snapshot_when_painted(&area, surface_id, label, move |captured| {
+                let response = match captured {
                     Ok((changed, width, height, path)) => ok(
                         req_id,
                         json!({
-                            "surface_id": surface_id,
+                            "surface_id": id,
                             "changed_pixels": changed,
                             "width": width,
                             "height": height,
@@ -1976,9 +1980,9 @@ fn handle_socket_command_traced(
                         }),
                     ),
                     Err(message) => err(req_id, "internal_error", &message),
-                },
-            };
-            let _ = resp_tx.send(response);
+                };
+                let _ = resp_tx.send(response);
+            });
         }
 
         SocketCommand::DebugPanelSnapshotReset {

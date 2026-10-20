@@ -26,10 +26,58 @@ pub fn present_count(area: &gtk4::GLArea) -> u64 {
     unsafe { area.data::<u64>(PRESENT_COUNT).map_or(0, |count| *count.as_ref()) }
 }
 
+type Captured = (i64, i32, i32, String);
+
+/// Snapshot the area now, or after its next painted frame when a redraw is pending: the
+/// widget paintable replays the last render node, which GTK drops until the frame is
+/// painted (`gtkwidgetpaintable.c`), so a capture right after a keystroke comes out empty.
+/// Upstream instead forces a draw and retries. Gives up after one second without a frame.
+pub fn panel_snapshot_when_painted(
+    area: &gtk4::GLArea,
+    surface_id: String,
+    label: String,
+    done: impl FnOnce(Result<Captured, String>) + 'static,
+) {
+    match panel_snapshot(area, &surface_id, &label) {
+        Ok(Some(captured)) => return done(Ok(captured)),
+        Err(message) => return done(Err(message)),
+        Ok(None) => {}
+    }
+    let Some(clock) = area.frame_clock() else {
+        return done(Err("ERROR: Failed to capture panel image".to_owned()));
+    };
+    let done = std::rc::Rc::new(RefCell::new(Some(done)));
+    let handler = std::rc::Rc::new(RefCell::new(None::<gtk4::glib::SignalHandlerId>));
+    let id = clock.connect_after_paint({
+        let (area, done, handler) = (area.clone(), done.clone(), handler.clone());
+        move |clock| {
+            let Some(done) = done.borrow_mut().take() else { return };
+            if let Some(id) = handler.borrow_mut().take() {
+                clock.disconnect(id);
+            }
+            done(match panel_snapshot(&area, &surface_id, &label) {
+                Ok(Some(captured)) => Ok(captured),
+                Ok(None) => Err("ERROR: Failed to capture panel image".to_owned()),
+                Err(message) => Err(message),
+            });
+        }
+    });
+    *handler.borrow_mut() = Some(id);
+    area.queue_draw();
+    gtk4::glib::timeout_add_local_once(std::time::Duration::from_secs(1), move || {
+        if let Some(done) = done.borrow_mut().take() {
+            if let Some(id) = handler.borrow_mut().take() {
+                clock.disconnect(id);
+            }
+            done(Err("ERROR: Failed to capture panel image".to_owned()));
+        }
+    });
+}
+
 /// Render the area through its window's renderer, save a PNG, and count the pixels changed
 /// since the previous snapshot of the same surface (-1 when there is none, as upstream).
-/// Returns (changed_pixels, width, height, path).
-pub fn panel_snapshot(area: &gtk4::GLArea, surface_id: &str, label: &str) -> Result<(i64, i32, i32, String), String> {
+/// `Ok(None)` when the widget has no painted frame to replay yet.
+fn panel_snapshot(area: &gtk4::GLArea, surface_id: &str, label: &str) -> Result<Option<Captured>, String> {
     let (width, height) = (area.width(), area.height());
     if width <= 0 || height <= 0 {
         return Err("ERROR: Failed to capture panel image".to_owned());
@@ -41,9 +89,9 @@ pub fn panel_snapshot(area: &gtk4::GLArea, surface_id: &str, label: &str) -> Res
     let paintable = gtk4::WidgetPaintable::new(Some(area));
     let snapshot = gtk4::Snapshot::new();
     paintable.snapshot(&snapshot, width as f64, height as f64);
-    let node = snapshot
-        .to_node()
-        .ok_or_else(|| "ERROR: Failed to capture panel image".to_owned())?;
+    let Some(node) = snapshot.to_node() else {
+        return Ok(None);
+    };
     let texture = renderer.render_texture(
         &node,
         Some(&gtk4::graphene::Rect::new(0.0, 0.0, width as f32, height as f32)),
@@ -77,7 +125,7 @@ pub fn panel_snapshot(area: &gtk4::GLArea, surface_id: &str, label: &str) -> Res
     texture
         .save_to_png(&path)
         .map_err(|e| format!("ERROR: Failed to write file: {e}"))?;
-    Ok((changed, tw, th, path.to_string_lossy().into_owned()))
+    Ok(Some((changed, tw, th, path.to_string_lossy().into_owned())))
 }
 
 /// Forget a surface's previous snapshot (upstream `debug.panel_snapshot.reset`).
