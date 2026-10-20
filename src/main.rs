@@ -15,6 +15,7 @@ mod diagnostics;
 mod events;
 mod file_explorer;
 mod focus_history;
+mod font_zoom;
 mod ghostty;
 mod git_metadata;
 mod header_bar;
@@ -172,6 +173,7 @@ paned > separator:hover { background-color: #5b8dd9; }
 .devtools-snapshot { color: #cccccc; font-family: monospace; font-size: 12px; padding: 16px; }
 /* Phase 9: Header bar (D-04) */
 .cmux-headerbar { background-color: #242424; }
+.font-zoom-bubble { font-size: 20px; font-weight: 600; padding: 6px 14px; }
 /* One compact titlebar row; the menus take its colour, not the theme's own menubar one. */
 headerbar.cmux-headerbar { min-height: 0; padding-top: 0; padding-bottom: 0; }
 headerbar.cmux-headerbar > windowhandle > box { min-height: 0; padding-top: 2px; padding-bottom: 2px; }

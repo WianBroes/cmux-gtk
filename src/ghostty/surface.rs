@@ -249,6 +249,8 @@ fn initialize_surface(
         init.working_directory.as_deref(),
     );
     *cell.borrow_mut() = Some(surface);
+    // SAFETY: the surface was just created for this area and is freed before it.
+    unsafe { crate::font_zoom::install(area, surface) };
     if let Some(input) = init.initial_input.borrow_mut().take() {
         // SAFETY: this freshly registered surface is live on GTK; input is copied synchronously.
         let delivered = unsafe {
@@ -969,14 +971,22 @@ pub fn create_surface(
         let precision = precision.clone();
         move |_| precision.set(false)
     });
+    let notches = Rc::new(std::cell::Cell::new(0.0));
     scroll_controller.connect_scroll({
         let cell = surface_cell.clone();
         let area = gl_area.downgrade();
-        move |_ctrl, dx, dy| {
+        move |ctrl, dx, dy| {
             let surface = match *cell.borrow() {
                 Some(s) => s,
                 None => return gtk4::glib::Propagation::Proceed,
             };
+            // Ctrl+wheel zooms the text (`font_zoom`) instead of scrolling.
+            if ctrl.current_event_state().contains(gtk4::gdk::ModifierType::CONTROL_MASK) {
+                if let Some(area) = area.upgrade() {
+                    crate::font_zoom::scroll(&area, dy, &notches);
+                }
+                return gtk4::glib::Propagation::Stop;
+            }
             let is_pixel = precision.get();
 
             // ghostty_input_scroll_mods_t is a bitmask:
