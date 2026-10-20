@@ -890,6 +890,7 @@ fn handle_socket_command_traced(
                 "browser.state.load",
                 // Debug
                 "debug.app.activate",
+                "debug.shortcut.set",
                 "debug.shortcut.simulate",
                 "debug.terminal.is_focused",
                 "window.focus",
@@ -1901,6 +1902,56 @@ fn handle_socket_command_traced(
                 .and_then(|engine| engine.gl_area_for_surface(&surface_id));
             let focused = area.is_some_and(|area| area.is_focus());
             let _ = resp_tx.send(ok(req_id, json!({"focused": focused})));
+        }
+
+        // Upstream `setShortcut` (TerminalController+ShortcutConfiguration.swift): same names,
+        // `clear`/`unbound`/`none` and `default`/`reset`, same error texts. Bound for this run
+        // only; names whose action the port lacks are refused rather than silently accepted.
+        SocketCommand::DebugShortcutSet {
+            req_id,
+            name,
+            combo,
+            resp_tx,
+        } => {
+            use crate::config::ShortcutAction as A;
+            let action = match name.to_lowercase().as_str() {
+                "focus_left" | "focusleft" => Ok(A::FocusLeft),
+                "focus_right" | "focusright" => Ok(A::FocusRight),
+                "focus_up" | "focusup" => Ok(A::FocusUp),
+                "focus_down" | "focusdown" => Ok(A::FocusDown),
+                "split_right" | "splitright" => Ok(A::SplitRight),
+                "split_down" | "splitdown" => Ok(A::SplitDown),
+                known @ ("resize_pane_left" | "resizepaneleft" | "resize-pane-left"
+                | "resize_pane_right" | "resizepaneright" | "resize-pane-right"
+                | "resize_pane_up" | "resizepaneup" | "resize-pane-up"
+                | "resize_pane_down" | "resizepanedown" | "resize-pane-down"
+                | "workspace_digits" | "workspace_number" | "select_workspace_by_number"
+                | "surface_digits" | "surface_number" | "select_surface_by_number"
+                | "focus_sidebar" | "focussidebar"
+                | "pane_digits" | "pane_number" | "focus_pane_by_number") => Err(format!(
+                    "ERROR: Shortcut {known} has no action on Linux yet"
+                )),
+                _ => Err("ERROR: Unknown shortcut name. Supported: focus_left, focus_right, focus_up, focus_down, split_right, split_down, resize_pane_left, resize_pane_right, resize_pane_up, resize_pane_down, workspace_digits, surface_digits, focus_sidebar, pane_digits".to_owned()),
+            };
+            let binding = action.and_then(|action| {
+                let binding = match combo.to_lowercase().as_str() {
+                    "clear" | "unbound" | "none" => None,
+                    "default" | "reset" => crate::config::default_binding(action),
+                    _ => Some(
+                        crate::config::parse_combo(&combo)
+                            .ok_or_else(|| "ERROR: Invalid combo. Example: cmd+ctrl+h".to_owned())?,
+                    ),
+                };
+                Ok((action, binding))
+            });
+            let response = match binding {
+                Ok((action, binding)) if crate::config::set_live_binding(action, binding) => {
+                    ok(req_id, json!({}))
+                }
+                Ok(_) => err(req_id, "internal_error", "ERROR: shortcut map not ready"),
+                Err(message) => err(req_id, "internal_error", &message),
+            };
+            let _ = resp_tx.send(response);
         }
 
         // Upstream `simulateShortcut`: the app's shortcut matcher first; an unmatched combo

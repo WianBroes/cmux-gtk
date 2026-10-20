@@ -144,6 +144,37 @@ pub fn reload_shortcuts() -> bool {
     true
 }
 
+/// Rebind `action` in the live map for this run only (upstream `debug.shortcut.set`, which
+/// persists to its settings; the user's config files are never written here). `None` unbinds.
+/// Returns false when the UI has not published a map yet. GTK main thread only.
+pub fn set_live_binding(action: ShortcutAction, binding: Option<(Key, ModifierType)>) -> bool {
+    let Some(live) = LIVE_MAP.with(|live| live.borrow().clone()) else {
+        return false;
+    };
+    {
+        let mut live = live.borrow_mut();
+        live.map.retain(|_, mapped| *mapped != action);
+        if let Some((key, mods)) = binding {
+            live.map.insert((mods & MOD_MASK, key.to_lower()), action);
+        }
+    }
+    use gtk4::prelude::Cast;
+    if let Some(app) = gtk4::gio::Application::default().and_then(|a| a.downcast::<gtk4::Application>().ok()) {
+        crate::menus::register_accels(&app, &live.borrow());
+    }
+    true
+}
+
+/// The built-in binding of `action`, ignoring the user's config (`None` when unbound by default).
+pub fn default_binding(action: ShortcutAction) -> Option<(Key, ModifierType)> {
+    let defaults = ShortcutMap::from_config(&ShortcutConfig::default());
+    let binding = defaults
+        .map
+        .iter()
+        .find_map(|((mods, key), mapped)| (*mapped == action).then_some((*key, *mods)));
+    binding
+}
+
 /// The action bound to a key combination in the live map, if any (for conflict checks).
 pub fn live_lookup(mods: ModifierType, key: Key) -> Option<ShortcutAction> {
     let live = LIVE_MAP.with(|live| live.borrow().clone())?;

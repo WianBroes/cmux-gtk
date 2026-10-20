@@ -409,6 +409,12 @@ pub enum SocketCommand {
         surface_id: String,
         resp_tx: RespTx,
     },
+    DebugShortcutSet {
+        req_id: Value,
+        name: String,
+        combo: String,
+        resp_tx: RespTx,
+    },
     DebugShortcutSimulate {
         req_id: Value,
         combo: String,

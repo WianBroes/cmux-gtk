@@ -1386,6 +1386,25 @@ async fn dispatch_request(
                 }
             }
         }
+        "debug.shortcut.set" => {
+            let field = |key: &str| {
+                params
+                    .get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+            };
+            let (Some(name), Some(combo)) = (field("name"), field("combo")) else {
+                return err(req_id, "invalid_params", "Missing name/combo");
+            };
+            commands::SocketCommand::DebugShortcutSet {
+                req_id: req_id.clone(),
+                name,
+                combo,
+                resp_tx,
+            }
+        }
         "debug.layout" => commands::SocketCommand::DebugLayout {
             req_id: req_id.clone(),
             resp_tx,
