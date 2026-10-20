@@ -272,7 +272,7 @@ fn surface_tab_label(surface: &PaneSurface) -> gtk4::Box {
     // Truncate like upstream's tabs: a full title would set the pane's minimum width, and a
     // pane allocated below its minimum overflows onto its neighbour.
     label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-    let close = gtk4::Button::from_icon_name("window-close-symbolic");
+    let close = gtk4::Button::from_icon_name("cmux-close-symbolic");
     close.add_css_class("surface-tab-close");
     close.set_tooltip_text(Some("Close Tab"));
     close.set_focusable(false);
@@ -469,11 +469,11 @@ fn create_pane(pane_id: u64, initial_surface: PaneSurface) -> SplitNode {
     notebook.set_vexpand(true);
 
     let actions = gtk4::Box::new(gtk4::Orientation::Horizontal, 2);
-    let terminal_btn = gtk4::Button::from_icon_name("utilities-terminal-symbolic");
+    let terminal_btn = gtk4::Button::from_icon_name("cmux-terminal-symbolic");
     terminal_btn.set_tooltip_text(Some("New Tab (Terminal) (Ctrl+T)"));
     terminal_btn.set_action_name(Some("win.new-terminal-tab"));
     terminal_btn.add_css_class("surface-tab-action");
-    let browser_btn = gtk4::Button::from_icon_name("web-browser-symbolic");
+    let browser_btn = gtk4::Button::from_icon_name("cmux-browser-symbolic");
     browser_btn.set_tooltip_text(Some("New Tab (Browser) (Ctrl+Shift+L)"));
     browser_btn.set_action_name(Some("win.new-browser-tab"));
     browser_btn.add_css_class("surface-tab-action");
@@ -482,12 +482,12 @@ fn create_pane(pane_id: u64, initial_surface: PaneSurface) -> SplitNode {
     // Split this pane, not whichever pane had focus: select it first, then split.
     for (icon, tooltip, action) in [
         (
-            "view-dual-symbolic",
+            "cmux-split-right-symbolic",
             "Split Right (Ctrl+D)",
             "win.split-right",
         ),
         (
-            "object-flip-vertical-symbolic",
+            "cmux-split-down-symbolic",
             "Split Down (Ctrl+Shift+D)",
             "win.split-down",
         ),

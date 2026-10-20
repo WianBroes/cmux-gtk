@@ -13,12 +13,12 @@ mod browser_timeout;
 mod config;
 mod diagnostics;
 mod events;
-mod fallback_icons;
 mod file_explorer;
 mod focus_history;
 mod ghostty;
 mod git_metadata;
 mod header_bar;
+mod icons;
 mod inbox;
 #[allow(dead_code)]
 mod local_tmux;
@@ -178,7 +178,6 @@ headerbar.cmux-headerbar > windowhandle > box { min-height: 0; padding-top: 2px;
 headerbar.cmux-headerbar popovermenubar,
 headerbar.cmux-headerbar popovermenubar > item { background-color: transparent; background-image: none; box-shadow: none; }
 headerbar.cmux-headerbar button { min-height: 24px; padding-top: 0; padding-bottom: 0; margin-top: 0; margin-bottom: 0; }
-headerbar.cmux-headerbar windowcontrols button { min-width: 24px; min-height: 24px; padding: 2px; margin: 0; }
 .headerbar-btn { min-width: 24px; min-height: 24px; padding: 2px; margin: 0 1px; border-radius: 4px; background-color: transparent; color: #cccccc; border: none; }
 .headerbar-btn:hover { background-color: rgba(255, 255, 255, 0.08); }
 .headerbar-btn:active { background-color: rgba(255, 255, 255, 0.12); }
@@ -404,7 +403,7 @@ fn build_ui(
         &provider,
         gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
-    crate::fallback_icons::install(&gtk4::gdk::Display::default().expect("no display"));
+    crate::icons::install(&gtk4::gdk::Display::default().expect("no display"));
 
     // 3. Build the window layout
     let window = ApplicationWindow::builder()

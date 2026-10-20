@@ -18,22 +18,30 @@ pub fn build_header_bar(
     }
     let header = gtk4::HeaderBar::new();
     header.add_css_class("cmux-headerbar");
-    // Window buttons on the right, without the application icon some layouts put first.
-    header.set_decoration_layout(Some(":minimize,maximize,close"));
+    // Window buttons are cmux's own, in the titlebar's icon pack (`crate::icons`), on the right;
+    // the theme's would differ from the rest of the row (and some layouts add an app icon).
+    header.set_show_title_buttons(false);
+    for (icon, tooltip, action) in [
+        ("cmux-close-symbolic", "Close", "window.close"),
+        ("cmux-maximize-symbolic", "Maximize", "window.toggle-maximized"),
+        ("cmux-minimize-symbolic", "Minimize", "window.minimize"),
+    ] {
+        header.pack_end(&action_button(icon, tooltip, action));
+    }
     header.pack_start(&action_button(
-        "sidebar-show-symbolic",
+        "cmux-sidebar-symbolic",
         "Toggle Sidebar (Ctrl+B)",
         "win.toggle-sidebar",
     ));
     header.pack_start(bell);
     header.pack_start(&new_workspace_split_button());
     let back = action_button(
-        "go-previous-symbolic",
+        "cmux-back-symbolic",
         "Focus Back (Ctrl+Alt+Left)",
         "win.focus-back",
     );
     let forward = action_button(
-        "go-next-symbolic",
+        "cmux-forward-symbolic",
         "Focus Forward (Ctrl+Alt+Right)",
         "win.focus-forward",
     );
@@ -68,14 +76,14 @@ pub fn build_header_bar(
     title.add_css_class("title");
     title.set_ellipsize(gtk4::pango::EllipsizeMode::End);
     let center = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
-    let folder = gtk4::Image::from_icon_name("folder-symbolic");
+    let folder = gtk4::Image::from_icon_name("cmux-folder-symbolic");
     folder.add_css_class("dim-label");
     center.append(&folder);
     center.append(&title);
     header.set_title_widget(Some(&center));
     // Files panel toggle. Icon is folder-symbolic: breeze (the active theme here) has no sidebar-show-right-symbolic, GTK showed image-missing.
     header.pack_end(&action_button(
-        "folder-symbolic",
+        "cmux-folder-symbolic",
         "Toggle File Explorer (Ctrl+Alt+B)",
         "win.toggle-right-sidebar",
     ));
@@ -96,9 +104,9 @@ fn new_workspace_split_button() -> gtk4::Box {
     model.append(Some("New Workspace"), Some("win.new-workspace"));
     model.append(Some("New Terminal Tab"), Some("win.new-terminal-tab"));
     model.append(Some("New Browser Tab"), Some("win.new-browser-tab"));
-    let plus = action_button("list-add-symbolic", "New Workspace (Ctrl+N)", "win.new-workspace");
+    let plus = action_button("cmux-plus-symbolic", "New Workspace (Ctrl+N)", "win.new-workspace");
     let caret = gtk4::MenuButton::new();
-    caret.set_icon_name("pan-down-symbolic");
+    caret.set_icon_name("cmux-chevron-down-symbolic");
     caret.set_tooltip_text(Some("New workspace options"));
     caret.set_menu_model(Some(&model));
     caret.add_css_class("headerbar-btn");
@@ -173,11 +181,7 @@ pub fn attach_focus_history_menus(state: &crate::app_state::AppStateRef, arrows:
 /// Upstream's titlebar notification bell: opens the notification list, with an unread badge.
 pub fn notification_bell() -> (gtk4::Overlay, gtk4::Label) {
     let button = gtk4::Button::new();
-    let icon = gtk4::gio::ThemedIcon::from_names(&[
-        "notifications-symbolic",
-        "preferences-system-notifications-symbolic",
-    ]);
-    button.set_child(Some(&gtk4::Image::from_gicon(&icon)));
+    button.set_child(Some(&gtk4::Image::from_icon_name("cmux-bell-symbolic")));
     button.set_tooltip_text(Some("Notifications (Ctrl+Shift+I)"));
     button.set_action_name(Some("win.notifications"));
     button.add_css_class("headerbar-btn");
