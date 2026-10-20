@@ -30,31 +30,28 @@ pub fn install_shortcuts(
     let sidebar_clone = sidebar.clone();
     let app_clone = app.clone();
 
-    let dispatch: Rc<KeyDispatch> = Rc::new({
+    // One entry point per shortcut action: the key handler below and the menu bar's actions
+    // (`win.<action>`, see `add_menu_actions`) run the same code.
+    let run: Rc<dyn Fn(ShortcutAction)> = Rc::new({
         let state = state.clone();
-        let window = window.downgrade();
-        move |keyval: gtk4::gdk::Key, mods: gtk4::gdk::ModifierType| {
-            match shortcut_map.borrow().lookup(mods, keyval) {
+        let sidebar_clone = sidebar_clone.clone();
+        let app_clone = app_clone.clone();
+        move |action: ShortcutAction| {
+            match action {
                 // -- Workspace shortcuts --
-                Some(ShortcutAction::NewWorkspace) => {
+                ShortcutAction::NewWorkspace => {
                     handle_new_workspace(&state, &app_clone);
-                    gtk4::glib::Propagation::Stop
                 }
-                Some(ShortcutAction::CloseWorkspace) => {
+                ShortcutAction::CloseWorkspace => {
                     handle_close_workspace(&state, &app_clone);
-                    gtk4::glib::Propagation::Stop
                 }
-                Some(ShortcutAction::NextWorkspace) => {
+                ShortcutAction::NextWorkspace => {
                     state.borrow_mut().switch_next();
-                    gtk4::glib::Propagation::Stop
                 }
-                Some(ShortcutAction::PrevWorkspace) => {
+                ShortcutAction::PrevWorkspace => {
                     state.borrow_mut().switch_prev();
-                    gtk4::glib::Propagation::Stop
                 }
-                Some(
-                    action @ (ShortcutAction::MoveWorkspaceUp | ShortcutAction::MoveWorkspaceDown),
-                ) => {
+                action @ (ShortcutAction::MoveWorkspaceUp | ShortcutAction::MoveWorkspaceDown) => {
                     let (from, to) = {
                         let state = state.borrow();
                         let from = state.active_index;
@@ -70,9 +67,8 @@ pub fn install_shortcuts(
                     if changed {
                         crate::sidebar::rebuild_grouped_sidebar(&state);
                     }
-                    gtk4::glib::Propagation::Stop
                 }
-                Some(ShortcutAction::ToggleWorkspaceGroup) => {
+                ShortcutAction::ToggleWorkspaceGroup => {
                     let group = {
                         let state = state.borrow();
                         state
@@ -96,9 +92,8 @@ pub fn install_shortcuts(
                         );
                         crate::sidebar::rebuild_grouped_sidebar(&state);
                     }
-                    gtk4::glib::Propagation::Stop
                 }
-                Some(ShortcutAction::RenameWorkspace) => {
+                ShortcutAction::RenameWorkspace => {
                     let (active_index, sidebar_list) = {
                         let s = state.borrow();
                         let idx = s.active_index;
@@ -106,26 +101,23 @@ pub fn install_shortcuts(
                         (idx, list)
                     };
                     crate::sidebar::start_inline_rename(&sidebar_list, active_index, state.clone());
-                    gtk4::glib::Propagation::Stop
                 }
-                Some(ShortcutAction::ToggleSidebar) => {
+                ShortcutAction::ToggleSidebar => {
                     let visible = sidebar_clone.is_visible();
                     sidebar_clone.set_visible(!visible);
                     if let Some(engine) = state.borrow_mut().active_split_engine_mut() {
                         engine.focus_active_surface();
                     }
-                    gtk4::glib::Propagation::Stop
                 }
-                Some(ShortcutAction::ToggleRightSidebar) => {
+                ShortcutAction::ToggleRightSidebar => {
                     // Upstream ⌘⌥B: toggling never moves focus into the panel; ⌘⇧E below
                     // owns the focus hand-over.
                     state.borrow().toggle_right_sidebar();
                     if let Some(engine) = state.borrow_mut().active_split_engine_mut() {
                         engine.focus_active_surface();
                     }
-                    gtk4::glib::Propagation::Stop
                 }
-                Some(ShortcutAction::FocusRightSidebar) => {
+                ShortcutAction::FocusRightSidebar => {
                     // Upstream ⌘⇧E: toggle focus between the panel's tree and the terminal.
                     if state.borrow().right_sidebar_tree_focused() {
                         if let Some(engine) = state.borrow_mut().active_split_engine_mut() {
@@ -134,46 +126,36 @@ pub fn install_shortcuts(
                     } else {
                         state.borrow().focus_right_sidebar();
                     }
-                    gtk4::glib::Propagation::Stop
                 }
                 // -- Pane split shortcuts --
-                Some(ShortcutAction::SplitRight) => {
+                ShortcutAction::SplitRight => {
                     handle_split(&state, false);
-                    gtk4::glib::Propagation::Stop
                 }
-                Some(ShortcutAction::SplitDown) => {
+                ShortcutAction::SplitDown => {
                     handle_split(&state, true);
-                    gtk4::glib::Propagation::Stop
                 }
-                Some(ShortcutAction::ClosePane) => {
+                ShortcutAction::ClosePane => {
                     handle_close_pane(&state, &app_clone);
-                    gtk4::glib::Propagation::Stop
                 }
                 // -- SSH workspace shortcut --
-                Some(ShortcutAction::NewSshWorkspace) => {
+                ShortcutAction::NewSshWorkspace => {
                     handle_new_ssh_workspace(&state, &app_clone);
-                    gtk4::glib::Propagation::Stop
                 }
                 // -- Focus direction shortcuts --
-                Some(ShortcutAction::FocusLeft) => {
+                ShortcutAction::FocusLeft => {
                     handle_focus_direction(&state, FocusDirection::Left);
-                    gtk4::glib::Propagation::Stop
                 }
-                Some(ShortcutAction::FocusRight) => {
+                ShortcutAction::FocusRight => {
                     handle_focus_direction(&state, FocusDirection::Right);
-                    gtk4::glib::Propagation::Stop
                 }
-                Some(ShortcutAction::FocusUp) => {
+                ShortcutAction::FocusUp => {
                     handle_focus_direction(&state, FocusDirection::Up);
-                    gtk4::glib::Propagation::Stop
                 }
-                Some(ShortcutAction::FocusDown) => {
+                ShortcutAction::FocusDown => {
                     handle_focus_direction(&state, FocusDirection::Down);
-                    gtk4::glib::Propagation::Stop
                 }
                 // -- Workspace number shortcuts --
-                Some(
-                    action @ (ShortcutAction::Workspace1
+                action @ (ShortcutAction::Workspace1
                     | ShortcutAction::Workspace2
                     | ShortcutAction::Workspace3
                     | ShortcutAction::Workspace4
@@ -181,8 +163,7 @@ pub fn install_shortcuts(
                     | ShortcutAction::Workspace6
                     | ShortcutAction::Workspace7
                     | ShortcutAction::Workspace8
-                    | ShortcutAction::Workspace9),
-                ) => {
+                    | ShortcutAction::Workspace9) => {
                     let idx = match action {
                         ShortcutAction::Workspace1 => 0,
                         ShortcutAction::Workspace2 => 1,
@@ -196,23 +177,35 @@ pub fn install_shortcuts(
                         _ => unreachable!(),
                     };
                     state.borrow_mut().switch_to_index(idx);
-                    gtk4::glib::Propagation::Stop
                 }
                 // -- Browser shortcuts --
-                Some(ShortcutAction::FocusBack) => {
+                ShortcutAction::FocusBack => {
                     let _ = sidebar_clone.activate_action("win.focus-back", None);
-                    gtk4::glib::Propagation::Stop
                 }
-                Some(ShortcutAction::FocusForward) => {
+                ShortcutAction::FocusForward => {
                     let _ = sidebar_clone.activate_action("win.focus-forward", None);
-                    gtk4::glib::Propagation::Stop
                 }
-                Some(ShortcutAction::BrowserOpen) => {
+                ShortcutAction::BrowserOpen => {
                     handle_browser_open(&state);
-                    gtk4::glib::Propagation::Stop
                 }
-                Some(ShortcutAction::BrowserClose) => {
+                ShortcutAction::BrowserClose => {
                     handle_browser_close(&state);
+                }
+            }
+        }
+    });
+
+    add_menu_actions(window, &state, &run);
+
+    let dispatch: Rc<KeyDispatch> = Rc::new({
+        let state = state.clone();
+        let window = window.downgrade();
+        let run = run.clone();
+        move |keyval: gtk4::gdk::Key, mods: gtk4::gdk::ModifierType| {
+            let action = shortcut_map.borrow().lookup(mods, keyval);
+            match action {
+                Some(action) => {
+                    run(action);
                     gtk4::glib::Propagation::Stop
                 }
                 None if keyval == gtk4::gdk::Key::comma
@@ -279,6 +272,55 @@ pub fn install_shortcuts(
 
     window.add_controller(key_ctrl);
 }
+
+/// Window actions for the menu bar entries that only had a shortcut (`MENU_ACTIONS`), running
+/// the same code as the key; plus Jump to Latest Unread, a fixed key outside the shortcut map.
+fn add_menu_actions(
+    window: &gtk4::ApplicationWindow,
+    state: &Rc<RefCell<AppState>>,
+    run: &Rc<dyn Fn(ShortcutAction)>,
+) {
+    for (name, action) in MENU_ACTIONS {
+        let entry = gtk4::gio::SimpleAction::new(name, None);
+        entry.connect_activate({
+            let run = run.clone();
+            move |_, _| run(*action)
+        });
+        window.add_action(&entry);
+    }
+    let entry = gtk4::gio::SimpleAction::new("jump-to-unread", None);
+    entry.connect_activate({
+        let state = state.clone();
+        move |_, _| {
+            if let Err((code, _)) = crate::inbox_actions::handle(
+                &mut state.borrow_mut(),
+                crate::inbox::Action::JumpToUnread,
+            ) {
+                crate::diagnostics::event(format_args!("notification.navigation outcome={code}"));
+            }
+        }
+    });
+    window.add_action(&entry);
+}
+
+/// Menu bar actions (`win.<name>`) backed by a shortcut action; `menus::register_accels` shows
+/// each one's live shortcut.
+pub const MENU_ACTIONS: &[(&str, ShortcutAction)] = &[
+    ("next-workspace", ShortcutAction::NextWorkspace),
+    ("previous-workspace", ShortcutAction::PrevWorkspace),
+    ("move-workspace-up", ShortcutAction::MoveWorkspaceUp),
+    ("move-workspace-down", ShortcutAction::MoveWorkspaceDown),
+    ("toggle-workspace-group", ShortcutAction::ToggleWorkspaceGroup),
+    ("workspace-1", ShortcutAction::Workspace1),
+    ("workspace-2", ShortcutAction::Workspace2),
+    ("workspace-3", ShortcutAction::Workspace3),
+    ("workspace-4", ShortcutAction::Workspace4),
+    ("workspace-5", ShortcutAction::Workspace5),
+    ("workspace-6", ShortcutAction::Workspace6),
+    ("workspace-7", ShortcutAction::Workspace7),
+    ("workspace-8", ShortcutAction::Workspace8),
+    ("workspace-9", ShortcutAction::Workspace9),
+];
 
 type KeyDispatch = dyn Fn(gtk4::gdk::Key, gtk4::gdk::ModifierType) -> gtk4::glib::Propagation;
 

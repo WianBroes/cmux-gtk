@@ -688,6 +688,11 @@ pub fn register_accels(app: &gtk4::Application, shortcuts: &crate::config::Short
         let accelerators: Vec<&str> = accelerator.as_deref().into_iter().collect();
         app.set_accels_for_action(name, &accelerators);
     }
+    for (name, action) in crate::shortcuts::MENU_ACTIONS {
+        let accelerator = shortcuts.accelerator_for(*action);
+        let accelerators: Vec<&str> = accelerator.as_deref().into_iter().collect();
+        app.set_accels_for_action(&format!("win.{name}"), &accelerators);
+    }
     app.set_accels_for_action("win.new-terminal-tab", &["<Ctrl>t"]);
     app.set_accels_for_action("win.new-browser-tab", &["<Ctrl><Shift>l"]);
     app.set_accels_for_action("win.copy", &["<Ctrl><Shift>c"]);
@@ -696,6 +701,7 @@ pub fn register_accels(app: &gtk4::Application, shortcuts: &crate::config::Short
     app.set_accels_for_action("win.preferences", &["<Ctrl>comma"]);
     app.set_accels_for_action("win.notifications", &["<Ctrl><Shift>i"]);
     app.set_accels_for_action("app.quit", &["<Ctrl>q"]);
+    app.set_accels_for_action("win.jump-to-unread", &["<Ctrl><Shift>u"]);
 }
 
 /// Build the menu bar model: upstream's menus in their order (cmux, File, Edit, View,
@@ -742,16 +748,38 @@ pub fn build_menu_bar() -> gio::Menu {
             ("Toggle Right Sidebar Focus", "win.focus-right-sidebar"),
         ],
         &[
+            ("Next Workspace", "win.next-workspace"),
+            ("Previous Workspace", "win.previous-workspace"),
+            ("Move Workspace Up", "win.move-workspace-up"),
+            ("Move Workspace Down", "win.move-workspace-down"),
             ("Rename Workspace…", "win.rename-workspace"),
             ("Edit Workspace Description…", "win.edit-workspace-description"),
+            ("Toggle Focused Workspace's Group Collapse", "win.toggle-workspace-group"),
         ],
         &[
             ("Split Right", "win.split-right"),
             ("Split Down", "win.split-down"),
         ],
-        &[("Show Notifications", "win.notifications")],
+        &[
+            ("Workspace 1", "win.workspace-1"),
+            ("Workspace 2", "win.workspace-2"),
+            ("Workspace 3", "win.workspace-3"),
+            ("Workspace 4", "win.workspace-4"),
+            ("Workspace 5", "win.workspace-5"),
+            ("Workspace 6", "win.workspace-6"),
+            ("Workspace 7", "win.workspace-7"),
+            ("Workspace 8", "win.workspace-8"),
+            ("Workspace 9", "win.workspace-9"),
+        ],
+        &[
+            ("Jump to Latest Unread", "win.jump-to-unread"),
+            ("Show Notifications", "win.notifications"),
+        ],
     ]);
-    submenu(&bar, "Notifications", &[&[("Show Notifications", "win.notifications")]]);
+    submenu(&bar, "Notifications", &[&[
+        ("Show Notifications", "win.notifications"),
+        ("Jump to Latest Unread", "win.jump-to-unread"),
+    ]]);
     submenu(&bar, "History", &[&[
         ("Focus Back", "win.focus-back"),
         ("Focus Forward", "win.focus-forward"),
