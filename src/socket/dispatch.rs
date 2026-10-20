@@ -872,6 +872,23 @@ async fn dispatch_request(
                 resp_tx,
             }
         }
+        "surface.current" => {
+            let workspace = match params.get("workspace_id").filter(|value| !value.is_null()) {
+                None => None,
+                Some(value) => match value
+                    .as_str()
+                    .and_then(|value| uuid::Uuid::parse_str(value).ok())
+                {
+                    Some(id) => Some(id),
+                    None => return err(req_id, "invalid_params", "invalid workspace UUID"),
+                },
+            };
+            commands::SocketCommand::SurfaceCurrent {
+                req_id: req_id.clone(),
+                workspace,
+                resp_tx,
+            }
+        }
         "surface.split" | "pane.create" => {
             let creation = match creation_params(&params) {
                 Ok(creation) => creation,
@@ -1028,7 +1045,7 @@ async fn dispatch_request(
                 resp_tx,
             }
         }
-        "tab.action" => {
+        "tab.action" | "surface.action" => {
             let Some(action) = params.get("action").and_then(serde_json::Value::as_str) else {
                 return err(req_id, "invalid_params", "action must be a string");
             };
@@ -1251,6 +1268,28 @@ async fn dispatch_request(
             commands::SocketCommand::PaneList {
                 req_id: req_id.clone(),
                 workspace,
+                resp_tx,
+            }
+        }
+        "pane.surfaces" => {
+            let workspace = match params.get("workspace_id").filter(|value| !value.is_null()) {
+                None => None,
+                Some(value) => match value
+                    .as_str()
+                    .and_then(|value| uuid::Uuid::parse_str(value).ok())
+                {
+                    Some(id) => Some(id),
+                    None => return err(req_id, "invalid_params", "invalid workspace UUID"),
+                },
+            };
+            let pane = match optional_text(&params, "pane_id", "pane_id") {
+                Ok(pane) => pane,
+                Err(message) => return err(req_id, "invalid_params", &message),
+            };
+            commands::SocketCommand::PaneSurfaces {
+                req_id: req_id.clone(),
+                workspace,
+                pane,
                 resp_tx,
             }
         }

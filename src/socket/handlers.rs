@@ -1979,6 +1979,49 @@ fn handle_socket_command_traced(
             let _ = resp_tx.send(ok(req_id, json!({"surfaces": surfaces})));
         }
 
+        SocketCommand::SurfaceCurrent {
+            req_id,
+            workspace,
+            resp_tx,
+        } => {
+            // SOCK-05: read-only; keeps the selected workspace and focus unchanged.
+            let s = state.borrow();
+            let index = match workspace {
+                Some(workspace) => s.workspaces.iter().position(|ws| ws.uuid == workspace),
+                None => Some(s.active_index).filter(|index| *index < s.workspaces.len()),
+            };
+            let response = match index {
+                Some(index) => {
+                    let surface = s
+                        .split_engines
+                        .get(index)
+                        .and_then(|engine| engine.active_pane_uuid())
+                        .and_then(|surface| uuid::Uuid::parse_str(&surface).ok());
+                    match identify_location(&s, index, surface)
+                        .or_else(|| identify_location(&s, index, None))
+                    {
+                        Some(identity) => ok(
+                            req_id,
+                            json!({
+                                "window_id": identity["window_id"],
+                                "window_ref": identity["window_ref"],
+                                "workspace_id": identity["workspace_id"],
+                                "workspace_ref": identity["workspace_ref"],
+                                "pane_id": identity["pane_id"],
+                                "pane_ref": identity["pane_ref"],
+                                "surface_id": identity["surface_id"],
+                                "surface_ref": identity["surface_ref"],
+                                "surface_type": identity["surface_type"],
+                            }),
+                        ),
+                        None => err(req_id, "not_found", "Workspace not found"),
+                    }
+                }
+                None => err(req_id, "not_found", "Workspace not found"),
+            };
+            let _ = resp_tx.send(response);
+        }
+
         SocketCommand::SurfaceSplit {
             req_id,
             id,
@@ -2881,6 +2924,96 @@ fn handle_socket_command_traced(
                 }
             }
             let _ = resp_tx.send(ok(req_id, json!({"panes": panes})));
+        }
+
+        SocketCommand::PaneSurfaces {
+            req_id,
+            workspace,
+            pane,
+            resp_tx,
+        } => {
+            // Read-only listing; resolve the pane without changing the workspace or focus.
+            let s = state.borrow();
+            let located = match workspace {
+                Some(workspace) => s
+                    .workspaces
+                    .iter()
+                    .position(|ws| ws.uuid == workspace)
+                    .and_then(|index| {
+                        let engine = s.split_engines.get(index)?;
+                        let pane_id = match pane.as_deref() {
+                            Some(reference) => engine.pane_for_ref(reference)?,
+                            None => engine.active_pane(),
+                        };
+                        Some((index, pane_id))
+                    }),
+                None => match pane.as_deref() {
+                    Some(reference) => s
+                        .split_engines
+                        .iter()
+                        .enumerate()
+                        .find_map(|(index, engine)| {
+                            engine
+                                .pane_for_ref(reference)
+                                .map(|pane_id| (index, pane_id))
+                        }),
+                    None => s
+                        .split_engines
+                        .get(s.active_index)
+                        .map(|engine| (s.active_index, engine.active_pane())),
+                },
+            };
+            let response = match located {
+                Some((index, pane_id)) => {
+                    let engine = &s.split_engines[index];
+                    let Some(info) = engine
+                        .pane_info()
+                        .into_iter()
+                        .find(|info| info.id == pane_id)
+                    else {
+                        let _ =
+                            resp_tx.send(err(req_id, "not_found", "Pane or workspace not found"));
+                        return;
+                    };
+                    use super::handles::{HandleKind, MAIN_WINDOW_ID};
+                    let workspace = s.workspaces[index].uuid.to_string();
+                    let pane_ref = format!("pane:{pane_id}");
+                    let surfaces: Vec<Value> = info
+                        .surface_ids
+                        .iter()
+                        .enumerate()
+                        .map(|(index, surface)| {
+                            let id = surface.to_string();
+                            let browser = info
+                                .browser_urls
+                                .get(index)
+                                .is_some_and(|url| url.is_some());
+                            json!({
+                                "id": id,
+                                "ref": s.handles.ensure_ref(HandleKind::Surface, &id),
+                                "index": index,
+                                "title": if browser { None } else { engine.surface_title(&id) },
+                                "type": if browser { "browser" } else { "terminal" },
+                                "selected": info.selected_surface == Some(*surface),
+                            })
+                        })
+                        .collect();
+                    ok(
+                        req_id,
+                        json!({
+                            "workspace_id": workspace,
+                            "workspace_ref": s.handles.ensure_ref(HandleKind::Workspace, &workspace),
+                            "pane_id": pane_ref,
+                            "pane_ref": pane_ref,
+                            "window_id": MAIN_WINDOW_ID,
+                            "window_ref": s.handles.ensure_ref(HandleKind::Window, MAIN_WINDOW_ID),
+                            "surfaces": surfaces,
+                        }),
+                    )
+                }
+                None => err(req_id, "not_found", "Pane or workspace not found"),
+            };
+            let _ = resp_tx.send(response);
         }
 
         SocketCommand::PaneFocus {

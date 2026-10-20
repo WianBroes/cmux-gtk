@@ -203,6 +203,12 @@ pub enum SocketCommand {
         workspace: Option<uuid::Uuid>,
         resp_tx: RespTx,
     },
+    SurfaceCurrent {
+        req_id: Value,
+        /// Workspace to inspect; `None` uses the selected workspace.
+        workspace: Option<uuid::Uuid>,
+        resp_tx: RespTx,
+    },
     SurfaceResume {
         req_id: Value,
         id: Option<String>,
@@ -349,6 +355,14 @@ pub enum SocketCommand {
         req_id: Value,
         /// Restrict to one workspace; `None` lists every workspace.
         workspace: Option<uuid::Uuid>,
+        resp_tx: RespTx,
+    },
+    PaneSurfaces {
+        req_id: Value,
+        /// Workspace holding the pane; `None` finds its owner or uses the selected workspace.
+        workspace: Option<uuid::Uuid>,
+        /// Pane reference (`pane:N`) or one of its surface UUIDs; `None` uses the focused pane.
+        pane: Option<String>,
         resp_tx: RespTx,
     },
     PaneFocus {
