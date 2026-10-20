@@ -2106,13 +2106,12 @@ fn handle_socket_command_traced(
                 if let Some(pane_id) = engine.root.find_active_pane_id() {
                     if let Some(surface) = engine.root.find_surface_for_pane(pane_id) {
                         if !surface.is_null() {
-                            let c_text = std::ffi::CString::new(text.clone()).unwrap_or_default();
-                            unsafe {
-                                crate::ghostty::ffi::ghostty_surface_text(
-                                    surface,
-                                    c_text.as_ptr(),
-                                    c_text.to_bytes().len(),
-                                );
+                            // Upstream `insertText` is typed input, not a paste: a newline
+                            // submits the line instead of landing inside bracketed paste.
+                            for character in text.chars() {
+                                // SAFETY: the surface comes from the live tree on the GTK
+                                // thread and nothing tears it down during this loop.
+                                let _ = unsafe { crate::ghostty::text::send_character(surface, character) };
                             }
                         }
                     }
