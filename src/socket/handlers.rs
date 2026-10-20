@@ -860,8 +860,13 @@ fn handle_socket_command_traced(
             terminal_profile,
             terminal_tmux_session,
             initial_input,
+            focus,
             resp_tx,
         } => {
+            let previous = {
+                let s = state.borrow();
+                s.workspaces.get(s.active_index).map(|ws| ws.uuid)
+            };
             if let Some(target) = remote_target {
                 // SSH workspace creation per D-13, D-15
                 // Create per-workspace bridge for SSH I/O routing
@@ -932,6 +937,15 @@ fn handle_socket_command_traced(
                 });
                 created_identity(&s, id, &mut payload);
                 let _ = resp_tx.send(ok(req_id, payload));
+            }
+            // Background creation: the new terminal exists, but the previous workspace stays selected.
+            if !focus {
+                let mut s = state.borrow_mut();
+                if let Some(index) = previous
+                    .and_then(|previous| s.workspaces.iter().position(|ws| ws.uuid == previous))
+                {
+                    s.switch_to_index(index);
+                }
             }
             let (list, app) = {
                 let s = state.borrow();

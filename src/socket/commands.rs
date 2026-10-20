@@ -93,6 +93,8 @@ pub enum SocketCommand {
         terminal_tmux_session: Option<String>,
         /// Typed into the first terminal's shell, followed by Enter (upstream `initial_input`).
         initial_input: Option<String>,
+        /// Select the new workspace; upstream defaults to keeping the current selection.
+        focus: bool,
         resp_tx: RespTx,
     },
     /// `id` is the workspace UUID string from the client.

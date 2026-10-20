@@ -537,6 +537,12 @@ async fn dispatch_request(
                     "terminal_tmux_session requires the tmux profile",
                 );
             }
+            // Upstream `applyFocusOption(defaultValue: false)`: background creation by default.
+            let focus = match params.get("focus") {
+                None | Some(serde_json::Value::Null) => false,
+                Some(serde_json::Value::Bool(focus)) => *focus,
+                Some(_) => return err(req_id, "invalid_params", "focus must be a boolean"),
+            };
             commands::SocketCommand::WorkspaceCreate {
                 req_id: req_id.clone(),
                 remote_target,
@@ -560,6 +566,7 @@ async fn dispatch_request(
                         return err(req_id, "invalid_params", "initial_input must be a string")
                     }
                 },
+                focus,
                 resp_tx,
             }
         }
