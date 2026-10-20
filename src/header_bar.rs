@@ -134,7 +134,15 @@ fn align_with_sidebar(controls: &gtk4::Box, menus: &gtk4::PopoverMenuBar, sideba
             };
             let shift = (edge.x() - start.x()).round() as i32;
             if shift != 0 {
-                let width = (controls.width() + shift).max(controls.measure(gtk4::Orientation::Horizontal, -1).0);
+                // The floor is what the buttons need: the box's own minimum includes the width
+                // requested here, which would keep the controls from shrinking back.
+                let mut floor = 0;
+                let mut child = controls.first_child();
+                while let Some(widget) = child {
+                    floor += widget.measure(gtk4::Orientation::Horizontal, -1).0;
+                    child = widget.next_sibling();
+                }
+                let width = (controls.width() + shift).max(floor);
                 if width != controls.width_request() {
                     controls.set_size_request(width, -1);
                 }
