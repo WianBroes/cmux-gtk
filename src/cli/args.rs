@@ -893,6 +893,21 @@ pub enum Commands {
         #[arg(long, conflicts_with = "id")]
         pane: Option<String>,
     },
+    /// Swap the selected surfaces of two panes in one workspace
+    SwapPane {
+        /// Workspace UUID, ref (workspace:N) or index
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Source pane reference (pane:N), surface UUID or index
+        #[arg(long)]
+        pane: String,
+        /// Target pane reference (pane:N), surface UUID or index
+        #[arg(long)]
+        target_pane: String,
+        /// Focus the target pane after the swap
+        #[arg(long)]
+        focus: bool,
+    },
     /// Switch to last focused pane
     LastPane,
 
@@ -2593,6 +2608,8 @@ mod handle_argument_tests {
             vec!["close-surface"],
             vec!["reorder-surface"],
             vec!["move-surface"],
+            vec!["swap-pane", "--pane", "pane:1"],
+            vec!["swap-pane", "--target-pane", "pane:2"],
             vec![
                 "drag-surface-to-split",
                 "--pane",
@@ -2614,6 +2631,54 @@ mod handle_argument_tests {
                 pane: None
             }
         ));
+    }
+
+    /// Swap names both panes, keeps the workspace optional and takes focus as a flag.
+    #[test]
+    fn swap_pane_forms_parse() {
+        match parse(&[
+            "swap-pane",
+            "--workspace",
+            "workspace:3",
+            "--pane",
+            "pane:1",
+            "--target-pane",
+            "pane:2",
+        ]) {
+            Commands::SwapPane {
+                workspace,
+                pane,
+                target_pane,
+                focus,
+            } => {
+                assert_eq!(workspace.as_deref(), Some("workspace:3"));
+                assert_eq!(pane, "pane:1");
+                assert_eq!(target_pane, "pane:2");
+                assert!(!focus);
+            }
+            _ => panic!("wrong command variant"),
+        }
+        match parse(&[
+            "swap-pane",
+            "--pane",
+            "pane:1",
+            "--target-pane",
+            "pane:2",
+            "--focus",
+        ]) {
+            Commands::SwapPane {
+                workspace,
+                pane,
+                target_pane,
+                focus,
+            } => {
+                assert!(workspace.is_none());
+                assert_eq!(pane, "pane:1");
+                assert_eq!(target_pane, "pane:2");
+                assert!(focus);
+            }
+            _ => panic!("wrong command variant"),
+        }
     }
 
     /// Upstream's placement, window and focus flags reach the same move command.

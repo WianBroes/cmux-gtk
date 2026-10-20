@@ -91,6 +91,16 @@ fn optional_text(
     Ok(None)
 }
 
+/// Read a required pane target: `pane:N`, a pane/surface UUID, or a `surface:N` ref
+/// already rewritten to its UUID.
+fn pane_reference(params: &serde_json::Value, key: &str) -> Option<String> {
+    let value = params.get(key)?.as_str()?;
+    let is_pane_ref = value
+        .strip_prefix("pane:")
+        .is_some_and(|number| number.parse::<u64>().is_ok());
+    (is_pane_ref || uuid::Uuid::parse_str(value).is_ok()).then(|| value.to_owned())
+}
+
 /// Refuse a caller-named window: this Linux build owns exactly one GTK window.
 fn only_main_window(params: &serde_json::Value) -> Result<(), String> {
     match optional_text(params, "window", "window_id")? {
@@ -1308,6 +1318,37 @@ async fn dispatch_request(
                 req_id: req_id.clone(),
                 workspace,
                 pane,
+                resp_tx,
+            }
+        }
+        "pane.swap" => {
+            let Some(pane_id) = pane_reference(&params, "pane_id") else {
+                return err(req_id, "invalid_params", "Missing or invalid pane_id");
+            };
+            let Some(target_pane_id) = pane_reference(&params, "target_pane_id") else {
+                return err(
+                    req_id,
+                    "invalid_params",
+                    "Missing or invalid target_pane_id",
+                );
+            };
+            if pane_id == target_pane_id {
+                return err(
+                    req_id,
+                    "invalid_params",
+                    "pane_id and target_pane_id must be different",
+                );
+            }
+            let focus = match params.get("focus") {
+                None | Some(serde_json::Value::Null) => false,
+                Some(serde_json::Value::Bool(focus)) => *focus,
+                Some(_) => return err(req_id, "invalid_params", "focus must be a boolean"),
+            };
+            commands::SocketCommand::PaneSwap {
+                req_id: req_id.clone(),
+                pane_id,
+                target_pane_id,
+                focus,
                 resp_tx,
             }
         }

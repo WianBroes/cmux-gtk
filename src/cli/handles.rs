@@ -594,6 +594,17 @@ fn collect_targets<'a>(command: &'a mut Commands, targets: &mut Vec<Target<'a>>)
 
         Commands::FocusPane { id, .. } => targets.push(Target::Optional(HandleKind::Pane, id)),
 
+        Commands::SwapPane {
+            workspace,
+            pane,
+            target_pane,
+            ..
+        } => {
+            targets.push(Target::Required(HandleKind::Pane, pane));
+            targets.push(Target::Required(HandleKind::Pane, target_pane));
+            targets.push(Target::Optional(HandleKind::Workspace, workspace));
+        }
+
         Commands::NewSplit {
             surface, workspace, ..
         } => {

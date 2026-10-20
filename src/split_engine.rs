@@ -1015,6 +1015,28 @@ impl SplitEngine {
         true
     }
 
+    /// Select a surface's notebook page without changing which pane is active.
+    ///
+    /// `pane.swap` uses this so each pane shows the surface that moved into it while
+    /// `focus=false` leaves the focused pane unchanged.
+    pub(crate) fn select_surface(&self, uuid: Uuid) -> bool {
+        let Some(pane_id) = self.root.find_pane_id_by_uuid(&uuid.to_string()) else {
+            return false;
+        };
+        let Some((notebook, surfaces)) = find_pane_tabs(&self.root, pane_id) else {
+            return false;
+        };
+        let page = surfaces
+            .borrow()
+            .iter()
+            .find(|surface| surface.uuid() == uuid)
+            .and_then(|surface| notebook.page_num(&surface.widget()));
+        page.is_some_and(|page| {
+            notebook.set_current_page(Some(page));
+            true
+        })
+    }
+
     /// Select a surface's notebook page and owning pane, then move GTK keyboard focus there.
     /// Return false without changing selection when the surface is absent from this workspace.
     pub fn focus_surface(&mut self, uuid: &str) -> bool {

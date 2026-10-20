@@ -2066,6 +2066,21 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             }
             ("pane.focus", Value::Object(p))
         }
+        Commands::SwapPane {
+            workspace,
+            pane,
+            target_pane,
+            focus,
+        } => {
+            let mut p = serde_json::Map::new();
+            if let Some(ref workspace) = workspace {
+                p.insert("workspace_id".into(), json!(workspace));
+            }
+            p.insert("pane_id".into(), json!(pane));
+            p.insert("target_pane_id".into(), json!(target_pane));
+            p.insert("focus".into(), json!(focus));
+            ("pane.swap", Value::Object(p))
+        }
         Commands::LastPane => ("pane.last", json!({})),
 
         Commands::Settings { .. } | Commands::Shortcuts => ("settings.open", json!({})),
@@ -2377,6 +2392,29 @@ mod tests {
         assert_eq!(params["focus"], false);
         assert!(params.get("after").is_none());
         assert!(params.get("position").is_none());
+    }
+
+    /// `swap-pane` forwards both pane targets, the optional workspace and focus.
+    #[test]
+    fn swap_pane_flags_map_to_parameters() {
+        let cli = Cli::try_parse_from([
+            "cmux",
+            "swap-pane",
+            "--workspace",
+            "workspace:2",
+            "--pane",
+            "pane:1",
+            "--target-pane",
+            "pane:2",
+            "--focus",
+        ])
+        .expect("swap pane arguments should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "pane.swap");
+        assert_eq!(params["workspace_id"], "workspace:2");
+        assert_eq!(params["pane_id"], "pane:1");
+        assert_eq!(params["target_pane_id"], "pane:2");
+        assert_eq!(params["focus"], true);
     }
 
     /// Reorders carry their named anchor and drop the position they do not use.

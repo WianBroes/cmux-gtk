@@ -4,7 +4,7 @@ use crate::socket::commands::SocketCommand;
 use gtk4::prelude::*;
 use serde_json::{json, Value};
 
-use super::response::{err, ok};
+use super::response::{err, err_data, ok};
 
 /// Actions `workspace.action` accepts, in upstream's snake_case spelling (the handler
 /// also takes the dashed CLI spelling). `mobile_connect` is upstream-only.
@@ -810,6 +810,7 @@ fn handle_socket_command_traced(
                 "pane.surfaces",
                 "pane.create",
                 "pane.focus",
+                "pane.swap",
                 "pane.last",
                 "config.reload",
                 "settings.open",
@@ -3234,6 +3235,172 @@ fn handle_socket_command_traced(
             } else {
                 err(req_id, "not_found", "pane not found")
             };
+            let _ = resp_tx.send(response);
+        }
+
+        SocketCommand::PaneSwap {
+            req_id,
+            pane_id,
+            target_pane_id,
+            focus,
+            resp_tx,
+        } => {
+            let mut s = state.borrow_mut();
+            let located = s
+                .split_engines
+                .iter()
+                .enumerate()
+                .find_map(|(index, engine)| {
+                    engine.pane_for_ref(&pane_id).map(|pane| (index, pane))
+                });
+            let Some((index, source_pane)) = located else {
+                let _ = resp_tx.send(err_data(
+                    req_id,
+                    "not_found",
+                    "Source pane not found",
+                    json!({"pane_id": pane_id}),
+                ));
+                return;
+            };
+            let Some(target_pane) = s.split_engines[index].pane_for_ref(&target_pane_id)
+            else {
+                let _ = resp_tx.send(err_data(
+                    req_id,
+                    "not_found",
+                    "Target pane not found in source workspace",
+                    json!({"target_pane_id": target_pane_id}),
+                ));
+                return;
+            };
+            if source_pane == target_pane {
+                let _ = resp_tx.send(err(
+                    req_id,
+                    "invalid_params",
+                    "pane_id and target_pane_id must be different",
+                ));
+                return;
+            }
+            let panes = s.split_engines[index].pane_info();
+            let selected = |pane: u64| {
+                panes
+                    .iter()
+                    .find(|info| info.id == pane)
+                    .and_then(|info| info.selected_surface)
+            };
+            let (Some(source_surface), Some(target_surface)) =
+                (selected(source_pane), selected(target_pane))
+            else {
+                let _ = resp_tx.send(err(
+                    req_id,
+                    "invalid_state",
+                    "Both panes must have a selected surface",
+                ));
+                return;
+            };
+            let surface_count = |pane: u64| {
+                panes
+                    .iter()
+                    .find(|info| info.id == pane)
+                    .map_or(0, |info| info.surface_ids.len())
+            };
+            // Upstream keeps both pane identities when a side holds only the surface being
+            // moved: a temporary terminal stabilizes that pane until both swaps are done.
+            let mut placeholders = Vec::new();
+            if surface_count(source_pane) <= 1 {
+                match s.split_engines[index].new_terminal_surface(
+                    source_pane,
+                    crate::split_engine::TerminalLaunch::default(),
+                    false,
+                ) {
+                    Ok(placeholder) => placeholders.push(placeholder),
+                    Err(_) => {
+                        let _ = resp_tx.send(err(
+                            req_id,
+                            "internal_error",
+                            "Failed to create source placeholder surface",
+                        ));
+                        return;
+                    }
+                }
+            }
+            if surface_count(target_pane) <= 1 {
+                match s.split_engines[index].new_terminal_surface(
+                    target_pane,
+                    crate::split_engine::TerminalLaunch::default(),
+                    false,
+                ) {
+                    Ok(placeholder) => placeholders.push(placeholder),
+                    Err(_) => {
+                        let _ = resp_tx.send(err(
+                            req_id,
+                            "internal_error",
+                            "Failed to create target placeholder surface",
+                        ));
+                        return;
+                    }
+                }
+            }
+            if s.split_engines[index]
+                .move_surface(source_surface, target_pane, None, false)
+                .is_err()
+            {
+                let _ = resp_tx.send(err(
+                    req_id,
+                    "internal_error",
+                    "Failed moving source surface into target pane",
+                ));
+                return;
+            }
+            if s.split_engines[index]
+                .move_surface(target_surface, source_pane, None, false)
+                .is_err()
+            {
+                let _ = resp_tx.send(err(
+                    req_id,
+                    "internal_error",
+                    "Failed moving target surface into source pane",
+                ));
+                return;
+            }
+            // The moved tabs were appended unselected: show each pane's new surface before
+            // dropping the placeholders, so a focused pane does not fall back to another tab.
+            let _ = s.split_engines[index].select_surface(target_surface);
+            let _ = s.split_engines[index].select_surface(source_surface);
+            for placeholder in placeholders {
+                let _ = s.split_engines[index].close_surface_tab(placeholder);
+            }
+            if focus {
+                if index != s.active_index {
+                    s.switch_to_index(index);
+                }
+                let _ = s.split_engines[index].focus_pane_ref(&format!("pane:{target_pane}"));
+            } else if index != s.active_index {
+                // Closing a placeholder reconciles focus inside the source workspace; put it
+                // back on the workspace the user was in when focus was not requested.
+                s.split_engines[s.active_index].focus_active_surface();
+            }
+            s.trigger_session_save();
+            use super::handles::{HandleKind, MAIN_WINDOW_ID};
+            let workspace_id = s.workspaces[index].uuid.to_string();
+            let source_surface_id = source_surface.to_string();
+            let target_surface_id = target_surface.to_string();
+            let response = ok(
+                req_id,
+                json!({
+                    "window_id": MAIN_WINDOW_ID,
+                    "window_ref": s.handles.ensure_ref(HandleKind::Window, MAIN_WINDOW_ID),
+                    "workspace_id": workspace_id,
+                    "workspace_ref": s.handles.ensure_ref(HandleKind::Workspace, &workspace_id),
+                    "pane_id": format!("pane:{source_pane}"),
+                    "pane_ref": format!("pane:{source_pane}"),
+                    "target_pane_id": format!("pane:{target_pane}"),
+                    "target_pane_ref": format!("pane:{target_pane}"),
+                    "source_surface_id": source_surface_id,
+                    "source_surface_ref": s.handles.ensure_ref(HandleKind::Surface, &source_surface_id),
+                    "target_surface_id": target_surface_id,
+                    "target_surface_ref": s.handles.ensure_ref(HandleKind::Surface, &target_surface_id),
+                }),
+            );
             let _ = resp_tx.send(response);
         }
 

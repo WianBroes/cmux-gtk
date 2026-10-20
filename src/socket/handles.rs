@@ -100,6 +100,9 @@ const HANDLE_KEYS: &[&str] = &[
     "surface",
     "surface_id",
     "surface_ref",
+    // Pane targets of `pane.swap`; also accept a member surface's `surface:N` ref.
+    "pane_id",
+    "target_pane_id",
     // Relative placement anchors of `surface.move`, `surface.reorder` and `workspace.reorder`.
     "before",
     "after",

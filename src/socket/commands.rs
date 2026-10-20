@@ -374,6 +374,17 @@ pub enum SocketCommand {
         id: Option<String>,
         resp_tx: RespTx,
     },
+    /// Exchange the selected surfaces of two panes in the source pane's workspace.
+    PaneSwap {
+        req_id: Value,
+        /// Source pane reference (`pane:N`) or one of its surface UUIDs.
+        pane_id: String,
+        /// Target pane reference in the source pane's workspace.
+        target_pane_id: String,
+        /// Focus the target pane after the swap; false preserves the focused pane.
+        focus: bool,
+        resp_tx: RespTx,
+    },
     PaneLast {
         req_id: Value,
         resp_tx: RespTx,

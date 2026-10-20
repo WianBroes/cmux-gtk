@@ -60,6 +60,11 @@ pub(super) fn err(req_id: Value, code: &str, message: &str) -> Value {
     json!({"id": req_id, "ok": false, "error": {"code": code, "message": message}})
 }
 
+/// Build a failed response carrying upstream's structured error `data`.
+pub(super) fn err_data(req_id: Value, code: &str, message: &str, data: Value) -> Value {
+    json!({"id": req_id, "ok": false, "error": {"code": code, "message": message, "data": data}})
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

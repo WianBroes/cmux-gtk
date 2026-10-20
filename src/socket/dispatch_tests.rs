@@ -514,3 +514,48 @@ async fn invalid_creation_params_never_reach_gtk() {
         assert!(rx.try_recv().is_err());
     }
 }
+
+/// `pane.swap` rejects missing, malformed and identical pane identifiers before GTK.
+#[tokio::test]
+async fn invalid_pane_swap_params_never_reach_gtk() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(COMMAND_CAPACITY);
+    for (params, message) in [
+        (
+            serde_json::json!({}),
+            "Missing or invalid pane_id",
+        ),
+        (
+            serde_json::json!({"pane_id": null}),
+            "Missing or invalid pane_id",
+        ),
+        (
+            serde_json::json!({"pane_id": false}),
+            "Missing or invalid pane_id",
+        ),
+        (
+            serde_json::json!({"pane_id": "not-a-pane"}),
+            "Missing or invalid pane_id",
+        ),
+        (
+            serde_json::json!({"pane_id": "pane:1"}),
+            "Missing or invalid target_pane_id",
+        ),
+        (
+            serde_json::json!({"pane_id": "pane:1", "target_pane_id": 4}),
+            "Missing or invalid target_pane_id",
+        ),
+        (
+            serde_json::json!({"pane_id": "pane:1", "target_pane_id": "pane:1"}),
+            "pane_id and target_pane_id must be different",
+        ),
+    ] {
+        let request =
+            serde_json::json!({"id": 21, "method": "pane.swap", "params": params});
+        let response = dispatch_line(request.to_string(), &tx).await;
+        let response: serde_json::Value = serde_json::from_str(&response.body).unwrap();
+        assert_eq!(response["id"], 21);
+        assert_eq!(response["error"]["code"], "invalid_params");
+        assert_eq!(response["error"]["message"], message);
+        assert!(rx.try_recv().is_err());
+    }
+}
