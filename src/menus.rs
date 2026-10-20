@@ -698,49 +698,73 @@ pub fn register_accels(app: &gtk4::Application, shortcuts: &crate::config::Short
     app.set_accels_for_action("app.quit", &["<Ctrl>q"]);
 }
 
-/// Build the hamburger menu model (D-11, D-12).
-/// Returns a gio::Menu that can be set on a MenuButton.
-/// Per D-12: sections use File/Edit/View/Help labels.
-pub fn build_hamburger_menu() -> gio::Menu {
-    let menu = gio::Menu::new();
-
-    // File section (D-12)
-    let file_section = gio::Menu::new();
-    file_section.append(Some("New Workspace"), Some("win.new-workspace"));
-    file_section.append(Some("New SSH Workspace"), Some("win.new-ssh-workspace"));
-    file_section.append(Some("New Tab (Terminal)"), Some("win.new-terminal-tab"));
-    file_section.append(Some("New Tab (Browser)"), Some("win.new-browser-tab"));
-    file_section.append(Some("Close Pane"), Some("win.close-pane"));
-    file_section.append(Some("Close Workspace"), Some("win.close-workspace"));
-    file_section.append(Some("Quit"), Some("app.quit"));
-    menu.append_section(Some("File"), &file_section);
-
-    // Edit section (D-12)
-    let edit_section = gio::Menu::new();
-    edit_section.append(Some("Copy"), Some("win.copy"));
-    edit_section.append(Some("Paste"), Some("win.paste"));
-    edit_section.append(Some("Find"), Some("win.find"));
-    edit_section.append(Some("Command Palette"), Some("win.project-palette"));
-    edit_section.append(Some("Preferences"), Some("win.preferences"));
-    menu.append_section(Some("Edit"), &edit_section);
-
-    // View section (D-12)
-    let view_section = gio::Menu::new();
-    view_section.append(Some("Toggle Sidebar"), Some("win.toggle-sidebar"));
-    view_section.append(Some("Toggle Right Sidebar"), Some("win.toggle-right-sidebar"));
-    view_section.append(Some("Focus Right Sidebar"), Some("win.focus-right-sidebar"));
-    view_section.append(Some("Notifications"), Some("win.notifications"));
-    view_section.append(Some("Split Right"), Some("win.split-right"));
-    view_section.append(Some("Split Down"), Some("win.split-down"));
-    menu.append_section(Some("View"), &view_section);
-
-    // Help section (D-12)
-    let help_section = gio::Menu::new();
-    help_section.append(Some("Keyboard Shortcuts"), Some("win.keyboard-shortcuts"));
-    help_section.append(Some("About cmux"), Some("win.about"));
-    menu.append_section(Some("Help"), &help_section);
-
-    menu
+/// Build the menu bar model: upstream's menus in their order (cmux, File, Edit, View,
+/// Notifications, History, Window, Help; Cloud left out), upstream labels, our existing actions.
+pub fn build_menu_bar() -> gio::Menu {
+    fn submenu(bar: &gio::Menu, label: &str, sections: &[&[(&str, &str)]]) {
+        let menu = gio::Menu::new();
+        for rows in sections {
+            let section = gio::Menu::new();
+            for (row, action) in *rows {
+                section.append(Some(row), Some(action));
+            }
+            menu.append_section(None, &section);
+        }
+        bar.append_submenu(Some(label), &menu);
+    }
+    let bar = gio::Menu::new();
+    submenu(&bar, "cmux", &[
+        &[("About cmux", "win.about")],
+        &[("Settings…", "win.preferences")],
+        &[("Quit cmux", "app.quit")],
+    ]);
+    submenu(&bar, "File", &[
+        &[
+            ("New Workspace", "win.new-workspace"),
+            ("New SSH Workspace", "win.new-ssh-workspace"),
+            ("New Tab (Terminal)", "win.new-terminal-tab"),
+            ("New Tab (Browser)", "win.new-browser-tab"),
+        ],
+        &[("Command Palette…", "win.project-palette")],
+        &[
+            ("Close Pane", "win.close-pane"),
+            ("Close Workspace", "win.close-workspace"),
+        ],
+    ]);
+    submenu(&bar, "Edit", &[
+        &[("Copy", "win.copy"), ("Paste", "win.paste")],
+        &[("Find…", "win.find")],
+    ]);
+    submenu(&bar, "View", &[
+        &[
+            ("Toggle Left Sidebar", "win.toggle-sidebar"),
+            ("Toggle Right Sidebar", "win.toggle-right-sidebar"),
+            ("Toggle Right Sidebar Focus", "win.focus-right-sidebar"),
+        ],
+        &[
+            ("Rename Workspace…", "win.rename-workspace"),
+            ("Edit Workspace Description…", "win.edit-workspace-description"),
+        ],
+        &[
+            ("Split Right", "win.split-right"),
+            ("Split Down", "win.split-down"),
+        ],
+        &[("Show Notifications", "win.notifications")],
+    ]);
+    submenu(&bar, "Notifications", &[&[("Show Notifications", "win.notifications")]]);
+    submenu(&bar, "History", &[&[
+        ("Focus Back", "win.focus-back"),
+        ("Focus Forward", "win.focus-forward"),
+    ]]);
+    // GtkWindow's own actions: upstream's Window menu holds the standard macOS window items.
+    submenu(&bar, "Window", &[&[
+        ("Minimize", "window.minimize"),
+        ("Zoom", "window.toggle-maximized"),
+    ]]);
+    submenu(&bar, "Help", &[&[
+        ("Keyboard Shortcuts", "win.keyboard-shortcuts"),
+    ]]);
+    bar
 }
 
 /// Build sidebar workspace row context menu (D-03).

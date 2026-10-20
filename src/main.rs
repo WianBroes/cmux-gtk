@@ -427,10 +427,28 @@ fn build_ui(
 
     // Phase 9: Set HeaderBar as titlebar (D-04)
     let (bell, bell_badge) = crate::header_bar::notification_bell();
-    let focus_arrows = crate::header_bar::build_header_bar(config, &bell).map(|(header, arrows)| {
-        window.set_titlebar(Some(&header));
-        arrows
-    });
+    // Upstream's menus on top, the quick toolbar under them (Wian, 2026-10-19). Without our
+    // header the window keeps the system titlebar and GTK shows the menu bar in the window.
+    let menu_bar = crate::menus::build_menu_bar();
+    let focus_arrows = match crate::header_bar::build_header_bar(config, &bell) {
+        Some((header, arrows)) => {
+            // A header bar of its own, so the menus take the theme's titlebar look and drag.
+            let menus = gtk4::HeaderBar::new();
+            menus.set_show_title_buttons(false);
+            menus.set_title_widget(Some(&gtk4::Box::new(gtk4::Orientation::Horizontal, 0)));
+            menus.pack_start(&gtk4::PopoverMenuBar::from_model(Some(&menu_bar)));
+            let titlebar = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+            titlebar.append(&menus);
+            titlebar.append(&header);
+            window.set_titlebar(Some(&titlebar));
+            Some(arrows)
+        }
+        None => {
+            app.set_menubar(Some(&menu_bar));
+            window.set_show_menubar(true);
+            None
+        }
+    };
 
     window.set_child(Some(&split));
 

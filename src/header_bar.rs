@@ -3,8 +3,8 @@
 use gtk4::prelude::*;
 
 /// Build the titlebar controls in upstream's order — sidebar, notifications, new workspace with
-/// its menu, Focus Back / Forward — on the GTK thread, unless the header is hidden. The window
-/// buttons and the ≡ menu stay: Linux has no global menu bar to hold Preferences and Help.
+/// its menu, Focus Back / Forward — on the GTK thread, unless the header is hidden. The menus
+/// live in the menu bar above it (`crate::menus::build_menu_bar`), not in a ≡ button.
 /// Returns the arrows so their right-click history menus can be attached once state exists.
 pub fn build_header_bar(
     config: &crate::config::Config,
@@ -58,12 +58,6 @@ pub fn build_header_bar(
     });
     arrows.add_controller(absorb);
     header.pack_start(&arrows);
-    let menu = gtk4::MenuButton::new();
-    menu.set_icon_name("open-menu-symbolic");
-    menu.set_tooltip_text(Some("Menu"));
-    menu.set_menu_model(Some(&crate::menus::build_hamburger_menu()));
-    menu.add_css_class("headerbar-btn");
-    header.pack_end(&menu);
     // Files panel toggle. Icon is folder-symbolic: breeze (the active theme here) has no sidebar-show-right-symbolic, GTK showed image-missing.
     header.pack_end(&action_button(
         "folder-symbolic",
