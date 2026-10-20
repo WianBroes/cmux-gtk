@@ -13,6 +13,7 @@ mod browser_timeout;
 mod config;
 mod diagnostics;
 mod events;
+mod fallback_icons;
 mod file_explorer;
 mod focus_history;
 mod ghostty;
@@ -400,6 +401,7 @@ fn build_ui(
         &provider,
         gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
+    crate::fallback_icons::install(&gtk4::gdk::Display::default().expect("no display"));
 
     // 3. Build the window layout
     let window = ApplicationWindow::builder()
@@ -428,26 +430,18 @@ fn build_ui(
 
     // Phase 9: Set HeaderBar as titlebar (D-04)
     let (bell, bell_badge) = crate::header_bar::notification_bell();
-    // Upstream's menus on top, the quick toolbar under them (Wian, 2026-10-19). Without our
-    // header the window keeps the system titlebar and GTK shows the menu bar in the window.
+    // One titlebar row with the menus (`header_bar::build_header_bar`). Without our header the
+    // window keeps the system titlebar and GTK shows the menu bar in the window.
     let menu_bar = crate::menus::build_menu_bar();
-    let focus_arrows = match crate::header_bar::build_header_bar(config, &bell) {
-        Some((header, arrows)) => {
-            // A header bar of its own, so the menus take the theme's titlebar look and drag.
-            let menus = gtk4::HeaderBar::new();
-            menus.set_show_title_buttons(false);
-            menus.set_title_widget(Some(&gtk4::Box::new(gtk4::Orientation::Horizontal, 0)));
-            menus.pack_start(&gtk4::PopoverMenuBar::from_model(Some(&menu_bar)));
-            let titlebar = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-            titlebar.append(&menus);
-            titlebar.append(&header);
-            window.set_titlebar(Some(&titlebar));
-            Some(arrows)
+    let (focus_arrows, title_label) = match crate::header_bar::build_header_bar(config, &bell, &menu_bar) {
+        Some((header, arrows, title)) => {
+            window.set_titlebar(Some(&header));
+            (Some(arrows), Some(title))
         }
         None => {
             app.set_menubar(Some(&menu_bar));
             window.set_show_menubar(true);
-            None
+            (None, None)
         }
     };
 
@@ -579,6 +573,19 @@ fn build_ui(
             while let Some(cmd) = cmd_rx.recv().await {
                 crate::socket::handlers::handle_socket_command(cmd, &state);
             }
+        });
+    }
+
+    // The titlebar shows the selected workspace's name (upstream's window title).
+    if let Some(label) = title_label {
+        let state = state.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
+            if let Ok(s) = state.try_borrow() {
+                if let Some(workspace) = s.active_workspace() {
+                    crate::header_bar::set_title(&label, &workspace.name);
+                }
+            }
+            glib::ControlFlow::Continue
         });
     }
 

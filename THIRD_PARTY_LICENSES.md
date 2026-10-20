@@ -30,6 +30,15 @@ SOFTWARE.
 
 ---
 
+## Adwaita icon theme (four symbolic icons)
+
+- **License:** CC-BY-SA-3.0 OR LGPL-3.0-only
+- **Copyright:** Copyright (c) GNOME Project
+- **Source:** https://gitlab.gnome.org/GNOME/adwaita-icon-theme (version 50.0)
+- **Files:** `resources/icons/*.svg` (`preferences-system-notifications-symbolic`, `text-x-generic-symbolic`, `thunderbolt-symbolic`, `web-browser-symbolic`), used only when the user's icon theme lacks them.
+
+---
+
 ## Bonsplit
 
 - **License:** MIT License

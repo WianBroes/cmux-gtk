@@ -2,19 +2,24 @@
 
 use gtk4::prelude::*;
 
-/// Build the titlebar controls in upstream's order — sidebar, notifications, new workspace with
-/// its menu, Focus Back / Forward — on the GTK thread, unless the header is hidden. The menus
-/// live in the menu bar above it (`crate::menus::build_menu_bar`), not in a ≡ button.
-/// Returns the arrows so their right-click history menus can be attached once state exists.
+/// The window's single titlebar row, upstream's on macOS (Wian, 2026-10-20): its controls —
+/// sidebar, notifications, new workspace with its menu, Focus Back / Forward — then the menus
+/// (Linux has no screen-wide menu bar), the selected workspace's name in the middle, the file
+/// explorer and the window buttons on the right; nothing moves when a sidebar hides. Built on
+/// the GTK thread, unless the header is hidden. Returns the arrows (their right-click history
+/// menus are attached once state exists) and the title label (`set_title`).
 pub fn build_header_bar(
     config: &crate::config::Config,
     bell: &gtk4::Overlay,
-) -> Option<(gtk4::HeaderBar, [gtk4::Button; 2])> {
+    menu_bar: &gtk4::gio::Menu,
+) -> Option<(gtk4::HeaderBar, [gtk4::Button; 2], gtk4::Label)> {
     if config.ui.header_bar.style == "none" {
         return None;
     }
     let header = gtk4::HeaderBar::new();
     header.add_css_class("cmux-headerbar");
+    // Window buttons on the right, without the application icon some layouts put first.
+    header.set_decoration_layout(Some(":minimize,maximize,close"));
     header.pack_start(&action_button(
         "sidebar-show-symbolic",
         "Toggle Sidebar (Ctrl+B)",
@@ -58,13 +63,30 @@ pub fn build_header_bar(
     });
     arrows.add_controller(absorb);
     header.pack_start(&arrows);
+    header.pack_start(&gtk4::PopoverMenuBar::from_model(Some(menu_bar)));
+    let title = gtk4::Label::new(None);
+    title.add_css_class("title");
+    title.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+    let center = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+    let folder = gtk4::Image::from_icon_name("folder-symbolic");
+    folder.add_css_class("dim-label");
+    center.append(&folder);
+    center.append(&title);
+    header.set_title_widget(Some(&center));
     // Files panel toggle. Icon is folder-symbolic: breeze (the active theme here) has no sidebar-show-right-symbolic, GTK showed image-missing.
     header.pack_end(&action_button(
         "folder-symbolic",
         "Toggle File Explorer (Ctrl+Alt+B)",
         "win.toggle-right-sidebar",
     ));
-    Some((header, [back, forward]))
+    Some((header, [back, forward], title))
+}
+
+/// Show the selected workspace's name in the titlebar; no-op when it is already shown.
+pub fn set_title(label: &gtk4::Label, name: &str) {
+    if label.text() != name {
+        label.set_text(name);
+    }
 }
 
 /// Upstream's "+" split button: the button makes a workspace, the caret (or a right-click on
