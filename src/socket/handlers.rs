@@ -697,12 +697,14 @@ fn handle_socket_command_traced(
                 "workspace.reorder_many",
                 "workspace.action",
                 "tab.action",
+                "surface.action",
                 "workspace.group.list",
                 "workspace.group.create",
                 "workspace.group.update",
                 "workspace.group.assign",
                 "workspace.group.delete",
                 "surface.list",
+                "surface.current",
                 "surface.split",
                 "surface.create",
                 "surface.focus",
@@ -722,6 +724,7 @@ fn handle_socket_command_traced(
                 "surface.trigger_flash",
                 "surface.refresh",
                 "pane.list",
+                "pane.surfaces",
                 "pane.create",
                 "pane.focus",
                 "pane.last",
@@ -1935,17 +1938,34 @@ fn handle_socket_command_traced(
         SocketCommand::SurfaceList {
             req_id,
             workspace,
+            all_workspaces,
             resp_tx,
         } => {
             // SOCK-05: No focus side effects. `index` counts within each workspace, as on macOS.
             let s = state.borrow();
+            // A named workspace restricts the reply to it; otherwise only the selected
+            // workspace is listed unless the caller explicitly asks for all of them.
+            let indices: Vec<usize> = match workspace {
+                Some(workspace) => match s.workspaces.iter().position(|ws| ws.uuid == workspace) {
+                    Some(index) => vec![index],
+                    None => {
+                        let _ =
+                            resp_tx.send(err(req_id, "not_found", "Workspace not found"));
+                        return;
+                    }
+                },
+                None if all_workspaces => (0..s.workspaces.len()).collect(),
+                None => Some(s.active_index)
+                    .filter(|index| *index < s.workspaces.len())
+                    .into_iter()
+                    .collect(),
+            };
             let mut surfaces: Vec<Value> = Vec::new();
-            for (ws_idx, (ws, engine)) in
-                s.workspaces.iter().zip(s.split_engines.iter()).enumerate()
-            {
-                if workspace.is_some_and(|wanted| wanted != ws.uuid) {
+            for &ws_idx in &indices {
+                let ws = &s.workspaces[ws_idx];
+                let Some(engine) = s.split_engines.get(ws_idx) else {
                     continue;
-                }
+                };
                 let workspace = ws.uuid.to_string();
                 let mut index = 0;
                 for pane in engine.pane_info() {
@@ -1970,13 +1990,31 @@ fn handle_socket_command_traced(
                             "workspace_uuid": workspace,
                             "workspace_id": workspace,
                             "workspace_ref": s.handles.ensure_ref(super::handles::HandleKind::Workspace, &workspace),
+                            "focused": selected && pane.id == engine.active_pane_id,
                             "active": selected && pane.id == engine.active_pane_id && ws_idx == s.active_index,
                         }));
                         index += 1;
                     }
                 }
             }
-            let _ = resp_tx.send(ok(req_id, json!({"surfaces": surfaces})));
+            let mut response = json!({"surfaces": surfaces});
+            if let [index] = indices.as_slice() {
+                use super::handles::{HandleKind, MAIN_WINDOW_ID};
+                let workspace = s.workspaces[*index].uuid.to_string();
+                if let Some(fields) = response.as_object_mut() {
+                    fields.insert("workspace_id".into(), json!(workspace));
+                    fields.insert(
+                        "workspace_ref".into(),
+                        json!(s.handles.ensure_ref(HandleKind::Workspace, &workspace)),
+                    );
+                    fields.insert("window_id".into(), json!(MAIN_WINDOW_ID));
+                    fields.insert(
+                        "window_ref".into(),
+                        json!(s.handles.ensure_ref(HandleKind::Window, MAIN_WINDOW_ID)),
+                    );
+                }
+            }
+            let _ = resp_tx.send(ok(req_id, response));
         }
 
         SocketCommand::SurfaceCurrent {

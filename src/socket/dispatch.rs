@@ -866,9 +866,17 @@ async fn dispatch_request(
                     None => return err(req_id, "invalid_params", "invalid workspace UUID"),
                 },
             };
+            let all_workspaces = match params.get("all_workspaces") {
+                None => false,
+                Some(value) => match value.as_bool() {
+                    Some(value) => value,
+                    None => return err(req_id, "invalid_params", "all_workspaces must be boolean"),
+                },
+            };
             commands::SocketCommand::SurfaceList {
                 req_id: req_id.clone(),
                 workspace,
+                all_workspaces,
                 resp_tx,
             }
         }

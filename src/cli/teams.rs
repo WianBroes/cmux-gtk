@@ -109,7 +109,8 @@ pub(super) fn tmux_compat(args: &[String], explicit_socket: Option<&str>) -> Res
         }
         "list-panes" | "lsp" => {
             let format = option_value(tail, "-F").unwrap_or("#{pane_id}");
-            let result = client.call("surface.list", serde_json::json!({}))?;
+            let result =
+                client.call("surface.list", serde_json::json!({"all_workspaces": true}))?;
             let rows = result
                 .get("surfaces")
                 .and_then(serde_json::Value::as_array)

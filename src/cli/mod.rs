@@ -1815,9 +1815,10 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
         Commands::LocalTmux { .. } | Commands::Tmux { .. } => {
             unreachable!("local-tmux runs before socket dispatch")
         }
-        Commands::ListSurfaces { workspace } => {
-            ("surface.list", json!({"workspace_id": workspace}))
-        }
+        Commands::ListSurfaces { workspace } => match workspace {
+            Some(workspace) => ("surface.list", json!({"workspace_id": workspace})),
+            None => ("surface.list", json!({"all_workspaces": true})),
+        },
         Commands::ListPaneSurfaces { .. } | Commands::Tree { .. } => {
             unreachable!("pane surfaces and tree are assembled client-side")
         }

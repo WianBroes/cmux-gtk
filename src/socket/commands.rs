@@ -199,8 +199,10 @@ pub enum SocketCommand {
     // -- surface.* (implemented in Plan 04) --
     SurfaceList {
         req_id: Value,
-        /// Restrict to one workspace; `None` lists every workspace.
+        /// Restrict to one workspace; `None` uses the selected workspace.
         workspace: Option<uuid::Uuid>,
+        /// List every workspace when no workspace is named.
+        all_workspaces: bool,
         resp_tx: RespTx,
     },
     SurfaceCurrent {
