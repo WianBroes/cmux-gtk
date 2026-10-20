@@ -531,11 +531,12 @@ pub fn create_surface(
     // Called by GTK frame clock when queue_render() was requested.
     gl_area.connect_render({
         let cell = surface_cell.clone();
-        move |_area, _ctx| {
+        move |area, _ctx| {
             if let Some(surface) = *cell.borrow() {
                 unsafe {
                     ffi::ghostty_surface_draw(surface);
                 }
+                crate::socket::render_debug::count_present(area);
             }
             gtk4::glib::Propagation::Stop // suppress GTK default render
         }

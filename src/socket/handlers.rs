@@ -894,6 +894,9 @@ fn handle_socket_command_traced(
                 // Debug
                 "debug.app.activate",
                 "debug.shortcut.set",
+                "debug.terminal.render_stats",
+                "debug.panel_snapshot",
+                "debug.panel_snapshot.reset",
                 "debug.shortcut.simulate",
                 "debug.terminal.is_focused",
                 "window.focus",
@@ -1905,6 +1908,86 @@ fn handle_socket_command_traced(
                 .and_then(|engine| engine.gl_area_for_surface(&surface_id));
             let focused = area.is_some_and(|area| area.is_focus());
             let _ = resp_tx.send(ok(req_id, json!({"focused": focused})));
+        }
+
+        // Upstream `renderStats`: frame counters of one terminal (`presentCount` = GL frames
+        // drawn here) plus window state. Fields upstream reads from AppKit layers are omitted.
+        SocketCommand::DebugRenderStats {
+            req_id,
+            surface_id,
+            resp_tx,
+        } => {
+            let area = {
+                let s = state.borrow();
+                let id = surface_id.or_else(|| {
+                    s.split_engines.get(s.active_index).and_then(|engine| engine.active_pane_uuid())
+                });
+                id.and_then(|id| {
+                    s.split_engines.iter().find_map(|engine| engine.gl_area_for_surface(&id))
+                })
+            };
+            let response = match area {
+                None => err(req_id, "internal_error", "ERROR: Terminal surface not found"),
+                Some(area) => {
+                    let count = crate::socket::render_debug::present_count(&area);
+                    let app_active = area
+                        .root()
+                        .and_then(|root| root.downcast::<gtk4::Window>().ok())
+                        .is_some_and(|window| window.is_active());
+                    ok(
+                        req_id,
+                        json!({"stats": {
+                            "presentCount": count,
+                            "drawCount": count,
+                            "inWindow": area.is_mapped(),
+                            "appIsActive": app_active,
+                            "isFirstResponder": area.has_focus(),
+                        }}),
+                    )
+                }
+            };
+            let _ = resp_tx.send(response);
+        }
+
+        // Upstream `panelSnapshot`: pixels changed since the previous snapshot, PNG kept.
+        SocketCommand::DebugPanelSnapshot {
+            req_id,
+            surface_id,
+            label,
+            resp_tx,
+        } => {
+            let area = {
+                let s = state.borrow();
+                s.split_engines
+                    .get(s.active_index)
+                    .and_then(|engine| engine.gl_area_for_surface(&surface_id))
+            };
+            let response = match area {
+                None => err(req_id, "internal_error", "ERROR: Terminal surface not found"),
+                Some(area) => match crate::socket::render_debug::panel_snapshot(&area, &surface_id, &label) {
+                    Ok((changed, width, height, path)) => ok(
+                        req_id,
+                        json!({
+                            "surface_id": surface_id,
+                            "changed_pixels": changed,
+                            "width": width,
+                            "height": height,
+                            "path": path,
+                        }),
+                    ),
+                    Err(message) => err(req_id, "internal_error", &message),
+                },
+            };
+            let _ = resp_tx.send(response);
+        }
+
+        SocketCommand::DebugPanelSnapshotReset {
+            req_id,
+            surface_id,
+            resp_tx,
+        } => {
+            crate::socket::render_debug::panel_snapshot_reset(&surface_id);
+            let _ = resp_tx.send(ok(req_id, json!({})));
         }
 
         // Upstream `setShortcut` (TerminalController+ShortcutConfiguration.swift): same names,

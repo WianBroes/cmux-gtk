@@ -442,6 +442,23 @@ pub enum SocketCommand {
         surface_id: String,
         resp_tx: RespTx,
     },
+    DebugRenderStats {
+        req_id: Value,
+        /// Surface UUID; None takes the selected workspace's focused terminal.
+        surface_id: Option<String>,
+        resp_tx: RespTx,
+    },
+    DebugPanelSnapshot {
+        req_id: Value,
+        surface_id: String,
+        label: String,
+        resp_tx: RespTx,
+    },
+    DebugPanelSnapshotReset {
+        req_id: Value,
+        surface_id: String,
+        resp_tx: RespTx,
+    },
     DebugShortcutSet {
         req_id: Value,
         name: String,

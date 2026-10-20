@@ -1484,6 +1484,45 @@ async fn dispatch_request(
                 }
             }
         }
+        "debug.terminal.render_stats" => commands::SocketCommand::DebugRenderStats {
+            req_id: req_id.clone(),
+            surface_id: params
+                .get("surface_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
+            resp_tx,
+        },
+        "debug.panel_snapshot" | "debug.panel_snapshot.reset" => {
+            let Some(surface_id) = params
+                .get("surface_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+            else {
+                return err(req_id, "invalid_params", "Missing surface_id");
+            };
+            if method == "debug.panel_snapshot" {
+                commands::SocketCommand::DebugPanelSnapshot {
+                    req_id: req_id.clone(),
+                    surface_id,
+                    label: params
+                        .get("label")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    resp_tx,
+                }
+            } else {
+                commands::SocketCommand::DebugPanelSnapshotReset {
+                    req_id: req_id.clone(),
+                    surface_id,
+                    resp_tx,
+                }
+            }
+        }
         "debug.shortcut.set" => {
             let field = |key: &str| {
                 params

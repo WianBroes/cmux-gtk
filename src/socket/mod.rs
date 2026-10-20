@@ -9,6 +9,7 @@ pub(crate) mod project;
 mod response;
 use dispatch::dispatch_line;
 pub mod handlers;
+pub mod render_debug;
 
 pub use cmux_platform::paths::socket_path;
 
