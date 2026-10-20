@@ -489,7 +489,7 @@ pub enum Commands {
         /// Window context; this build has a single window (`window:1`)
         #[arg(long)]
         window: Option<String>,
-        /// Title given to `rename` (rejected on Linux: tabs have no custom title)
+        /// Title given to `rename`
         #[arg(long)]
         title: Option<String>,
         /// URL given to `new-browser-right` (rejected on Linux)
@@ -508,6 +508,25 @@ pub enum Commands {
         /// Remaining words of a positional title (`rename build logs`)
         #[arg(num_args = 0.., value_name = "TEXT")]
         value_words: Vec<String>,
+    },
+    /// Give a tab a custom name (upstream compatibility alias for `tab-action rename`)
+    RenameTab {
+        /// Target tab: surface UUID, ref (surface:N) or index; default `CMUX_TAB_ID`,
+        /// then `CMUX_SURFACE_ID`, then the focused tab
+        #[arg(long, visible_alias = "surface")]
+        tab: Option<String>,
+        /// Workspace owning the tab context
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Window context; this build has a single window (`window:1`)
+        #[arg(long)]
+        window: Option<String>,
+        /// Explicit title (or use the trailing positional title)
+        #[arg(long)]
+        title: Option<String>,
+        /// Title words
+        #[arg(num_args = 0.., value_name = "TITLE")]
+        words: Vec<String>,
     },
     /// Move a tab into a newly created workspace (upstream also spells it `detach-tab`)
     #[command(visible_alias = "detach-tab")]
@@ -2739,6 +2758,24 @@ mod handle_argument_tests {
             }
             _ => panic!("wrong command variant"),
         }
+    }
+
+    /// Rename takes its title from `--title` or the trailing words (a missing title is refused
+    /// at run time with upstream's message).
+    #[test]
+    fn rename_tab_forms_parse() {
+        match parse(&["rename-tab", "--tab", "surface:3", "build", "logs"]) {
+            Commands::RenameTab { tab, words, title, .. } => {
+                assert_eq!(tab.as_deref(), Some("surface:3"));
+                assert_eq!(words, ["build", "logs"]);
+                assert!(title.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        assert!(matches!(
+            parse(&["rename-tab", "--surface", "surface:2", "--title", "agent run"]),
+            Commands::RenameTab { tab: Some(_), title: Some(_), .. }
+        ));
     }
 
     /// Join requires its target pane; the source is a pane or a surface.

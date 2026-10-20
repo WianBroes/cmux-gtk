@@ -17,6 +17,32 @@ pub struct PaneInfo {
     pub browser_urls: Vec<Option<String>>,
 }
 
+/// Name a tab chose by `tab.action rename`, then the title its program set (GLArea data).
+const CUSTOM_TITLE: &str = "cmux-custom-title";
+const PROGRAM_TITLE: &str = "cmux-program-title";
+
+/// Put a terminal's custom name, else its program title, else "Terminal" on its tab label.
+fn show_tab_title(area: &gtk4::GLArea) -> bool {
+    let Some(label) = tab_part(area, TAB_TITLE).and_then(|widget| widget.downcast::<gtk4::Label>().ok())
+    else {
+        return false;
+    };
+    // SAFETY: both keys only ever store `String` values (see `SplitEngine::set_custom_title`).
+    let title = unsafe {
+        area.data::<String>(CUSTOM_TITLE)
+            .or_else(|| area.data::<String>(PROGRAM_TITLE))
+            .map(|title| title.as_ref().clone())
+    }
+    .unwrap_or_default();
+    // Notebook tabs shrink an ellipsizing label to "…", so bound the text instead.
+    let mut text: String = title.trim().chars().take(32).collect();
+    if title.trim().chars().count() > 32 {
+        text.push('…');
+    }
+    label.set_text(if text.is_empty() { "Terminal" } else { &text });
+    true
+}
+
 /// Realized GTK bounds used for pointer automation and layout triage.
 pub struct PaneGeometry {
     pub id: u64,
@@ -2161,27 +2187,41 @@ impl SplitEngine {
         self.root.find_terminal_by_uuid(uuid)
     }
 
-    /// Show a terminal's program-set title on its tab; false when the tab is not here.
+    /// Record a terminal's program-set title and show it unless the tab has a custom name;
+    /// false when the tab is not here.
     pub fn set_surface_title(&self, uuid: &str, title: &str) -> bool {
-        let label = self
-            .gl_area_for_surface(uuid)
-            .and_then(|area| tab_part(&area, TAB_TITLE))
-            .and_then(|widget| widget.downcast::<gtk4::Label>().ok());
-        label.is_some_and(|label| {
-            // Notebook tabs shrink an ellipsizing label to "…", so bound the text instead.
-            let mut text: String = title.trim().chars().take(32).collect();
-            if title.trim().chars().count() > 32 {
-                text.push('…');
-            }
-            label.set_text(if text.is_empty() { "Terminal" } else { &text });
-            true
-        })
+        let Some(area) = self.gl_area_for_surface(uuid) else {
+            return false;
+        };
+        // SAFETY: these private keys only ever store `String` values, set by this file.
+        unsafe { area.set_data(PROGRAM_TITLE, title.to_owned()) };
+        show_tab_title(&area)
     }
 
-    /// The title currently shown on a terminal's tab.
+    /// Give a terminal tab a custom name (upstream `setPanelCustomTitle`); `None` goes back
+    /// to the program-set title. False when the tab is not a terminal of this workspace.
+    pub fn set_custom_title(&self, uuid: &str, title: Option<&str>) -> bool {
+        let Some(area) = self.gl_area_for_surface(uuid) else {
+            return false;
+        };
+        // SAFETY: see `set_surface_title`.
+        unsafe {
+            match title {
+                Some(title) => area.set_data(CUSTOM_TITLE, title.to_owned()),
+                None => drop(area.steal_data::<String>(CUSTOM_TITLE)),
+            }
+        }
+        show_tab_title(&area)
+    }
+
+    /// A terminal tab's title: its custom name, else the title shown on the tab.
     pub fn surface_title(&self, uuid: &str) -> Option<String> {
-        self.gl_area_for_surface(uuid)
-            .and_then(|area| tab_part(&area, TAB_TITLE))
+        let area = self.gl_area_for_surface(uuid)?;
+        // SAFETY: see `set_surface_title`.
+        if let Some(custom) = unsafe { area.data::<String>(CUSTOM_TITLE) } {
+            return Some(unsafe { custom.as_ref() }.clone());
+        }
+        tab_part(&area, TAB_TITLE)
             .and_then(|widget| widget.downcast::<gtk4::Label>().ok())
             .map(|label| label.text().to_string())
     }

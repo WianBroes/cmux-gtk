@@ -722,6 +722,14 @@ fn collect_targets<'a>(command: &'a mut Commands, targets: &mut Vec<Target<'a>>)
             targets.push(Target::Optional(HandleKind::Window, window));
         }
 
+        Commands::RenameTab {
+            tab, workspace, window, ..
+        } => {
+            targets.push(Target::Optional(HandleKind::Surface, tab));
+            targets.push(Target::Optional(HandleKind::Workspace, workspace));
+            targets.push(Target::Optional(HandleKind::Window, window));
+        }
+
         Commands::MoveTabToNewWorkspace {
             surface, workspace, window, ..
         } => {

@@ -237,6 +237,13 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
         return Ok(());
     }
 
+    // Upstream's wording when `rename-tab` has neither `--title` nor title words.
+    if let Commands::RenameTab { title, words, .. } = &cli.command {
+        if title.as_deref().map_or(true, |t| t.trim().is_empty()) && words.is_empty() {
+            return Err(CliError::Command("rename-tab requires a title".into()));
+        }
+    }
+
     // `send` joins its words, so an empty payload is a usage error, not an RPC.
     if let Commands::Send { text, .. } = &cli.command {
         if send_text(text).is_empty() {
@@ -1730,6 +1737,24 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
                 *focus,
             ),
         ),
+        Commands::RenameTab {
+            tab,
+            workspace,
+            window,
+            title,
+            words,
+        } => {
+            // Upstream resolution: --tab/--surface, then CMUX_TAB_ID, then CMUX_SURFACE_ID.
+            let tab = tab
+                .clone()
+                .or_else(|| std::env::var("CMUX_TAB_ID").ok().filter(|v| !v.is_empty()))
+                .or_else(|| std::env::var("CMUX_SURFACE_ID").ok().filter(|v| !v.is_empty()));
+            let title = title.clone().or_else(|| (!words.is_empty()).then(|| words.join(" ")));
+            (
+                "tab.action",
+                tab_action_params("rename", &tab, workspace, window, &title, &None, None),
+            )
+        }
         Commands::MoveTabToNewWorkspace {
             surface,
             workspace,
@@ -2459,6 +2484,17 @@ mod tests {
         assert_eq!(params["pane_id"], "pane:1");
         assert_eq!(params["target_pane_id"], "pane:2");
         assert_eq!(params["focus"], true);
+    }
+
+    /// `rename-tab` is `tab.action rename` with the tab and the joined title words.
+    #[test]
+    fn rename_tab_maps_to_tab_action() {
+        let cli = Cli::try_parse_from(["cmux", "rename-tab", "--tab", "surface:3", "build", "logs"])
+            .expect("rename-tab should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "tab.action");
+        assert_eq!(params["action"], "rename");
+        assert_eq!(params["title"], "build logs");
     }
 
     /// `join-pane` forwards the target, the given source and focus false by default.

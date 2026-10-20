@@ -36,13 +36,13 @@ const TAB_ACTIONS: &[&str] = &[
     "mark_unread",
     "new_terminal_right",
     "move_to_new_workspace",
+    "rename",
+    "clear_name",
 ];
 
 /// Upstream tab actions this build has no equivalent for; they fail with the support
 /// note, not as unknown actions.
 const TAB_ACTIONS_UNSUPPORTED: &[&str] = &[
-    "rename",
-    "clear_name",
     "pin",
     "unpin",
     "toggle_full_width_tab",
@@ -1548,6 +1548,30 @@ fn handle_socket_command_traced(
                     crate::inbox_actions::purge_closed_surfaces(&mut s);
                     s.trigger_session_save();
                     extras["closed"] = json!(closed);
+                }
+                // Upstream `setPanelCustomTitle`: a trimmed, non-empty title, echoed back.
+                "rename" | "clear_name" => {
+                    let title = match action.as_str() {
+                        "rename" => match title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+                            Some(title) => Some(title.to_owned()),
+                            None => {
+                                let _ = resp_tx.send(err(req_id, "invalid_params", "Missing or invalid title"));
+                                return;
+                            }
+                        },
+                        _ => None,
+                    };
+                    if !s.split_engines[index].set_custom_title(&surface_uuid, title.as_deref()) {
+                        let _ = resp_tx.send(err(
+                            req_id,
+                            "invalid_state",
+                            "Only terminal tabs can be renamed on Linux",
+                        ));
+                        return;
+                    }
+                    if let Some(title) = title {
+                        extras["title"] = json!(title);
+                    }
                 }
                 "mark_read" => {
                     let scope = crate::inbox::Scope {
