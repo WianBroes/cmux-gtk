@@ -268,7 +268,67 @@ fn identify_location(
 }
 
 /// Resolve a live terminal in the current workspace without focus changes; GTK-thread callers only.
+/// Start terminals whose page was never shown. A terminal's Ghostty surface (and its shell)
+/// is born when its GL area is realized at a non-zero size, which a hidden page never gets.
+/// Upstream starts background terminals at creation and on first use (`send_text`,
+/// `read_text` "start the terminal"): lend each area the shown terminal's size, then
+/// realize it, or emit the `resize` its deferred initialization waits for.
+fn start_offscreen(state: &crate::app_state::AppStateRef, areas: &[gtk4::GLArea]) {
+    use gtk4::prelude::{GLAreaExt, ObjectExt, WidgetExt};
+    let size = {
+        let s = state.borrow();
+        let mut shown = Vec::new();
+        if let Some(engine) = s.split_engines.get(s.active_index) {
+            engine.root.collect_terminal_areas(&mut shown);
+        }
+        shown
+            .iter()
+            .map(|area| (area.width(), area.height()))
+            .find(|(w, h)| *w > 0 && *h > 0)
+            .unwrap_or((800, 600))
+    };
+    for area in areas.iter().filter(|area| !area.is_mapped()) {
+        area.size_allocate(&gtk4::Allocation::new(0, 0, size.0, size.1), -1);
+        if !area.is_realized() {
+            area.realize();
+        } else {
+            area.make_current();
+            let scale = area.scale_factor();
+            area.emit_by_name::<()>("resize", &[&(size.0 * scale), &(size.1 * scale)]);
+        }
+    }
+}
+
 fn terminal_target(
+    state: &crate::app_state::AppStateRef,
+    id: Option<&str>,
+    workspace: Option<&str>,
+) -> Result<crate::ghostty::ffi::ghostty_surface_t, (&'static str, &'static str)> {
+    if let Ok(surface) = live_terminal(state, id, workspace) {
+        return Ok(surface);
+    }
+    // Not started yet (hidden page): start it on first use, as upstream does.
+    let area = {
+        let s = state.borrow();
+        let index = match (id, workspace) {
+            (Some(_), _) => None,
+            (None, Some(workspace)) => s.workspaces.iter().position(|ws| ws.uuid.to_string() == workspace),
+            (None, None) => Some(s.active_index),
+        };
+        match id {
+            Some(id) => s.split_engines.iter().find_map(|engine| engine.gl_area_for_surface(id)),
+            None => index
+                .and_then(|index| s.split_engines.get(index))
+                .and_then(|engine| engine.active_pane_uuid().and_then(|uuid| engine.gl_area_for_surface(&uuid))),
+        }
+    };
+    if let Some(area) = area {
+        start_offscreen(state, &[area]);
+    }
+    live_terminal(state, id, workspace)
+}
+
+fn live_terminal(
     state: &crate::app_state::AppStateRef,
     id: Option<&str>,
     workspace: Option<&str>,
@@ -1031,12 +1091,25 @@ fn handle_socket_command_traced(
             }
             // Background creation: the new terminal exists, but the previous workspace stays selected.
             if !focus {
-                let mut s = state.borrow_mut();
-                if let Some(index) = previous
-                    .and_then(|previous| s.workspaces.iter().position(|ws| ws.uuid == previous))
+                // Upstream starts a background workspace's shell at once (`start_offscreen`).
+                let areas = {
+                    let s = state.borrow();
+                    let mut areas = Vec::new();
+                    if let Some(engine) = s.split_engines.get(s.active_index) {
+                        engine.root.collect_terminal_areas(&mut areas);
+                    }
+                    areas
+                };
+                // The lent size is the shown terminal's: switch back to it first.
                 {
-                    s.switch_to_index(index);
+                    let mut s = state.borrow_mut();
+                    if let Some(index) = previous
+                        .and_then(|previous| s.workspaces.iter().position(|ws| ws.uuid == previous))
+                    {
+                        s.switch_to_index(index);
+                    }
                 }
+                start_offscreen(state, &areas);
             }
             let (list, app) = {
                 let s = state.borrow();
@@ -2883,8 +2956,34 @@ fn handle_socket_command_traced(
             text,
             resp_tx,
         } => {
+            // Upstream replies with the identity of the terminal that received the text.
+            let target = terminal_target(state, id.as_deref(), workspace.as_deref())
+                .ok()
+                .and_then(|surface| crate::ghostty::callbacks::surface_uuid(surface as usize));
             let response = match send_terminal_text(state, id.as_deref(), workspace.as_deref(), &text) {
-                Ok(()) => ok(req_id, json!({})),
+                Ok(()) => {
+                    let s = state.borrow();
+                    let surface_id = target.map(|uuid| uuid.to_string());
+                    let workspace_id = surface_id.as_deref().and_then(|id| {
+                        s.split_engines
+                            .iter()
+                            .position(|engine| engine.find_pane_id_by_uuid(id).is_some())
+                            .map(|index| s.workspaces[index].uuid.to_string())
+                    });
+                    use super::handles::{HandleKind, MAIN_WINDOW_ID};
+                    ok(
+                        req_id,
+                        json!({
+                            "workspace_id": workspace_id,
+                            "workspace_ref": workspace_id.as_deref().map(|id| s.handles.ensure_ref(HandleKind::Workspace, id)),
+                            "surface_id": surface_id,
+                            "surface_ref": surface_id.as_deref().map(|id| s.handles.ensure_ref(HandleKind::Surface, id)),
+                            "queued": false,
+                            "window_id": MAIN_WINDOW_ID,
+                            "window_ref": s.handles.ensure_ref(HandleKind::Window, MAIN_WINDOW_ID),
+                        }),
+                    )
+                }
                 Err((code, message)) => err(req_id, code, message),
             };
             let _ = resp_tx.send(response);

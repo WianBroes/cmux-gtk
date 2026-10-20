@@ -155,7 +155,7 @@ pub unsafe extern "C" fn action_cb(
 }
 
 /// The tab identity stored on a live terminal widget, looked up from its native surface.
-fn surface_uuid(target: usize) -> Option<uuid::Uuid> {
+pub(crate) fn surface_uuid(target: usize) -> Option<uuid::Uuid> {
     let area = GL_TO_SURFACE.lock().ok().and_then(|mappings| {
         mappings
             .iter()

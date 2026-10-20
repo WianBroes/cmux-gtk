@@ -565,7 +565,8 @@ async fn dispatch_request(
                 terminal_transport,
                 terminal_profile,
                 terminal_tmux_session,
-                initial_input: match params.get("initial_input") {
+                // Upstream's `initial_command` is the same typed-then-run line.
+                initial_input: match params.get("initial_input").or_else(|| params.get("initial_command")) {
                     None | Some(serde_json::Value::Null) => None,
                     Some(serde_json::Value::String(input)) => Some(
                         input
