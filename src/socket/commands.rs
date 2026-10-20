@@ -375,6 +375,16 @@ pub enum SocketCommand {
         resp_tx: RespTx,
     },
     /// Exchange the selected surfaces of two panes in the source pane's workspace.
+    /// Upstream `pane.join`: `surface.move` of a surface (or a pane's selected one) into a pane.
+    PaneJoin {
+        req_id: Value,
+        target_pane: String,
+        surface: Option<String>,
+        source_pane: Option<String>,
+        /// None keeps `surface.move`'s own default, as upstream forwards focus only when given.
+        focus: Option<bool>,
+        resp_tx: RespTx,
+    },
     /// Upstream `pane.break`: move a surface out into a new workspace.
     PaneBreak {
         req_id: Value,

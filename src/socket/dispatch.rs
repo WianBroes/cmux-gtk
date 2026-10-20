@@ -1321,6 +1321,26 @@ async fn dispatch_request(
                 resp_tx,
             }
         }
+        "pane.join" => {
+            let Some(target_pane) = pane_reference(&params, "target_pane_id") else {
+                return err(req_id, "invalid_params", "Missing or invalid target_pane_id");
+            };
+            let surface = match params.get("surface_id") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(value) => match value.as_str().filter(|text| uuid::Uuid::parse_str(text).is_ok()) {
+                    Some(surface) => Some(surface.to_owned()),
+                    None => return err(req_id, "not_found", "Surface not found"),
+                },
+            };
+            commands::SocketCommand::PaneJoin {
+                req_id: req_id.clone(),
+                target_pane,
+                surface,
+                source_pane: pane_reference(&params, "pane_id"),
+                focus: params.get("focus").and_then(serde_json::Value::as_bool),
+                resp_tx,
+            }
+        }
         "pane.break" => {
             let pane = match params.get("pane_id") {
                 None | Some(serde_json::Value::Null) => None,

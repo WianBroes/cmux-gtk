@@ -939,6 +939,32 @@ pub enum Commands {
         )]
         focus: Option<bool>,
     },
+    /// Move a surface (or a pane's selected surface) into another pane
+    JoinPane {
+        /// Destination pane reference (pane:N)
+        #[arg(long)]
+        target_pane: String,
+        /// Workspace UUID, ref (workspace:N) or index
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Source pane reference (pane:N); its selected surface moves
+        #[arg(long)]
+        pane: Option<String>,
+        /// Source surface UUID, ref (surface:N) or index
+        #[arg(long)]
+        surface: Option<String>,
+        /// Keep the current focus (the default); compatibility alias for `--focus false`
+        #[arg(long, conflicts_with = "focus")]
+        no_focus: bool,
+        /// Focus the result; upstream spelling `--focus true|false` (default false)
+        #[arg(
+            long,
+            value_name = "true|false",
+            value_parser = clap::builder::BoolishValueParser::new(),
+            conflicts_with = "no_focus"
+        )]
+        focus: Option<bool>,
+    },
     /// Switch to last focused pane
     LastPane,
 
@@ -2713,6 +2739,26 @@ mod handle_argument_tests {
             }
             _ => panic!("wrong command variant"),
         }
+    }
+
+    /// Join requires its target pane; the source is a pane or a surface.
+    #[test]
+    fn join_pane_forms_parse() {
+        match parse(&["join-pane", "--target-pane", "pane:2", "--surface", "surface:4"]) {
+            Commands::JoinPane {
+                target_pane,
+                surface,
+                pane,
+                focus,
+                ..
+            } => {
+                assert_eq!(target_pane, "pane:2");
+                assert_eq!(surface.as_deref(), Some("surface:4"));
+                assert!(pane.is_none() && focus.is_none());
+            }
+            _ => panic!("wrong command variant"),
+        }
+        assert!(Cli::try_parse_from(["cmux", "join-pane", "--pane", "pane:1"]).is_err());
     }
 
     /// Break takes an optional pane, surface and workspace, and upstream's focus spellings.

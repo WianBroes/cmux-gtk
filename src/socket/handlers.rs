@@ -812,6 +812,7 @@ fn handle_socket_command_traced(
                 "pane.focus",
                 "pane.swap",
                 "pane.break",
+                "pane.join",
                 "pane.last",
                 "config.reload",
                 "settings.open",
@@ -3237,6 +3238,66 @@ fn handle_socket_command_traced(
                 err(req_id, "not_found", "pane not found")
             };
             let _ = resp_tx.send(response);
+        }
+
+        // Upstream `controlPaneJoin`: the surface, else the source pane's selected one, moved
+        // by `surface.move` into the target pane; its reply is forwarded as is.
+        SocketCommand::PaneJoin {
+            req_id,
+            target_pane,
+            surface,
+            source_pane,
+            focus,
+            resp_tx,
+        } => {
+            let surface = match (surface, source_pane) {
+                (Some(surface), _) => surface,
+                (None, Some(source_pane)) => {
+                    let s = state.borrow();
+                    let selected = s.split_engines.iter().find_map(|engine| {
+                        let pane = engine.pane_for_ref(&source_pane)?;
+                        engine
+                            .pane_info()
+                            .into_iter()
+                            .find(|info| info.id == pane)?
+                            .selected_surface
+                    });
+                    match selected {
+                        Some(selected) => selected.to_string(),
+                        None => {
+                            let _ = resp_tx.send(err_data(
+                                req_id,
+                                "not_found",
+                                "Unable to resolve selected surface in source pane",
+                                json!({"pane_id": source_pane}),
+                            ));
+                            return;
+                        }
+                    }
+                }
+                (None, None) => {
+                    let _ = resp_tx.send(err(
+                        req_id,
+                        "invalid_params",
+                        "Missing surface_id (or pane_id with selected surface)",
+                    ));
+                    return;
+                }
+            };
+            handle_socket_command(
+                SocketCommand::SurfaceMove {
+                    req_id,
+                    id: surface,
+                    workspace: None,
+                    pane: Some(target_pane),
+                    position: None,
+                    before: None,
+                    after: None,
+                    focus: focus.unwrap_or(true),
+                    resp_tx,
+                },
+                state,
+            );
         }
 
         // Upstream `controlPaneBreak`: surface given, else the pane's selected surface, else

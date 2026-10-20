@@ -2102,6 +2102,28 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             p.insert("focus".into(), json!(focus.unwrap_or(false)));
             ("pane.break", Value::Object(p))
         }
+        Commands::JoinPane {
+            target_pane,
+            workspace,
+            pane,
+            surface,
+            focus,
+            ..
+        } => {
+            let mut p = serde_json::Map::new();
+            p.insert("target_pane_id".into(), json!(target_pane));
+            if let Some(ref workspace) = workspace {
+                p.insert("workspace_id".into(), json!(workspace));
+            }
+            if let Some(ref pane) = pane {
+                p.insert("pane_id".into(), json!(pane));
+            }
+            if let Some(ref surface) = surface {
+                p.insert("surface_id".into(), json!(surface));
+            }
+            p.insert("focus".into(), json!(focus.unwrap_or(false)));
+            ("pane.join", Value::Object(p))
+        }
         Commands::LastPane => ("pane.last", json!({})),
 
         Commands::Settings { .. } | Commands::Shortcuts => ("settings.open", json!({})),
@@ -2437,6 +2459,19 @@ mod tests {
         assert_eq!(params["pane_id"], "pane:1");
         assert_eq!(params["target_pane_id"], "pane:2");
         assert_eq!(params["focus"], true);
+    }
+
+    /// `join-pane` forwards the target, the given source and focus false by default.
+    #[test]
+    fn join_pane_flags_map_to_parameters() {
+        let cli = Cli::try_parse_from(["cmux", "join-pane", "--target-pane", "pane:2", "--pane", "pane:1"])
+            .expect("join pane arguments should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "pane.join");
+        assert_eq!(params["target_pane_id"], "pane:2");
+        assert_eq!(params["pane_id"], "pane:1");
+        assert!(params.get("surface_id").is_none());
+        assert_eq!(params["focus"], false);
     }
 
     /// `break-pane` forwards only the targets it was given, and focus false by default.
