@@ -115,7 +115,7 @@ impl PaneSurface {
 }
 
 /// Resolve a realized terminal handle without reading application-owned GTK object data.
-fn surface_for_area(area: &gtk4::GLArea) -> Option<ffi::ghostty_surface_t> {
+pub(crate) fn surface_for_area(area: &gtk4::GLArea) -> Option<ffi::ghostty_surface_t> {
     crate::ghostty::callbacks::GL_TO_SURFACE
         .lock()
         .ok()

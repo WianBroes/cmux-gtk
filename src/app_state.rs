@@ -1218,6 +1218,20 @@ impl AppState {
         );
     }
 
+    /// A terminal's widget by tab identity, in any workspace.
+    pub fn terminal_area(&self, surface: uuid::Uuid) -> Option<gtk4::GLArea> {
+        let id = surface.to_string();
+        self.split_engines
+            .iter()
+            .find_map(|engine| engine.gl_area_for_surface(&id))
+    }
+
+    /// The focused terminal of the selected workspace.
+    pub fn active_terminal_area(&self) -> Option<gtk4::GLArea> {
+        let engine = self.active_split_engine()?;
+        engine.gl_area_for_surface(&engine.active_pane_uuid()?)
+    }
+
     /// A terminal's program set its title: show it on the tab and, as upstream, let it
     /// name the workspace when it is the focused tab.
     pub fn surface_title_changed(&mut self, surface: uuid::Uuid, title: &str) {

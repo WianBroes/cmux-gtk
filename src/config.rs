@@ -524,7 +524,7 @@ impl ShortcutMap {
             (
                 ShortcutAction::ToggleWorkspaceGroup,
                 &config.toggle_workspace_group,
-                "<Ctrl><Alt>g",
+                "<Ctrl><Alt>period",
             ),
             (
                 ShortcutAction::ToggleSidebar,

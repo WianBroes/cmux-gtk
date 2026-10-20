@@ -21,6 +21,21 @@ pub(crate) enum Event {
         surface: uuid::Uuid,
         title: String,
     },
+    /// Ghostty opened a search (show the find bar; `needle` may be empty).
+    SearchStart {
+        surface: uuid::Uuid,
+        needle: String,
+    },
+    SearchEnd(uuid::Uuid),
+    /// Match count and selected match (0-based); negative means unknown / none.
+    SearchTotal {
+        surface: uuid::Uuid,
+        total: isize,
+    },
+    SearchSelected {
+        surface: uuid::Uuid,
+        selected: isize,
+    },
 }
 
 #[derive(Default)]

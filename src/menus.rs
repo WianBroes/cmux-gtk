@@ -385,10 +385,30 @@ pub fn register_actions(
     });
     window.add_action(&action);
 
-    // win.find -- stub for now (terminal find not yet implemented)
-    let action = gio::SimpleAction::new("find", None);
-    action.set_enabled(false);
-    window.add_action(&action);
+    // Edit › Find on the focused terminal (`terminal_search`): Find… opens the bar, the others
+    // drive Ghostty's search of that terminal.
+    for (name, binding) in [
+        ("find", "start_search"),
+        ("find-next", "navigate_search:next"),
+        ("find-previous", "navigate_search:previous"),
+        ("hide-find-bar", "end_search"),
+        ("use-selection-for-find", "search_selection"),
+    ] {
+        let action = gio::SimpleAction::new(name, None);
+        action.connect_activate({
+            let state = state.clone();
+            move |_, _| {
+                let Some(area) = state.borrow().active_terminal_area() else {
+                    return;
+                };
+                if binding == "start_search" {
+                    crate::terminal_search::open(&area, None);
+                }
+                crate::terminal_search::binding(&area, binding);
+            }
+        });
+        window.add_action(&action);
+    }
 
     // win.preferences — terminal appearance settings.
     let action = gio::SimpleAction::new("preferences", None);
@@ -737,10 +757,29 @@ pub fn build_menu_bar() -> gio::Menu {
             ("Close Workspace", "win.close-workspace"),
         ],
     ]);
-    submenu(&bar, "Edit", &[
-        &[("Copy", "win.copy"), ("Paste", "win.paste")],
-        &[("Find…", "win.find")],
-    ]);
+    submenu(&bar, "Edit", &[&[("Copy", "win.copy"), ("Paste", "win.paste")]]);
+    // Find ▸: Ctrl+G, Ctrl+Alt+G, Ctrl+Alt+Shift+F and Ctrl+E reach cmux only while they apply
+    // (`shortcuts::find_key`); otherwise the terminal keeps them, so they are shown, not bound.
+    let find = gio::Menu::new();
+    for (label, action, accel) in [
+        ("Find…", "win.find", None),
+        ("Find Next", "win.find-next", Some("<Ctrl>g")),
+        ("Find Previous", "win.find-previous", Some("<Ctrl><Alt>g")),
+        ("Hide Find Bar", "win.hide-find-bar", Some("<Ctrl><Alt><Shift>f")),
+        ("Use Selection for Find", "win.use-selection-for-find", Some("<Ctrl>e")),
+    ] {
+        let item = gio::MenuItem::new(Some(label), Some(action));
+        if let Some(accel) = accel {
+            item.set_attribute_value("accel", Some(&accel.to_variant()));
+        }
+        find.append_item(&item);
+    }
+    if let Some(edit) = bar
+        .item_link(bar.n_items() - 1, "submenu")
+        .and_then(|menu| menu.downcast::<gio::Menu>().ok())
+    {
+        edit.append_submenu(Some("Find"), &find);
+    }
     submenu(&bar, "View", &[
         &[
             ("Toggle Left Sidebar", "win.toggle-sidebar"),

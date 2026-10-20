@@ -260,7 +260,7 @@ pub fn install_shortcuts(
                     gtk4::glib::Propagation::Stop
                 }
                 // Everything else passes through to Ghostty.
-                _ => gtk4::glib::Propagation::Proceed,
+                _ => find_key(&state, keyval, mods),
             }
         }
     });
@@ -321,6 +321,39 @@ pub const MENU_ACTIONS: &[(&str, ShortcutAction)] = &[
     ("workspace-8", ShortcutAction::Workspace8),
     ("workspace-9", ShortcutAction::Workspace9),
 ];
+
+/// Find Next (Ctrl+G), Find Previous (Ctrl+Alt+G), Hide Find Bar (Ctrl+Alt+Shift+F) while the
+/// focused terminal's find bar is open, Use Selection for Find (Ctrl+E) while it has a
+/// selection (Wian, 2026-10-20: upstream's ⌘ keys as Ctrl). Otherwise the key stays the
+/// terminal's (Ctrl+E end of line, Ctrl+G abort in the shell).
+fn find_key(
+    state: &Rc<RefCell<AppState>>,
+    keyval: gtk4::gdk::Key,
+    mods: gtk4::gdk::ModifierType,
+) -> gtk4::glib::Propagation {
+    use gtk4::gdk::{Key, ModifierType as M};
+    let mods = mods & (M::CONTROL_MASK | M::SHIFT_MASK | M::ALT_MASK | M::SUPER_MASK);
+    let binding = match (keyval.to_lower(), mods) {
+        (Key::g, m) if m == M::CONTROL_MASK => "navigate_search:next",
+        (Key::g, m) if m == M::CONTROL_MASK | M::ALT_MASK => "navigate_search:previous",
+        (Key::f, m) if m == M::CONTROL_MASK | M::ALT_MASK | M::SHIFT_MASK => "end_search",
+        (Key::e, m) if m == M::CONTROL_MASK => "search_selection",
+        _ => return gtk4::glib::Propagation::Proceed,
+    };
+    let Some(area) = state.borrow().active_terminal_area() else {
+        return gtk4::glib::Propagation::Proceed;
+    };
+    let applies = if binding == "search_selection" {
+        crate::terminal_search::has_selection(&area)
+    } else {
+        crate::terminal_search::is_active(&area)
+    };
+    if !applies {
+        return gtk4::glib::Propagation::Proceed;
+    }
+    crate::terminal_search::binding(&area, binding);
+    gtk4::glib::Propagation::Stop
+}
 
 type KeyDispatch = dyn Fn(gtk4::gdk::Key, gtk4::gdk::ModifierType) -> gtk4::glib::Propagation;
 

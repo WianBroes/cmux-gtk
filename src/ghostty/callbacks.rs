@@ -146,6 +146,43 @@ pub unsafe extern "C" fn action_cb(
         return true;
     }
 
+    // Find bar: Ghostty owns the search, the bar lives on the GTK side (`terminal_search`).
+    if action.tag == ffi::ghostty_action_tag_e_GHOSTTY_ACTION_START_SEARCH
+        || action.tag == ffi::ghostty_action_tag_e_GHOSTTY_ACTION_END_SEARCH
+        || action.tag == ffi::ghostty_action_tag_e_GHOSTTY_ACTION_SEARCH_TOTAL
+        || action.tag == ffi::ghostty_action_tag_e_GHOSTTY_ACTION_SEARCH_SELECTED
+    {
+        let Some(surface) = surface_target.and_then(surface_uuid) else {
+            return true;
+        };
+        use super::events::Event;
+        // SAFETY: each discriminant selects its union member; the needle is copied (bounded)
+        // before returning.
+        let event = unsafe {
+            match action.tag {
+                ffi::ghostty_action_tag_e_GHOSTTY_ACTION_START_SEARCH => {
+                    let needle = action.action.start_search.needle;
+                    let needle = if needle.is_null() {
+                        String::new()
+                    } else {
+                        std::ffi::CStr::from_ptr(needle).to_string_lossy().chars().take(1024).collect()
+                    };
+                    Event::SearchStart { surface, needle }
+                }
+                ffi::ghostty_action_tag_e_GHOSTTY_ACTION_END_SEARCH => Event::SearchEnd(surface),
+                ffi::ghostty_action_tag_e_GHOSTTY_ACTION_SEARCH_TOTAL => Event::SearchTotal {
+                    surface,
+                    total: action.action.search_total.total as isize,
+                },
+                _ => Event::SearchSelected {
+                    surface,
+                    selected: action.action.search_selected.selected as isize,
+                },
+            }
+        };
+        return super::events::push(event);
+    }
+
     if action.tag == ffi::ghostty_action_tag_e_GHOSTTY_ACTION_RENDER {
         queue_render_target(surface_target);
         return true;

@@ -59,6 +59,7 @@ mod ssh;
 mod ssh_dialog;
 mod ssh_hosts;
 mod task;
+mod terminal_search;
 #[allow(dead_code)]
 mod updater;
 mod window_state;
@@ -629,6 +630,26 @@ fn build_ui(
                     }
                     crate::ghostty::events::Event::Title { surface, title } => {
                         state.borrow_mut().surface_title_changed(surface, &title);
+                    }
+                    crate::ghostty::events::Event::SearchStart { surface, needle } => {
+                        if let Some(area) = state.borrow().terminal_area(surface) {
+                            crate::terminal_search::open(&area, Some(&needle));
+                        }
+                    }
+                    crate::ghostty::events::Event::SearchEnd(surface) => {
+                        if let Some(area) = state.borrow().terminal_area(surface) {
+                            crate::terminal_search::close(&area);
+                        }
+                    }
+                    crate::ghostty::events::Event::SearchTotal { surface, total } => {
+                        if let Some(area) = state.borrow().terminal_area(surface) {
+                            crate::terminal_search::set_total(&area, total);
+                        }
+                    }
+                    crate::ghostty::events::Event::SearchSelected { surface, selected } => {
+                        if let Some(area) = state.borrow().terminal_area(surface) {
+                            crate::terminal_search::set_selected(&area, selected);
+                        }
                     }
                     crate::ghostty::events::Event::Notification { surface, content } => {
                         let result = crate::inbox_actions::handle(
