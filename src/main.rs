@@ -84,7 +84,7 @@ window { background-color: #1a1a1a; }
 .file-explorer .heading { color: #cccccc; }
 .file-explorer .dim-label { color: #c0c0c0; }
 .workspace-list { background-color: #242424; }
-.workspace-list row { min-height: 36px; padding: 8px 16px; }
+.workspace-list row { min-height: 36px; padding: 8px 10px; margin: 0 6px; border-radius: 6px; }
 .workspace-list row label { color: #cccccc; font-size: 14px; font-weight: 400; }
 .workspace-list row:hover:not(.active-workspace) { background-color: #2e2e2e; }
 .workspace-list row.active-workspace { background-color: #3a63a8; }

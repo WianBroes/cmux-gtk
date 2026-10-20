@@ -20,6 +20,8 @@ struct Preferences {
     right_sidebar_visible: bool,
     #[serde(default = "default_sidebar_width")]
     right_sidebar_width: f64,
+    #[serde(default = "default_sidebar_width")]
+    sidebar_minimum_width: f64,
 }
 
 fn enabled() -> bool {
@@ -33,6 +35,38 @@ const SIDEBAR_WIDTH_MAX: f64 = 600.0;
 
 fn default_sidebar_width() -> f64 {
     SIDEBAR_WIDTH_MIN
+}
+
+/// Upstream's adjustable minimum of the left sidebar (`sidebarMinimumWidthRange`, 120…260 points,
+/// 240 by default): narrower, the titlebar controls above it sit closer together.
+const SIDEBAR_MINIMUM_RANGE: std::ops::RangeInclusive<f64> = 120.0..=260.0;
+
+fn sanitized_sidebar_minimum(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(*SIDEBAR_MINIMUM_RANGE.start(), *SIDEBAR_MINIMUM_RANGE.end())
+    } else {
+        SIDEBAR_WIDTH_MIN
+    }
+}
+
+/// Left sidebar minimum width in points; loaded once, updated on Apply.
+static SIDEBAR_MINIMUM: LazyLock<AtomicU64> = LazyLock::new(|| {
+    let stored = read(&path()).map_or(SIDEBAR_WIDTH_MIN, |prefs| prefs.sidebar_minimum_width);
+    AtomicU64::new(sanitized_sidebar_minimum(stored).to_bits())
+});
+
+/// Current left sidebar minimum width in points.
+pub fn sidebar_minimum() -> f64 {
+    f64::from_bits(SIDEBAR_MINIMUM.load(Ordering::Relaxed))
+}
+
+/// Bound a left sidebar width by the adjustable minimum and the maximum.
+fn clamp_left_sidebar_width(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(sidebar_minimum(), SIDEBAR_WIDTH_MAX)
+    } else {
+        sidebar_minimum()
+    }
 }
 
 /// Clamp a stored or dragged width, falling back to the default for a broken value.
@@ -75,7 +109,7 @@ pub fn desktop_notifications() -> bool {
 /// Sidebar width in points; dragged on the divider, remembered in `preferences.json`.
 static SIDEBAR_WIDTH: LazyLock<AtomicU64> = LazyLock::new(|| {
     let stored = read(&path()).map_or(SIDEBAR_WIDTH_MIN, |prefs| prefs.sidebar_width);
-    AtomicU64::new(clamp_sidebar_width(stored).to_bits())
+    AtomicU64::new(clamp_left_sidebar_width(stored).to_bits())
 });
 
 /// Current sidebar width in points, already clamped.
@@ -85,7 +119,7 @@ pub fn sidebar_width() -> f64 {
 
 /// Remember a dragged width: live at once, on disk for the next launch.
 pub fn save_sidebar_width(width: f64) -> Result<(), String> {
-    SIDEBAR_WIDTH.store(clamp_sidebar_width(width).to_bits(), Ordering::Relaxed);
+    SIDEBAR_WIDTH.store(clamp_left_sidebar_width(width).to_bits(), Ordering::Relaxed);
     save_current()
 }
 
@@ -141,7 +175,7 @@ fn save_current() -> Result<(), String> {
 /// narrower than the minimum and never wider than a third of the window (`ContentView.swift`).
 pub fn attach_sidebar_resize(paned: &gtk4::Paned) {
     if let Some(sidebar) = paned.start_child() {
-        sidebar.set_size_request(SIDEBAR_WIDTH_MIN as i32, -1);
+        sidebar.set_size_request(sidebar_minimum() as i32, -1);
     }
     // Upstream keeps the sidebar width when the window resizes. GTK's defaults scale it with the
     // window and let it fall below its minimum, where it is allocated anyway and clipped.
@@ -159,7 +193,7 @@ pub fn attach_sidebar_resize(paned: &gtk4::Paned) {
         let position = paned.position() as f64;
         let available = paned.width() as f64;
         if available > 1.0 {
-            let cap = (available / 3.0).clamp(SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX);
+            let cap = (available / 3.0).clamp(sidebar_minimum(), SIDEBAR_WIDTH_MAX);
             if position > cap {
                 paned.set_position(cap.round() as i32);
                 return;
@@ -168,7 +202,7 @@ pub fn attach_sidebar_resize(paned: &gtk4::Paned) {
         if position.to_bits() == SIDEBAR_WIDTH.load(Ordering::Relaxed) {
             return;
         }
-        SIDEBAR_WIDTH.store(clamp_sidebar_width(position).to_bits(), Ordering::Relaxed);
+        SIDEBAR_WIDTH.store(clamp_left_sidebar_width(position).to_bits(), Ordering::Relaxed);
         // Write once the drag settles, not on every pixel. The flag replaces a previous timer
         // instead of removing it: `SourceId::remove` panics on a source that already fired.
         if scheduled.replace(true) {
@@ -181,6 +215,22 @@ pub fn attach_sidebar_resize(paned: &gtk4::Paned) {
             let _ = save_sidebar_width(paned.position() as f64);
         });
     });
+}
+
+/// Apply a new left sidebar minimum to the open window: the sidebar's size request, and its width
+/// when it was narrower than allowed or held at the old minimum.
+fn apply_sidebar_minimum(state: &crate::app_state::AppStateRef) {
+    let list = state.borrow().sidebar_list.clone();
+    let Some(paned) = list.ancestor(gtk4::Paned::static_type()).and_downcast::<gtk4::Paned>() else {
+        return;
+    };
+    if let Some(sidebar) = paned.start_child() {
+        sidebar.set_size_request(sidebar_minimum() as i32, -1);
+    }
+    let width = clamp_left_sidebar_width(paned.position() as f64);
+    if width as i32 != paned.position() {
+        paned.set_position(width.round() as i32);
+    }
 }
 
 /// Measured minimum width of the right sidebar. `GtkPaned` clamps `max-position` against
@@ -338,6 +388,7 @@ fn save(
         sidebar_width: sidebar_width(),
         right_sidebar_visible: right_sidebar_visible(),
         right_sidebar_width: right_sidebar_width(),
+        sidebar_minimum_width: sidebar_minimum(),
     })
     .map_err(|error| error.to_string())?;
     cmux_platform::filesystem::atomic_write(path, &contents).map_err(|error| error.to_string())
@@ -444,6 +495,19 @@ pub fn show(parent: &gtk4::ApplicationWindow, state: &crate::app_state::AppState
     auto_resume_help.set_xalign(0.0);
     auto_resume_help.set_wrap(true);
     terminal.append(&auto_resume_help);
+    let minimum_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
+    let minimum_label = gtk4::Label::new(Some("Sidebar minimum width (pt)"));
+    minimum_label.set_hexpand(true);
+    minimum_label.set_xalign(0.0);
+    let minimum = gtk4::SpinButton::with_range(
+        *SIDEBAR_MINIMUM_RANGE.start(),
+        *SIDEBAR_MINIMUM_RANGE.end(),
+        10.0,
+    );
+    minimum.set_value(sidebar_minimum());
+    minimum_row.append(&minimum_label);
+    minimum_row.append(&minimum);
+    app.append(&minimum_row);
     let desktop = gtk4::CheckButton::with_label("Desktop notifications");
     desktop.set_active(desktop_notifications());
     app.append(&desktop);
@@ -458,6 +522,7 @@ pub fn show(parent: &gtk4::ApplicationWindow, state: &crate::app_state::AppState
     let error_label = gtk4::Label::new(None);
     error_label.set_wrap(true);
     content.append(&error_label);
+    let state = std::rc::Rc::downgrade(state);
     dialog.connect_response(move |dialog, response| {
         if response != gtk4::ResponseType::Apply {
             dialog.close();
@@ -465,6 +530,8 @@ pub fn show(parent: &gtk4::ApplicationWindow, state: &crate::app_state::AppState
         }
         size.update();
         let value = size.value() as f32;
+        minimum.update();
+        SIDEBAR_MINIMUM.store(sanitized_sidebar_minimum(minimum.value()).to_bits(), Ordering::Relaxed);
         if let Err(error) = save(
             &path(),
             value,
@@ -478,6 +545,9 @@ pub fn show(parent: &gtk4::ApplicationWindow, state: &crate::app_state::AppState
         INVERT_SCROLL.store(invert.is_active(), Ordering::Relaxed);
         AUTO_RESUME_AGENTS.store(auto_resume.is_active(), Ordering::Relaxed);
         DESKTOP_NOTIFICATIONS.store(desktop.is_active(), Ordering::Relaxed);
+        if let Some(state) = state.upgrade() {
+            apply_sidebar_minimum(&state);
+        }
         let action = format!("set_font_size:{value}");
         let mut failed = false;
         for surface in surfaces() {

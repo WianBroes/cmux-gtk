@@ -414,6 +414,9 @@ pub fn rebuild_sidebar_row_content(name: &str) -> gtk4::Box {
     dot.set_valign(gtk4::Align::Center);
     dot.set_visible(false);
     slot.append(&dot);
+    // Upstream shows the slot only while it holds something (`leadingSlotActive`); empty, it
+    // would keep every name indented. `set_row_status` shows it.
+    slot.set_visible(false);
     hbox.append(&slot);
 
     let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
@@ -750,6 +753,7 @@ pub fn set_row_status(
         if let Some(dot) = child_with_class(&slot, "attention-dot") {
             dot.set_visible(!running && unread == 0 && attention);
         }
+        slot.set_visible(running || unread > 0 || attention);
     }
     if let Some(label) = row_text(row)
         .and_then(|text| child_with_class(text.upcast_ref(), "workspace-notification"))
