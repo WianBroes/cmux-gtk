@@ -2362,6 +2362,11 @@ fn handle_socket_command_traced(
                         .get_mut(index)
                         .ok_or("workspace not found")?;
                     let surface = engine.new_terminal_surface(pane_id, launch, focus)?;
+                    // Upstream shows the new tab in its pane even without focus
+                    // (`preserveBonsplitSelectionWhenUnfocused` defaults to false).
+                    if !focus {
+                        engine.select_surface(surface);
+                    }
                     Ok(created_json(&s, index, pane_id, surface))
                 })
             };
