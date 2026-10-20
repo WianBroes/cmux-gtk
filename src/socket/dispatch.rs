@@ -1321,6 +1321,43 @@ async fn dispatch_request(
                 resp_tx,
             }
         }
+        "pane.break" => {
+            let pane = match params.get("pane_id") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(_) => match pane_reference(&params, "pane_id") {
+                    Some(pane) => Some(pane),
+                    None => return err(req_id, "not_found", "Pane not found"),
+                },
+            };
+            // Upstream: a surface_id that is not a surface is `not_found`, not invalid_params.
+            let surface = match params.get("surface_id") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(value) => match value.as_str().filter(|text| uuid::Uuid::parse_str(text).is_ok()) {
+                    Some(surface) => Some(surface.to_owned()),
+                    None => return err(req_id, "not_found", "Surface not found"),
+                },
+            };
+            let workspace = match params.get("workspace_id") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(value) => match value.as_str().filter(|text| uuid::Uuid::parse_str(text).is_ok()) {
+                    Some(workspace) => Some(workspace.to_owned()),
+                    None => return err(req_id, "not_found", "Workspace not found"),
+                },
+            };
+            let focus = match params.get("focus") {
+                None | Some(serde_json::Value::Null) => false,
+                Some(serde_json::Value::Bool(focus)) => *focus,
+                Some(_) => return err(req_id, "invalid_params", "focus must be a boolean"),
+            };
+            commands::SocketCommand::PaneBreak {
+                req_id: req_id.clone(),
+                pane,
+                surface,
+                workspace,
+                focus,
+                resp_tx,
+            }
+        }
         "pane.swap" => {
             let Some(pane_id) = pane_reference(&params, "pane_id") else {
                 return err(req_id, "invalid_params", "Missing or invalid pane_id");

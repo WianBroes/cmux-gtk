@@ -2071,6 +2071,7 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             pane,
             target_pane,
             focus,
+            ..
         } => {
             let mut p = serde_json::Map::new();
             if let Some(ref workspace) = workspace {
@@ -2078,8 +2079,28 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             }
             p.insert("pane_id".into(), json!(pane));
             p.insert("target_pane_id".into(), json!(target_pane));
-            p.insert("focus".into(), json!(focus));
+            p.insert("focus".into(), json!(focus.unwrap_or(false)));
             ("pane.swap", Value::Object(p))
+        }
+        Commands::BreakPane {
+            workspace,
+            pane,
+            surface,
+            focus,
+            ..
+        } => {
+            let mut p = serde_json::Map::new();
+            if let Some(ref workspace) = workspace {
+                p.insert("workspace_id".into(), json!(workspace));
+            }
+            if let Some(ref pane) = pane {
+                p.insert("pane_id".into(), json!(pane));
+            }
+            if let Some(ref surface) = surface {
+                p.insert("surface_id".into(), json!(surface));
+            }
+            p.insert("focus".into(), json!(focus.unwrap_or(false)));
+            ("pane.break", Value::Object(p))
         }
         Commands::LastPane => ("pane.last", json!({})),
 
@@ -2407,6 +2428,7 @@ mod tests {
             "--target-pane",
             "pane:2",
             "--focus",
+            "true",
         ])
         .expect("swap pane arguments should parse");
         let (method, params) = command_to_rpc(&cli.command);
@@ -2415,6 +2437,18 @@ mod tests {
         assert_eq!(params["pane_id"], "pane:1");
         assert_eq!(params["target_pane_id"], "pane:2");
         assert_eq!(params["focus"], true);
+    }
+
+    /// `break-pane` forwards only the targets it was given, and focus false by default.
+    #[test]
+    fn break_pane_flags_map_to_parameters() {
+        let cli = Cli::try_parse_from(["cmux", "break-pane", "--surface", "surface:3"])
+            .expect("break pane arguments should parse");
+        let (method, params) = command_to_rpc(&cli.command);
+        assert_eq!(method, "pane.break");
+        assert_eq!(params["surface_id"], "surface:3");
+        assert!(params.get("pane_id").is_none() && params.get("workspace_id").is_none());
+        assert_eq!(params["focus"], false);
     }
 
     /// Reorders carry their named anchor and drop the position they do not use.

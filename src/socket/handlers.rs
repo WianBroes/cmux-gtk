@@ -811,6 +811,7 @@ fn handle_socket_command_traced(
                 "pane.create",
                 "pane.focus",
                 "pane.swap",
+                "pane.break",
                 "pane.last",
                 "config.reload",
                 "settings.open",
@@ -3236,6 +3237,101 @@ fn handle_socket_command_traced(
                 err(req_id, "not_found", "pane not found")
             };
             let _ = resp_tx.send(response);
+        }
+
+        // Upstream `controlPaneBreak`: surface given, else the pane's selected surface, else
+        // the focused pane's. The move itself is `tab.action move_to_new_workspace`, whose
+        // reply is reshaped to upstream's (destination workspace, pane and surface). Écart:
+        // an unknown pane is `not_found` here; upstream silently falls back to the focused pane.
+        SocketCommand::PaneBreak {
+            req_id,
+            pane,
+            surface,
+            workspace,
+            focus,
+            resp_tx,
+        } => {
+            let resolved = {
+                let s = state.borrow();
+                let index = match (&workspace, &surface) {
+                    (Some(workspace), _) => s.workspaces.iter().position(|row| row.uuid.to_string() == *workspace),
+                    (None, Some(surface)) => s
+                        .split_engines
+                        .iter()
+                        .position(|engine| engine.find_pane_id_by_uuid(surface).is_some()),
+                    (None, None) => Some(s.active_index),
+                };
+                match index {
+                    None if workspace.is_some() => Err(("not_found", "Workspace not found")),
+                    None => Err(("not_found", "Surface not found")),
+                    Some(index) => {
+                        let engine = &s.split_engines[index];
+                        let source_pane = match &pane {
+                            Some(pane) => engine.pane_for_ref(pane).ok_or(("not_found", "Pane not found")),
+                            None => Ok(engine.active_pane_id),
+                        };
+                        source_pane.and_then(|source_pane| match &surface {
+                            Some(surface) if engine.find_pane_id_by_uuid(surface).is_some() => {
+                                Ok((index, surface.clone()))
+                            }
+                            Some(_) => Err(("not_found", "Surface not found")),
+                            None => engine
+                                .pane_info()
+                                .into_iter()
+                                .find(|info| info.id == source_pane)
+                                .and_then(|info| info.selected_surface)
+                                .map(|selected| (index, selected.to_string()))
+                                .ok_or(("not_found", "No source surface to break")),
+                        })
+                        .map(|(index, surface)| (s.workspaces[index].uuid.to_string(), surface))
+                    }
+                }
+            };
+            let (workspace_id, surface_id) = match resolved {
+                Ok(target) => target,
+                Err((code, message)) => {
+                    let _ = resp_tx.send(err(req_id, code, message));
+                    return;
+                }
+            };
+            let (inner_tx, mut inner_rx) = tokio::sync::oneshot::channel();
+            handle_socket_command(
+                SocketCommand::TabAction {
+                    req_id: req_id.clone(),
+                    action: "move_to_new_workspace".to_owned(),
+                    surface: Some(surface_id),
+                    workspace: Some(workspace_id),
+                    title: None,
+                    focus,
+                    resp_tx: inner_tx,
+                },
+                state,
+            );
+            let reply = inner_rx.try_recv().unwrap_or_else(|_| {
+                err(req_id.clone(), "internal_error", "Failed to detach source surface")
+            });
+            let Some(result) = reply.get("result") else {
+                let _ = resp_tx.send(reply);
+                return;
+            };
+            let pane_ref = result
+                .get("pane_ref")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let mut shaped = serde_json::Map::new();
+            for key in [
+                "window_id",
+                "window_ref",
+                "workspace_id",
+                "workspace_ref",
+                "surface_id",
+                "surface_ref",
+            ] {
+                shaped.insert(key.to_owned(), result.get(key).cloned().unwrap_or_default());
+            }
+            shaped.insert("pane_id".to_owned(), pane_ref.clone());
+            shaped.insert("pane_ref".to_owned(), pane_ref);
+            let _ = resp_tx.send(ok(req_id, serde_json::Value::Object(shaped)));
         }
 
         SocketCommand::PaneSwap {

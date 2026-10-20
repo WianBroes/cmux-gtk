@@ -472,7 +472,7 @@ pub fn format_mutation(command_name: &str, result: &Value) -> String {
         "surface.move" => format!("Moved surface: {}", id),
         "surface.reorder" => format!("Reordered surface: {}", id),
         // Upstream's `pane.swap` CLI prints its fallback text for the payload.
-        "pane.swap" => "OK".to_owned(),
+        "pane.swap" | "pane.break" => "OK".to_owned(),
         "surface.drag_to_split" => format!("Split moved surface: {}", id),
         "surface.split_off" => format!("Split out surface: {}", id),
         _ => String::new(),
@@ -571,7 +571,8 @@ pub fn format_response(method: &str, result: &Value, json_mode: bool, color: boo
         | "surface.drag_to_split"
         | "surface.split_off"
         | "surface.trigger_flash"
-        | "pane.swap" => {
+        | "pane.swap"
+        | "pane.break" => {
             let msg = format_mutation(method, result);
             if msg.is_empty() {
                 format_fallback(result)

@@ -375,6 +375,18 @@ pub enum SocketCommand {
         resp_tx: RespTx,
     },
     /// Exchange the selected surfaces of two panes in the source pane's workspace.
+    /// Upstream `pane.break`: move a surface out into a new workspace.
+    PaneBreak {
+        req_id: Value,
+        /// Source pane reference (`pane:N`); None takes the workspace's focused pane.
+        pane: Option<String>,
+        /// Source surface UUID; None takes the source pane's selected surface.
+        surface: Option<String>,
+        /// Source workspace UUID; None takes the surface's own, else the selected one.
+        workspace: Option<String>,
+        focus: bool,
+        resp_tx: RespTx,
+    },
     PaneSwap {
         req_id: Value,
         /// Source pane reference (`pane:N`) or one of its surface UUIDs.

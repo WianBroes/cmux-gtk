@@ -605,6 +605,17 @@ fn collect_targets<'a>(command: &'a mut Commands, targets: &mut Vec<Target<'a>>)
             targets.push(Target::Optional(HandleKind::Workspace, workspace));
         }
 
+        Commands::BreakPane {
+            workspace,
+            pane,
+            surface,
+            ..
+        } => {
+            targets.push(Target::Optional(HandleKind::Pane, pane));
+            targets.push(Target::Optional(HandleKind::Surface, surface));
+            targets.push(Target::Optional(HandleKind::Workspace, workspace));
+        }
+
         Commands::NewSplit {
             surface, workspace, ..
         } => {

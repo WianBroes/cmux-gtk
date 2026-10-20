@@ -904,9 +904,40 @@ pub enum Commands {
         /// Target pane reference (pane:N), surface UUID or index
         #[arg(long)]
         target_pane: String,
-        /// Focus the target pane after the swap
+        /// Keep the current focus (the default); compatibility alias for `--focus false`
+        #[arg(long, conflicts_with = "focus")]
+        no_focus: bool,
+        /// Focus the result; upstream spelling `--focus true|false` (default false)
+        #[arg(
+            long,
+            value_name = "true|false",
+            value_parser = clap::builder::BoolishValueParser::new(),
+            conflicts_with = "no_focus"
+        )]
+        focus: Option<bool>,
+    },
+    /// Move a pane's selected surface (or a named surface) out into a new workspace
+    BreakPane {
+        /// Workspace UUID, ref (workspace:N) or index
         #[arg(long)]
-        focus: bool,
+        workspace: Option<String>,
+        /// Source pane reference (pane:N); default is the focused pane
+        #[arg(long)]
+        pane: Option<String>,
+        /// Source surface UUID, ref (surface:N) or index; default is the pane's selected one
+        #[arg(long)]
+        surface: Option<String>,
+        /// Keep the current focus (the default); compatibility alias for `--focus false`
+        #[arg(long, conflicts_with = "focus")]
+        no_focus: bool,
+        /// Focus the result; upstream spelling `--focus true|false` (default false)
+        #[arg(
+            long,
+            value_name = "true|false",
+            value_parser = clap::builder::BoolishValueParser::new(),
+            conflicts_with = "no_focus"
+        )]
+        focus: Option<bool>,
     },
     /// Switch to last focused pane
     LastPane,
@@ -2650,11 +2681,12 @@ mod handle_argument_tests {
                 pane,
                 target_pane,
                 focus,
+                no_focus,
             } => {
                 assert_eq!(workspace.as_deref(), Some("workspace:3"));
                 assert_eq!(pane, "pane:1");
                 assert_eq!(target_pane, "pane:2");
-                assert!(!focus);
+                assert!(focus.is_none() && !no_focus);
             }
             _ => panic!("wrong command variant"),
         }
@@ -2665,20 +2697,47 @@ mod handle_argument_tests {
             "--target-pane",
             "pane:2",
             "--focus",
+            "true",
         ]) {
             Commands::SwapPane {
                 workspace,
                 pane,
                 target_pane,
                 focus,
+                ..
             } => {
                 assert!(workspace.is_none());
                 assert_eq!(pane, "pane:1");
                 assert_eq!(target_pane, "pane:2");
-                assert!(focus);
+                assert_eq!(focus, Some(true));
             }
             _ => panic!("wrong command variant"),
         }
+    }
+
+    /// Break takes an optional pane, surface and workspace, and upstream's focus spellings.
+    #[test]
+    fn break_pane_forms_parse() {
+        match parse(&["break-pane", "--workspace", "workspace:2", "--surface", "surface:4"]) {
+            Commands::BreakPane {
+                workspace,
+                pane,
+                surface,
+                focus,
+                no_focus,
+            } => {
+                assert_eq!(workspace.as_deref(), Some("workspace:2"));
+                assert!(pane.is_none());
+                assert_eq!(surface.as_deref(), Some("surface:4"));
+                assert!(focus.is_none() && !no_focus);
+            }
+            _ => panic!("wrong command variant"),
+        }
+        assert!(matches!(
+            parse(&["break-pane", "--pane", "pane:1", "--no-focus"]),
+            Commands::BreakPane { pane: Some(_), no_focus: true, .. }
+        ));
+        assert!(Cli::try_parse_from(["cmux", "break-pane", "--focus", "true", "--no-focus"]).is_err());
     }
 
     /// Upstream's placement, window and focus flags reach the same move command.
