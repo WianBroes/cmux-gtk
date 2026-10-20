@@ -32,6 +32,9 @@ pub fn build_header_bar(
     // The controls sit above the sidebar, spread over its width, so the menus start at the
     // sidebar's edge (Wian, 2026-10-20); see `align_with_sidebar`.
     let controls = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+    // The spacers expand inside the width set by `align_with_sidebar` only: without this, their
+    // hexpand propagates and the headerbar stretches the controls up to the centred title.
+    controls.set_hexpand(false);
     let spacer = || {
         let spacer = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
         spacer.set_hexpand(true);
