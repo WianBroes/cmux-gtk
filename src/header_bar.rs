@@ -81,8 +81,21 @@ pub fn build_header_bar(
     controls.append(&arrows);
     header.pack_start(&controls);
     let menus = gtk4::PopoverMenuBar::from_model(Some(menu_bar));
-    header.pack_start(&menus);
-    align_with_sidebar(&controls, &menus, sidebar);
+    // Full width when there is room; a narrow window clips the menus from the right, so the
+    // title slides over them instead of taking their width as the window's minimum (Wian,
+    // 2026-10-21: the window stopped shrinking when the title reached the menus).
+    let menus_clip = gtk4::ScrolledWindow::new();
+    menus_clip.set_policy(gtk4::PolicyType::External, gtk4::PolicyType::Never);
+    menus_clip.set_propagate_natural_width(true);
+    menus_clip.set_propagate_natural_height(true);
+    menus_clip.set_child(Some(&menus));
+    // The wheel would scroll the clipped menus sideways; they only ever start at the left.
+    let no_wheel = gtk4::EventControllerScroll::new(gtk4::EventControllerScrollFlags::BOTH_AXES);
+    no_wheel.set_propagation_phase(gtk4::PropagationPhase::Capture);
+    no_wheel.connect_scroll(|_, _, _| gtk4::glib::Propagation::Stop);
+    menus_clip.add_controller(no_wheel);
+    header.pack_start(&menus_clip);
+    align_with_sidebar(&controls, &menus_clip, sidebar);
     let title = gtk4::Label::new(None);
     title.add_css_class("title");
     title.set_ellipsize(gtk4::pango::EllipsizeMode::End);
@@ -103,7 +116,7 @@ pub fn build_header_bar(
 
 /// Widen the controls so the menus begin where the sidebar ends, following the sidebar as it is
 /// resized. A hidden sidebar keeps the last width: the controls and menus never move with it.
-fn align_with_sidebar(controls: &gtk4::Box, menus: &gtk4::PopoverMenuBar, sidebar: &gtk4::Box) {
+fn align_with_sidebar(controls: &gtk4::Box, menus: &gtk4::ScrolledWindow, sidebar: &gtk4::Box) {
     let align = {
         let (controls, menus, sidebar) = (controls.downgrade(), menus.downgrade(), sidebar.downgrade());
         move || {
