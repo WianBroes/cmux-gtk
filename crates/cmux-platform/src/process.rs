@@ -117,9 +117,56 @@ fn parse_status(status: &str) -> Resources {
     sample
 }
 
+/// Identity fields of one process from `/proc/<pid>/stat`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ProcessStat {
+    /// Kernel command name (at most 15 bytes), not the full command line.
+    pub command: String,
+    /// Parent process id.
+    pub parent: u32,
+    /// Start time in clock ticks since boot; orders processes started on this machine.
+    pub start_ticks: u64,
+}
+
+/// Read one process's stat record; `pid` may be "self". None when gone or malformed.
+pub fn stat(pid: &str) -> Option<ProcessStat> {
+    let path = std::path::PathBuf::from(format!("/proc/{pid}/stat"));
+    parse_stat(&crate::filesystem::read_text_bounded(&path, 4096).ok()?)
+}
+
+/// The command name sits in parentheses and may itself contain ")" or spaces, so fields
+/// are counted after the last ")": state is field 3, parent 4, start time 22.
+fn parse_stat(stat: &str) -> Option<ProcessStat> {
+    let open = stat.find('(')?;
+    let close = stat.rfind(')')?;
+    let command = stat.get(open + 1..close)?.to_owned();
+    let fields: Vec<&str> = stat.get(close + 1..)?.split_whitespace().collect();
+    Some(ProcessStat {
+        command,
+        parent: fields.get(1)?.parse().ok()?,
+        start_ticks: fields.get(19)?.parse().ok()?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A command name with ")" and spaces does not shift the counted fields; short records are rejected.
+    #[test]
+    fn stat_fields_follow_the_last_parenthesis() {
+        let tail = "S 41 41 41 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 987654 0 0";
+        assert_eq!(
+            parse_stat(&format!("123 (a) b (c) {tail}")),
+            Some(ProcessStat {
+                command: "a) b (c".into(),
+                parent: 41,
+                start_ticks: 987654
+            })
+        );
+        assert_eq!(parse_stat("123 (claude) S 41 41"), None);
+        assert!(stat("self").is_some_and(|own| own.start_ticks > 0));
+    }
 
     /// CPU indices and unrelated fields are not model identities; truncated or invalid labels stay absent.
     #[test]

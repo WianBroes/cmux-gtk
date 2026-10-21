@@ -392,7 +392,20 @@ async fn dispatch_request(
                         }
                         _ => return err(req_id, "invalid_params", "invalid checkpoint_id"),
                     };
-                    crate::resume::ResumeAction::Clear { checkpoint_id }
+                    let agent_pid = params
+                        .get("agent_pid")
+                        .and_then(serde_json::Value::as_u64)
+                        .and_then(|pid| u32::try_from(pid).ok());
+                    if agent_pid.is_some_and(crate::resume::agent_predates_app) {
+                        // Late SessionEnd of an agent killed with the previous instance: keep the
+                        // binding this instance restored (macOS agent.hibernation.session_end).
+                        crate::diagnostics::event(format_args!(
+                            "resume.clear stage=preserve reason=previous_instance"
+                        ));
+                        crate::resume::ResumeAction::Show
+                    } else {
+                        crate::resume::ResumeAction::Clear { checkpoint_id }
+                    }
                 }
                 _ => crate::resume::ResumeAction::Show,
             };

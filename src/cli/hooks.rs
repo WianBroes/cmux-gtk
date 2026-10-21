@@ -2239,9 +2239,20 @@ fn set_agent_resume(
 fn clear_agent_resume(client: &mut SocketClient, surface: &str, id: &str) -> Result<(), CliError> {
     client.call(
         "surface.resume.clear",
-        json!({"surface_id": surface, "checkpoint_id": id}),
+        json!({"surface_id": surface, "checkpoint_id": id, "agent_pid": hook_agent_pid()}),
     )?;
     Ok(())
+}
+
+/// The agent that ran this hook: the parent process, or the grandparent when the agent
+/// went through `sh -c`. The app compares its start with its own to spot a previous instance.
+fn hook_agent_pid() -> Option<u32> {
+    let parent = cmux_platform::process::stat("self")?.parent;
+    let stat = cmux_platform::process::stat(&parent.to_string())?;
+    Some(match stat.command.as_str() {
+        "sh" | "bash" | "dash" | "zsh" => stat.parent,
+        _ => parent,
+    })
 }
 
 fn create_agent_notification(

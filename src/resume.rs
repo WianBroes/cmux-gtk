@@ -93,9 +93,33 @@ pub enum ResumeAction {
     Clear { checkpoint_id: Option<String> },
 }
 
+/// True when a local agent process started before this app instance, i.e. it belonged to the
+/// previous instance and its session-end must not clear what this instance restored.
+/// A missing process or unreadable stat answers false, keeping the ordinary cleanup.
+pub fn agent_predates_app(pid: u32) -> bool {
+    static APP_START: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    let app = *APP_START.get_or_init(|| cmux_platform::process::stat("self").map(|s| s.start_ticks));
+    match (app, cmux_platform::process::stat(&pid.to_string())) {
+        (Some(app), Some(agent)) => agent.start_ticks < app,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// init predates this process; this process and a child started after it do not; a gone pid keeps cleanup.
+    #[test]
+    fn agent_start_is_ordered_against_the_app() {
+        assert!(agent_predates_app(1));
+        assert!(!agent_predates_app(std::process::id()));
+        let mut child = std::process::Command::new("sleep").arg("5").spawn().unwrap();
+        assert!(!agent_predates_app(child.id()));
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(!agent_predates_app(u32::MAX));
+    }
 
     /// Real serialized metadata preserves literal command/environment data and rejects invalid launch inputs.
     #[test]
