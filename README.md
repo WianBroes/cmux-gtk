@@ -73,7 +73,7 @@ About 190 commits since 2026-09-27. In short:
 
 - **Ctrl+W and Ctrl+R belong to cmux** (Close Tab, Rename Tab), so shells lose word-erase and history search on those keys. Rebind them in Preferences › Shortcuts if you need them in the shell.
 - **Right-click always opens the cmux terminal menu**, even in programs that use the mouse (unlike macOS, where the program gets it).
-- **Do not run `cmux update`**: the updater still points at nitecon's releases and would replace this build with nitecon's.
+- **`cmux update` is disabled**: this fork publishes no releases yet (the inherited updater would have installed nitecon's). Update from source: `git pull`, `./scripts/setup-linux-dev.sh`, then rebuild. `scripts/install-linux.sh` stops for the same reason.
 - Not yet ported: multiple windows, upstream's tmux compatibility layer, parts of the browser engine. The file explorer's interface is in French.
 
 ## Build and run

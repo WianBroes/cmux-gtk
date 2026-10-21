@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPOSITORY="${CMUX_GITHUB_REPOSITORY:-nitecon/cmux-gtk}"
+REPOSITORY="${CMUX_GITHUB_REPOSITORY:-WianBroes/cmux-gtk}"
 INSTALL_DIR="${CMUX_INSTALL_DIR:-$HOME/.local/bin}"
 VERSION="${CMUX_VERSION:-latest}"
 
@@ -23,7 +23,10 @@ TEMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
 echo "==> Downloading ${ASSET}..."
-curl -fL "${BASE_URL}/${ASSET}" -o "$TEMP_DIR/$ASSET"
+curl -fL "${BASE_URL}/${ASSET}" -o "$TEMP_DIR/$ASSET" || {
+    echo "ERROR: no ${ASSET} release in ${REPOSITORY}; this fork publishes no releases yet, build it from source (see README)" >&2
+    exit 1
+}
 curl -fL "${BASE_URL}/${ASSET}.sha256" -o "$TEMP_DIR/$ASSET.sha256"
 (
     cd "$TEMP_DIR"

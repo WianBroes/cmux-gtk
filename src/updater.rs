@@ -8,7 +8,8 @@ use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const GITHUB_REPO: &str = "nitecon/cmux-gtk";
+// This fork publishes no releases: nitecon's would replace it with a different program.
+const GITHUB_REPO: &str = "WianBroes/cmux-gtk";
 const CURRENT_VERSION: &str = env!("CMUX_VERSION");
 const CHECK_INTERVAL_SECS: u64 = 3600;
 const BINARY_NAMES: &[&str] = &["cmux", "cmux-app"];
@@ -53,20 +54,10 @@ pub fn spawn_auto_update() {
     });
 }
 
-/// Update an unpacked/manual installation, or explain the package-manager path.
+/// Explain how to update this fork. Every install method gets the same answer: the
+/// Homebrew cask, system packages and AppImage of the upstream port are nitecon's.
 pub fn manual_update() -> Result<()> {
-    match install_method() {
-        InstallMethod::Homebrew => {
-            bail!("this cmux is managed by Homebrew; run: brew upgrade --cask cmux-gtk")
-        }
-        InstallMethod::SystemPackage => {
-            bail!("this cmux is managed by a system package; run your package manager upgrade (for example: sudo apt install --only-upgrade cmux-gtk or sudo dnf upgrade cmux-gtk)")
-        }
-        InstallMethod::AppImage => {
-            bail!("this cmux is running from an AppImage; download the latest AppImage release")
-        }
-        InstallMethod::SelfManaged => update_if_available(true),
-    }
+    bail!("this cmux fork publishes no releases; update from source: git pull && ./scripts/setup-linux-dev.sh && cargo build --release --bin cmux --bin cmux-app")
 }
 
 /// Check the latest release and replace a direct installation when newer.
@@ -344,6 +335,14 @@ fn touch_marker(marker: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fork never updates itself from another project's releases.
+    #[test]
+    fn update_never_targets_upstream_releases() {
+        assert!(!GITHUB_REPO.contains("nitecon"));
+        let message = format!("{:#}", manual_update().unwrap_err());
+        assert!(message.contains("publishes no releases"), "{message}");
+    }
 
     /// Preserve all streamed bytes and reject checksum mismatches and metadata overflow.
     #[test]

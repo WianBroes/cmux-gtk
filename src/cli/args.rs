@@ -254,7 +254,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: SurfaceCommands,
     },
-    /// Update a self-managed cmux installation
+    /// Explain how to update this fork (it publishes no releases)
     Update,
     /// Ping the running cmux instance
     Ping,
