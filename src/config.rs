@@ -271,6 +271,7 @@ pub const FIXED_SHORTCUTS: &[(&str, &str)] = &[
     ("<Ctrl>f", "Find"),
     ("<Ctrl>comma", "Preferences"),
     ("<Ctrl><Shift>i", "Notifications"),
+    ("<Ctrl><Alt>u", "Toggle Unread"),
     ("<Ctrl>q", "Quit"),
 ];
 

@@ -1461,29 +1461,9 @@ fn handle_socket_command_traced(
                     }
                     extras["closed"] = json!(closed);
                 }
-                "mark_read" => {
-                    let scope = crate::inbox::Scope {
-                        workspace_id: Some(target),
-                        surface_id: None,
-                    };
-                    let _ = crate::inbox_actions::handle(
-                        &mut s,
-                        crate::inbox::Action::MarkRead {
-                            id: None,
-                            scope,
-                            all: false,
-                        },
-                    );
-                    crate::inbox_actions::refresh(&s);
-                    s.clear_workspace_attention(index);
-                    s.trigger_session_save();
-                }
-                "mark_unread" => {
-                    crate::inbox_actions::mark_unread_where(&mut s, target, None);
-                    // Light the dot even when the workspace had nothing to read.
-                    s.workspaces[index].has_attention = true;
-                    s.update_sidebar_attention(index);
-                }
+                "mark_read" => crate::inbox_actions::mark_workspace_read(&mut s, index),
+                // Lights the dot even when the workspace had nothing to read.
+                "mark_unread" => crate::inbox_actions::mark_workspace_unread(&mut s, index),
                 "set_color" => {
                     let Some(hex) = color
                         .as_deref()
@@ -1648,14 +1628,7 @@ fn handle_socket_command_traced(
                     s.trigger_session_save();
                 }
                 "mark_unread" => {
-                    crate::inbox_actions::mark_unread_where(
-                        &mut s,
-                        workspace_uuid,
-                        Some(surface_id),
-                    );
-                    s.split_engines[index].root.set_attention(pane_id, true);
-                    s.workspaces[index].has_attention = s.split_engines[index].root.any_attention();
-                    s.update_sidebar_attention(index);
+                    crate::inbox_actions::mark_tab_unread(&mut s, index, pane_id);
                 }
                 "new_terminal_right" => {
                     let Some((_, slot)) = s.split_engines[index].surface_location(&surface_uuid)

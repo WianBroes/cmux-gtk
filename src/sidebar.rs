@@ -452,6 +452,66 @@ pub fn attach_sidebar_context_menu(
     menu_model.append(Some("Move Down"), Some("workspace.move-down"));
     let colors = gtk4::gio::Menu::new();
     let group = gtk4::gio::SimpleActionGroup::new();
+    for (_, name) in crate::menus::SIDEBAR_SELECTING_ACTIONS {
+        let action = gtk4::gio::SimpleAction::new(name, None);
+        action.connect_activate({
+            let state = Rc::downgrade(&state);
+            let row = row.downgrade();
+            move |_, _| {
+                let (Some(state), Some(row)) = (state.upgrade(), row.upgrade()) else {
+                    return;
+                };
+                let Some(index) = workspace_index_for_row(&state.borrow(), &row) else {
+                    return;
+                };
+                state.borrow_mut().switch_to_index(index);
+                let _ = row.activate_action(&format!("win.{name}"), None);
+            }
+        });
+        group.add_action(&action);
+    }
+    // Upstream `addNotificationItems`: read state and notifications of the row's workspace,
+    // without selecting it.
+    for name in ["mark-read", "mark-unread", "clear-latest-notification"] {
+        let action = gtk4::gio::SimpleAction::new(name, None);
+        action.connect_activate({
+            let state = Rc::downgrade(&state);
+            let row = row.downgrade();
+            move |_, _| {
+                let (Some(state), Some(row)) = (state.upgrade(), row.upgrade()) else {
+                    return;
+                };
+                let mut s = state.borrow_mut();
+                let Some(index) = workspace_index_for_row(&s, &row) else {
+                    return;
+                };
+                match name {
+                    "mark-read" => crate::inbox_actions::mark_workspace_read(&mut s, index),
+                    "mark-unread" => crate::inbox_actions::mark_workspace_unread(&mut s, index),
+                    _ => {
+                        let uuid = s.workspaces[index].uuid;
+                        let latest = s
+                            .inbox
+                            .records
+                            .iter()
+                            .rev()
+                            .find(|record| record.workspace_id == uuid)
+                            .map(|record| record.id);
+                        if let Some(id) = latest {
+                            let _ = crate::inbox_actions::handle(
+                                &mut s,
+                                crate::inbox::Action::Dismiss {
+                                    id: Some(id),
+                                    all_read: false,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        });
+        group.add_action(&action);
+    }
     for (name, offset) in [("move-up", -1isize), ("move-down", 1)] {
         let action = gtk4::gio::SimpleAction::new(name, None);
         action.connect_activate({
@@ -601,6 +661,16 @@ pub fn attach_sidebar_context_menu(
     });
     group.add_action(&create_group);
     menu_model.append_submenu(Some("Workspace Group"), &groups_menu);
+    let notifications = gtk4::gio::Menu::new();
+    let section = gtk4::gio::Menu::new();
+    section.append(Some("Mark Workspace as Read"), Some("workspace.mark-read"));
+    section.append(Some("Mark Workspace as Unread"), Some("workspace.mark-unread"));
+    section.append(
+        Some("Clear Latest Notification"),
+        Some("workspace.clear-latest-notification"),
+    );
+    section.append_submenu(Some("Notifications"), &notifications);
+    menu_model.append_section(None, &section);
     row.insert_action_group("workspace", Some(&group));
     let popover = gtk4::PopoverMenu::from_model(Some(&menu_model));
     popover.set_parent(row);
@@ -619,11 +689,11 @@ pub fn attach_sidebar_context_menu(
             let (Some(row), Some(popover)) = (row.upgrade(), popover.upgrade()) else {
                 return;
             };
-            // Switch to this workspace first so context menu actions apply to it
+            // The menu targets this row without selecting it, as upstream (`menu(for:)`).
             let Some(index) = workspace_index_for_row(&state.borrow(), &row) else {
                 return;
             };
-            state.borrow_mut().switch_to_index(index);
+            crate::notification_menu::fill_row(&state.borrow(), index, &group, &notifications);
             popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
             popover.popup();
         }

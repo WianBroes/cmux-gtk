@@ -36,6 +36,8 @@ pub struct AppState {
     pub inbox_window: glib::WeakRef<gtk4::Dialog>,
     /// Header bell counter of unread notifications.
     pub notifications_badge: Option<gtk4::Label>,
+    /// Menu bar Notifications menu, rebuilt from the inbox and the workspace unread marks.
+    pub notification_menu: Option<crate::notification_menu::MenuBarEntry>,
     /// Focus Back / Forward positions, and the titlebar arrows' actions kept in step with them.
     pub focus_history: crate::focus_history::FocusHistory,
     pub focus_history_actions: Option<(gtk4::gio::SimpleAction, gtk4::gio::SimpleAction)>,
@@ -167,6 +169,7 @@ impl AppState {
             inbox_updates: None,
             inbox_window: Default::default(),
             notifications_badge: None,
+            notification_menu: None,
             focus_history: Default::default(),
             focus_history_actions: None,
             ssh_event_tx: None,
@@ -1383,6 +1386,7 @@ impl AppState {
             );
         }
         crate::sidebar::update_group_attention(self);
+        crate::notification_menu::refresh(self);
     }
 
     /// Where focus is now: the active workspace and its selected terminal.

@@ -390,28 +390,62 @@ pub fn mark_read_where(state: &mut AppState, workspace: Uuid, surface: Option<Uu
     changed
 }
 
-/// Mark the notifications of a workspace (surface `None`) or of one tab unread again
-/// (upstream `workspace.action mark_unread` / `tab.action mark_unread`). Returns how many
-/// records changed; the attention flags belong to the caller, which owns that state.
-pub fn mark_unread_where(state: &mut AppState, workspace: Uuid, surface: Option<Uuid>) -> usize {
-    let mut changed = 0;
-    for record in &mut state.inbox.records {
-        if record.workspace_id == workspace
-            && surface.is_none_or(|surface| Some(surface) == record.surface_id)
-            && record.is_read
-        {
-            record.is_read = false;
-            changed += 1;
-        }
+/// Upstream `markRead(forTabId:)`: every message of the workspace read and its dots cleared
+/// (`workspace.action mark_read`, the row menu and Toggle Unread).
+pub fn mark_workspace_read(state: &mut AppState, index: usize) {
+    let scope = Scope {
+        workspace_id: Some(state.workspaces[index].uuid),
+        surface_id: None,
+    };
+    let _ = handle(
+        state,
+        Action::MarkRead {
+            id: None,
+            scope,
+            all: false,
+        },
+    );
+    state.clear_workspace_attention(index);
+    state.trigger_session_save();
+}
+
+/// Upstream `markUnread(forTabId:)`: a mark on the workspace, read messages stay read.
+pub fn mark_workspace_unread(state: &mut AppState, index: usize) {
+    state.workspaces[index].has_attention = true;
+    state.update_sidebar_attention(index);
+}
+
+/// Upstream `markPanelUnread`: a mark on the tab's pane (`tab.action mark_unread`, Toggle Unread).
+pub fn mark_tab_unread(state: &mut AppState, index: usize, pane_id: u64) {
+    state.split_engines[index].root.set_attention(pane_id, true);
+    state.workspaces[index].has_attention = state.split_engines[index].root.any_attention();
+    state.update_sidebar_attention(index);
+}
+
+/// Upstream `workspaceIsUnread`: an unread message or the workspace's own unread mark.
+pub fn workspace_is_unread(state: &AppState, index: usize) -> bool {
+    let workspace = &state.workspaces[index];
+    workspace.has_attention
+        || state
+            .inbox
+            .records
+            .iter()
+            .any(|record| !record.is_read && record.workspace_id == workspace.uuid)
+}
+
+/// Upstream `toggleFocusedNotificationUnread`: an unread workspace is marked read, otherwise
+/// its focused tab becomes unread.
+pub fn toggle_unread(state: &mut AppState) {
+    let index = state.active_index;
+    if index >= state.workspaces.len() {
+        return;
     }
-    if changed > 0 {
-        refresh(state);
-        if let Some(sender) = &state.inbox_updates {
-            sender.send_replace(());
-        }
-        state.trigger_session_save();
+    if workspace_is_unread(state, index) {
+        mark_workspace_read(state, index);
+        return;
     }
-    changed
+    let pane_id = state.split_engines[index].active_pane_id;
+    mark_tab_unread(state, index, pane_id);
 }
 
 /// Focusing a terminal marks its notifications read and lets it name its workspace, as upstream.

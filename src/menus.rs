@@ -804,6 +804,20 @@ pub fn register_accels(app: &gtk4::Application, shortcuts: &crate::config::Short
     app.set_accels_for_action("win.notifications", &["<Ctrl><Shift>i"]);
     app.set_accels_for_action("app.quit", &["<Ctrl>q"]);
     app.set_accels_for_action("win.jump-to-unread", &["<Ctrl><Shift>u"]);
+    app.set_accels_for_action("win.toggle-unread", &["<Ctrl><Alt>u"]);
+}
+
+/// The menu bar's Notifications menu, whose entries `notification_menu::refresh` rebuilds.
+pub fn notifications_submenu(bar: &gio::Menu) -> Option<gio::Menu> {
+    (0..bar.n_items())
+        .find(|&index| {
+            bar.item_attribute_value(index, "label", None)
+                .and_then(|label| label.get::<String>())
+                .as_deref()
+                == Some("Notifications")
+        })
+        .and_then(|index| bar.item_link(index, "submenu"))
+        .and_then(|menu| menu.downcast::<gio::Menu>().ok())
 }
 
 /// Build the menu bar model: upstream's menus in their order (cmux, File, Edit, View,
@@ -913,10 +927,8 @@ pub fn build_menu_bar() -> gio::Menu {
             ("Show Notifications", "win.notifications"),
         ],
     ]);
-    submenu(&bar, "Notifications", &[&[
-        ("Show Notifications", "win.notifications"),
-        ("Jump to Latest Unread", "win.jump-to-unread"),
-    ]]);
+    // Filled from the inbox by `notification_menu::refresh`.
+    submenu(&bar, "Notifications", &[]);
     submenu(&bar, "History", &[&[
         ("Focus Back", "win.focus-back"),
         ("Focus Forward", "win.focus-forward"),
@@ -935,20 +947,22 @@ pub fn build_menu_bar() -> gio::Menu {
 /// Build sidebar workspace row context menu (D-03).
 pub fn build_sidebar_context_menu() -> gio::Menu {
     let menu = gio::Menu::new();
-    menu.append(Some("Rename"), Some("win.rename-workspace"));
-    menu.append(
-        Some("Edit Description…"),
-        Some("win.edit-workspace-description"),
-    );
-    menu.append(
-        Some("Clear Description"),
-        Some("win.clear-workspace-description"),
-    );
-    menu.append(Some("Close"), Some("win.close-workspace"));
-    menu.append(Some("Split Right"), Some("win.split-right"));
-    menu.append(Some("Split Down"), Some("win.split-down"));
+    for (label, name) in SIDEBAR_SELECTING_ACTIONS {
+        menu.append(Some(label), Some(&format!("workspace.{name}")));
+    }
     menu
 }
+
+/// Row menu entries that act on the selected workspace: their `workspace.<name>` row action
+/// selects the row's workspace, then runs `win.<name>` (`sidebar::attach_sidebar_context_menu`).
+pub const SIDEBAR_SELECTING_ACTIONS: &[(&str, &str)] = &[
+    ("Rename", "rename-workspace"),
+    ("Edit Description…", "edit-workspace-description"),
+    ("Clear Description", "clear-workspace-description"),
+    ("Close", "close-workspace"),
+    ("Split Right", "split-right"),
+    ("Split Down", "split-down"),
+];
 
 /// Build terminal pane context menu (D-08).
 pub fn build_terminal_context_menu() -> gio::Menu {

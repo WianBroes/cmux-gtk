@@ -30,6 +30,7 @@ mod line_reader;
 mod menus;
 mod notification;
 mod notification_caller;
+mod notification_menu;
 mod ports;
 mod preferences;
 mod project_config;
@@ -95,6 +96,8 @@ window { background-color: #1a1a1a; }
    theme's `.dim-label`, so every line came out at the same level — and white-bold on the active
    row, where white on #5b8dd9 is only 3.4:1 and #999999 only 1.2:1. */
 .workspace-list row .dim-label { color: #a0a0a0; }
+/* The row's context menu is its CSS child: its entries keep the menu's colours (greyed when disabled). */
+.workspace-list row popover.menu label { color: inherit; font-weight: inherit; }
 .workspace-list row.active-workspace .dim-label { color: #e3ecfa; font-weight: 400; }
 .workspace-list row.workspace-group { min-height: 28px; padding: 2px 6px; background: #202020; }
 .workspace-list row.workspace-group button { padding: 3px 6px; }
@@ -196,6 +199,8 @@ headerbar.cmux-headerbar button { min-height: 24px; padding-top: 0; padding-bott
 popover.menu { background-color: #2a2a2a; border: 1px solid #3a3a3a; border-radius: 8px; }
 popover.menu modelbutton { padding: 8px 16px; color: #cccccc; font-size: 14px; }
 popover.menu modelbutton:hover { background-color: #3a3a3a; }
+/* Context menus: without this the colour above also paints disabled entries; the titlebar menus get the theme's own. */
+popover.menu modelbutton:disabled { color: alpha(#cccccc, 0.4); }
 popover.menu accelerator { color: #5b8dd9; font-size: 12px; }
 ";
 
@@ -874,6 +879,9 @@ fn build_ui(
 
     // Phase 9: Register GIO actions for menu/button dispatch
     crate::menus::register_actions(&window, state.clone(), &sidebar_box, app);
+    crate::notification_menu::register_actions(&window, &state);
+    state.borrow_mut().notification_menu = crate::menus::notifications_submenu(&menu_bar)
+        .map(crate::notification_menu::MenuBarEntry::new);
     if let Some(arrows) = &focus_arrows {
         crate::header_bar::attach_focus_history_menus(&state, arrows);
     }

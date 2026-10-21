@@ -369,6 +369,18 @@ pub fn install_shortcuts(
                     }
                     gtk4::glib::Propagation::Stop
                 }
+                None if keyval.to_lower() == gtk4::gdk::Key::u
+                    && mods.intersection(
+                        gtk4::gdk::ModifierType::CONTROL_MASK
+                            | gtk4::gdk::ModifierType::SHIFT_MASK
+                            | gtk4::gdk::ModifierType::ALT_MASK
+                            | gtk4::gdk::ModifierType::SUPER_MASK,
+                    ) == (gtk4::gdk::ModifierType::CONTROL_MASK
+                        | gtk4::gdk::ModifierType::ALT_MASK) =>
+                {
+                    crate::inbox_actions::toggle_unread(&mut state.borrow_mut());
+                    gtk4::glib::Propagation::Stop
+                }
                 None if keyval.to_lower() == gtk4::gdk::Key::p
                     && mods.intersection(
                         gtk4::gdk::ModifierType::CONTROL_MASK
