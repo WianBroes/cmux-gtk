@@ -1,329 +1,167 @@
-<h1 align="center">cmux GTK</h1>
-<p align="center">A GPU-accelerated terminal multiplexer with tabs, splits, workspaces, browser automation, and socket CLI control — powered by Ghostty</p>
+<h1 align="center">cmux GTK — parity fork</h1>
+<p align="center">cmux for Linux, aiming at feature parity with the macOS original: a Ghostty-powered terminal multiplexer for running AI coding agents side by side</p>
 
-> ⭐ **Want a trusted Homebrew install?** Star this repository to help cmux GTK
-> qualify for inclusion in Homebrew's official Cask repository. Once accepted,
-> users can install it without explicitly trusting a third-party tap.
+<!-- Screenshot to refresh: docs/assets/ still shows the nitecon interface (two title rows). -->
 
-<p align="center">
-  <img src="./docs/assets/main-first-image.png" alt="cmux screenshot" width="900" />
-</p>
+## What this repository is
 
-## About
+`WianBroes/cmux-gtk` is a fork of [nitecon/cmux-gtk](https://github.com/nitecon/cmux-gtk), the Rust + GTK4 port of [cmux](https://github.com/manaflow-ai/cmux) (a macOS Swift/AppKit app by manaflow-ai).
 
-cmux for Linux is a full native port of [cmux](https://github.com/manaflow-ai/cmux) (originally a macOS Swift/AppKit app) rebuilt in Rust on GTK4. It provides the same experience — tabs, splits, workspaces, notifications, browser automation, and a scriptable socket API — running natively on Linux with GPU-accelerated terminal rendering via Ghostty.
+The goal is different from nitecon's: **behave like cmux on macOS**, so that agents, skills, hooks and scripts written for the original work unchanged on Linux. The command is still `cmux`, the socket protocol is the original's, and macOS shortcuts map `⌘` to `Ctrl`.
 
-Built for developers running multiple AI coding agents (Claude Code, Codex, etc.) in parallel who need visibility into which agent needs attention and the ability to script browser interactions alongside terminal sessions.
+How parity is checked:
 
-## Features
+- **The original's own tests are the oracle.** The socket test suite of manaflow-ai/cmux (`tests_v2/`, 141 tests) is replayed against this build, one throwaway instance per test. A skipped test never counts as passing.
+- **The interface is inventoried against upstream** (menus, title row, sidebar, tabs, panes, notifications: 488 elements), each with its state here and the file implementing it.
+- **A feature is done when it is shown working**, not when a unit test passes: a real scenario that fails before the change, a test that fails when the feature is deliberately broken, and a second reviewer who tries to break it. Anything without such proof is marked "not verified" in the change log.
 
-- **GPU-accelerated terminal** — Powered by libghostty with GTK4 GtkGLArea rendering
-- **Workspaces, tabs, and split panes** — Organize parallel agent sessions
-- **Directory-bound workspaces** — Create a workspace with a folder browser; every terminal and split starts in that project directory
-- **Notification system** — Per-pane bell tracking, sidebar indicators, desktop notifications
-- **In-app browser** — CDP-based browser automation with accessibility tree snapshots, element interaction, and JS evaluation via [agent-browser](https://github.com/vercel-labs/agent-browser)
-- **Scriptable CLI** — `cmux` CLI with 34+ subcommands for workspaces, panes, surfaces, and browser control
-- **Socket API** — v2 JSON-RPC over Unix socket with SO_PEERCRED auth
-- **SSH remote workspaces** — cmuxd-remote deployment with bidirectional PTY proxy and reconnect
-- **Ghostty compatible** — Reads your existing `~/.config/ghostty/config` for themes, fonts, and colors
-- **Session persistence** — Atomic save/restore of full split tree topology with divider ratios
-- **Agent lifecycle integration** — Native resume and notification hooks for Claude, Codex, Grok, OpenCode, Pi, OMP, Campfire, Amp, Cursor, Gemini, Kiro, Antigravity, Hermes Agent, Kimi, Rovo Dev, Copilot, CodeBuddy, Factory, and Qoder
-- **Claude Code teams** — `cmux claude-teams` opens named teammates as native cmux panes with agent hooks and notifications
-- **Agent-accessible diff surfaces** — `cmux diff` opens patch, unstaged, staged, or branch changes in a searchable right-hand browser pane with unified and split layouts
+This fork no longer sends pull requests to nitecon (decision of 2026-09-28): the two code bases have diverged too far. Fixes useful to Ghostty or agent-browser are reported upstream.
 
-## Workspace workflows
+### Branches
 
-Use **New Workspace** (`Ctrl+N`) to choose a local folder and optionally a POSIX
-startup script. The script runs in each new terminal and again after restart;
-exported variables and directory changes are inherited by the shell. Leave the
-script empty for a normal terminal. A script can also launch a custom remote
-session, for example with `exec ssh -t my-host`.
+| Branch | Content |
+|---|---|
+| `local/wian` (default) | The build used every day. Only receives tested work. |
+| `feat/lot1` | Work in progress on the current batch (menus, tabs, panes, notifications). |
+| `main` | nitecon v0.2.1 plus a verification ledger of its features; not where development happens. |
 
-Use **New SSH Workspace** (`Ctrl+Shift+S`) for a daemon-backed SSH workspace.
-Enter an SSH config alias or `user@host`, with an optional absolute remote
-folder. SSH key/agent authentication must already work without prompts. Prepare
-the local remote-daemon binary with `./scripts/install-cmuxd-remote.sh`; cmux
-uploads it on connection. Splits and terminal tabs stay remote. Restart restores
-the host, folder and layout; reconnect starts fresh shells, so use a remote
-session manager if you need processes to survive a disconnect.
+## What differs from nitecon/cmux-gtk
 
-Workspace subtitles show `/first/…/basename`, the startup script, or
-`ssh://host/path`. Hover for the full location. Drag sidebar rows to reorder them,
-or use **Move Up/Down** in the context menu. **Background Color** provides a
-palette and a Default reset. Order and colors are saved with the session.
+About 190 commits since 2026-09-27. In short:
 
-In terminals, **Ctrl+Shift+C/V** copies and pastes the standard clipboard.
-Selecting text automatically makes it available to **middle-click paste** through
-Linux PRIMARY selection. Ghostty's `copy-on-select` configuration still applies;
-its Linux default is `true`.
+**Agents that survive**
+- Agent sessions recorded by hooks are resumed automatically after a restart (toggle in Preferences). The resume binding is refreshed on every prompt, so a missed `SessionStart` is caught up.
+- `cmux local-tmux`: sessions owned by a private tmux server that outlives cmux, with Preferences, list/status, attach, rename and kill — following upstream.
+- Hooks fail open when the app is gone, as on macOS. Pi dialogs (confirm/select/input) are announced as notifications.
 
-The [six-month upstream review](docs/research/upstream-2026-09.md) records which
-upstream features informed this port and which are candidates for later work.
+**Socket and CLI parity**
+- Upstream handles everywhere (`window:N`, `workspace:N`, `surface:N`, `--id-format`), upstream parameter names (`workspace_id`, `surface_id`, `tab_id`) and response shapes.
+- Workspace, tab and pane actions: `move-surface`, `reorder-surface`/`reorder-workspace`, `split-off`, `swap-pane`, `break-pane`, `join-pane`, `workspace-action`, `tab-action`, `rename-tab`, `move-tab-to-new-workspace`, `trigger-flash`, `surface-health`, `tree`.
+- Agent I/O: `send` (line breaks run as Enter), `send-key` with named keys, `read-screen` as plain text, `new-split/new-pane/new-surface/new-workspace --command` without stealing focus.
+- `cmux events`: a reconnectable event stream (workspaces, notifications, agent hooks).
+- The `debug.*` methods the upstream tests rely on (`debug.type`, `debug.shortcut.*`, `debug.panel_snapshot`, `debug.terminal.render_stats`…).
+- `cmux config` (JSONC read, validation against `cmux.schema.json`, set/unset keeping comments), `cmux settings`, `cmux shortcuts`, `reload-config`; the app reads `cmux.json` shortcuts over `config.toml`.
 
-## Install
+**Interface like macOS**
+- A single title row: sidebar, notification bell, new-workspace menu, focus back/forward, the original's menu bar (cmux, File, Edit, View, Notifications, History, Window, Help), workspace name, file explorer toggle and window buttons. One embedded icon pack (Tabler).
+- Sidebar: agent activity per workspace (spinner, unread badge, latest message, one status line per agent), adjustable width (120–260 px), no close cross on rows (close from the context menu).
+- Notifications like upstream: one per terminal, focusing a terminal marks it read, one-line summaries of agent replies, a live Notifications menu (recent items, Toggle Unread, Mark All Read, Clear All). Closing a terminal or workspace purges its notifications.
+- Tabs and panes: terminal titles on tabs, Close Tab, Close Other Tabs, Rename Tab, next/previous tab, reorder, Equalize Splits, Resize Pane, Zoom Pane.
+- Find bar in the terminal (Edit › Find, on Ghostty's search), Ctrl+mouse-wheel text zoom with a percentage bubble, Preferences split into App, Terminal and Shortcuts pages (rebind, unbind, reset; keys reserved for terminals and agents are refused with a reason).
+- File explorer in a right panel: tree of the workspace's folder, live updates, J/K/H/L navigation, `/` filter, context menu, drag a row onto a terminal to paste its path.
 
-### Homebrew on Linux (recommended)
+**Terminal input**
+- Dead keys (through the GTK input method, and on Wayland without one).
+- Touchpad scrolling scaled like Ghostty's GTK runtime, optional inverted scrolling.
+- Files dropped on a terminal are pasted as shell-escaped paths.
+- A Ghostty fix for lost pty writes (upstream `f948d420`) applied at build time from `patches/ghostty/`.
 
-Homebrew 6 requires explicit trust before loading Casks from third-party taps.
-Trust only the cmux GTK Cask, then install it:
+**Browser**
+- The upstream browser socket methods are translated to [agent-browser](https://github.com/vercel-labs/agent-browser) actions, plus viewport, cookies, storage, init scripts and styles, downloads, offline, geolocation, trace, HAR and network routing.
+- `cmux markdown <file>` renders a Markdown file in a browser surface.
 
-```bash
-brew tap nitecon/cmux-gtk
-brew trust --cask nitecon/cmux-gtk/cmux-gtk
-brew install --cask nitecon/cmux-gtk/cmux-gtk
-```
+**Verification**
+- CI also runs on `local/wian`, every step runs even after a failure, real-daemon and real-binary scenarios, a mutation bench, and a ledger of what is verified (`docs/VERIFICATION.md`, `docs/NOS-MODIFICATIONS.md`).
 
-The trust decision is stored by Homebrew for future upgrades. It applies only
-to `cmux-gtk`, not every current or future Cask in the tap.
+## Build and run
 
-```bash
-brew upgrade --cask cmux-gtk
-```
-
-Launch cmux from your desktop application menu or run `cmux-app`. The installed
-commands are `cmux` and `cmux-app`.
-
-### Debian / Ubuntu (.deb)
-
-```bash
-sudo dpkg -i cmux-gtk_0.1.0_amd64.deb
-sudo apt-get install -f  # install dependencies if needed
-```
-
-### Fedora / RHEL (.rpm)
-
-```bash
-sudo rpm -i cmux-gtk-0.1.0-1.x86_64.rpm
-```
-
-### Build from source
+There are no packages for this fork. The Homebrew tap, `.deb`/`.rpm` and the install script of nitecon/cmux-gtk install nitecon's version, not this one.
 
 ```bash
 # Prerequisite: Rust toolchain (the setup script installs system libraries and Zig)
-git clone --recurse-submodules https://github.com/nitecon/cmux-gtk.git
+git clone --recurse-submodules https://github.com/WianBroes/cmux-gtk.git
 cd cmux-gtk
-./scripts/setup-linux-dev.sh # install dev dependencies and build libghostty
+./scripts/setup-linux-dev.sh   # dev dependencies, Ghostty patches, libghostty
 cargo build --release --bin cmux --bin cmux-app
+./target/release/cmux-app
 ```
 
-cmux uses an existing `agent-browser` from `CMUX_AGENT_BROWSER`, `PATH`, or its
-package installation path. Browser panes remain disabled when it is absent and
-cmux prints the upstream installation command. This keeps agent-browser optional
-and independently upgradeable.
+`cmux` is the CLI, `cmux-app` the application. cmux reads your `~/.config/ghostty/config` for themes, fonts and colors.
 
-### Direct binary install
+Browser panes use an existing `agent-browser` from `CMUX_AGENT_BROWSER`, `PATH` or its package path. Without it, browser panes stay disabled and cmux prints the upstream installation command.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/nitecon/cmux-gtk/main/scripts/install-linux.sh | bash
-```
+Desktop notifications use `notify-send` 0.8 or newer (`libnotify-bin` on Debian/Ubuntu, `libnotify` on Fedora/Arch). Messages stay in the app if desktop delivery fails.
 
-Direct binary installs check for updates quietly at most once per hour. Run
-`cmux update` to update immediately, or set `CMUX_NO_UPDATE=1` to disable
-automatic checks. Homebrew, Debian, RPM, and AppImage installations remain
-owned by their package manager.
+## Keyboard shortcuts
 
-## Browser Automation
-
-Agents running inside cmux can discover and use browser automation via the `cmux browser` CLI:
-
-```bash
-# Open a site (https:// auto-prepended if no scheme)
-cmux browser open slashdot.org            # returns surface:1 handle
-cmux browser open gmail.com --profile Default  # reuse an agent-browser Chrome profile
-
-# Interact with the page
-cmux browser surface:1 snapshot --interactive  # accessibility tree with element refs
-cmux browser surface:1 click e3               # click element by ref
-cmux browser surface:1 fill e5 "search term"  # fill input field
-cmux browser surface:1 eval 'document.title'  # evaluate JavaScript
-
-# Navigation
-cmux browser surface:1 goto example.com
-cmux browser surface:1 back
-cmux browser surface:1 forward
-cmux browser surface:1 reload
-
-# Management
-cmux browser list                          # list browser surfaces
-cmux browser close --surface surface:1     # close a surface
-```
-
-`--profile` accepts the Chrome profile name or persistent profile directory supported by
-`agent-browser`. The selector belongs to that browser surface, appears in `browser list`, and
-survives cmux session restoration. Omitting it creates the existing isolated ephemeral context.
-
-Browser commands default to JSON output (agents are the primary consumers). Use `--no-json` for human-readable output.
-
-Diff surfaces use the same browser automation boundary, so an agent can inspect and operate the
-viewer with `cmux browser`. Generated pages are self-contained, owner-only files under the cmux data
-directory. Patch input is limited to 32 MiB, Git collection has a 30-second deadline, and retained
-viewer files are pruned to 64 files or 256 MiB. Opening preserves terminal focus unless `--focus` is
-given.
-
-```bash
-cmux diff change.patch
-git diff | cmux diff - --layout split
-cmux diff --unstaged --cwd ~/src/project
-cmux diff --staged --focus
-cmux diff --branch --base origin/main
-```
-
-## CLI Reference
-
-```bash
-cmux --help                    # all commands
-cmux browser --help            # browser subcommands
-
-# Terminal management
-cmux list-workspaces           # list all workspaces
-cmux new-workspace --cwd ~/src/project --name project  # create a directory-bound workspace
-cmux list-surfaces             # list terminal surfaces
-cmux split --direction horizontal  # split current pane
-cmux list-panes                # list all panes
-
-# Agent teamwork
-cmux hooks setup               # install every detected supported agent hook
-cmux hooks setup codex         # install only Codex lifecycle hooks
-cmux claude-teams              # launch Claude teams in native cmux splits
-cmux claude-teams --model sonnet  # forward ordinary Claude arguments
-
-# Diff review
-cmux diff change.patch         # open a patch in a right-hand browser pane
-cmux diff --unstaged           # inspect current working-tree changes
-cmux diff --branch --base main # compare HEAD with a branch merge-base
-cmux diff --last-turn          # inspect changes since this agent's latest prompt
-cmux comments add --file src/main.rs --line 42 --message "Handle this error"
-cmux comments list             # list pending comments for the current Git repository
-cmux comments consume --all    # mark pending comments delivered to an agent
-cmux project .                 # open a manifest-aware project inspector
-
-# System
-cmux identify                  # instance info (version, platform, pid)
-cmux ping                      # check connectivity
-cmux raw <method> --params '{}' # send arbitrary JSON-RPC
-```
-
-Native lifecycle integrations cover Claude Code, Codex, Grok, OpenCode, Pi, OMP, Campfire,
-Amp, Cursor, Gemini CLI, Kiro, Antigravity, Hermes Agent, Kimi, Rovo Dev, GitHub Copilot, CodeBuddy, Factory Droid, and Qoder. Setup preserves
-unrelated provider configuration and binds resume and notification events to the
-originating terminal surface. Providers with prompt lifecycle events also record a
-bounded Git tree baseline, so `diff --last-turn` includes tracked and untracked work
-without modifying the repository index.
-
-### Socket Path
-
-The cmux socket is at `$XDG_RUNTIME_DIR/cmux/cmux.sock` (typically `/run/user/$UID/cmux/cmux.sock`).
-
-Override with `CMUX_SOCKET` environment variable or `--socket` flag.
-
-## Agent Skills
-
-When installed via .deb or .rpm, agent skills are available at `/usr/share/cmux/skills/`:
-
-- **cmux** — Core terminal multiplexer skill (workspaces, panes, surfaces, socket CLI)
-- **cmux-browser** — Browser automation skill (open sites, interact with pages, extract data)
-
-A `CLAUDE.md` at `/usr/share/cmux/CLAUDE.md` references skill paths so Claude Code discovers them automatically.
-
-## Architecture
-
-See [Architecture](Docs/Architecture.md), [Components](Docs/Components.md), and the linked coding standards for implementation boundaries and contributor guidance.
-
-- **Language:** Rust
-- **UI toolkit:** GTK4 via gtk4-rs
-- **Terminal engine:** Ghostty (manaflow-ai fork) via libghostty C FFI
-- **Async runtime:** tokio + glib spawn_local bridge
-- **Browser automation:** agent-browser daemon with CDP protocol
-- **Remote sessions:** Go daemon (cmuxd-remote) reused from macOS codebase
-- **Socket protocol:** v2 JSON-RPC, wire-compatible with macOS cmux
-
-## Keyboard Shortcuts
+macOS `⌘` becomes `Ctrl`. Shortcuts follow the **physical position of the key on a US keyboard**, like the original: on AZERTY, `Ctrl+]` is the key right of `P`. All of them can be changed in Preferences › Shortcuts or in `cmux.json`.
 
 | Shortcut | Action |
-|----------|--------|
-| Ctrl+N | Open the Create Workspace wizard |
-| Ctrl+1–8 | Jump to workspace 1–8 |
-| Ctrl+Shift+D | Split right |
-| Ctrl+D | Split down |
+|---|---|
+| Ctrl+N / Ctrl+Shift+S | New workspace / new SSH workspace |
+| Ctrl+1…9 | Go to workspace 1–9 |
+| Ctrl+] / Ctrl+[ | Next / previous workspace |
+| Ctrl+Shift+R | Rename workspace |
 | Ctrl+Shift+W | Close workspace |
-| Ctrl+W | Close pane |
-| Ctrl+] / [ | Next / previous workspace |
-| Ctrl+Shift+Page Up / Page Down | Move selected workspace up / down |
-| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous pane |
-| Ctrl+Shift+F | Find |
-| Ctrl+Shift+K | Clear scrollback |
+| Ctrl+D / Ctrl+Shift+D | Split right / split down |
+| Ctrl+Shift+arrows | Focus pane in that direction |
+| Ctrl+Alt+← / → | Focus back / forward |
+| Ctrl+Shift+= | Equalize splits |
+| Ctrl+Alt+Shift+arrows | Resize pane |
+| Ctrl+Shift+Enter | Zoom pane / exit zoom |
+| Ctrl+Shift+X | Close pane |
+| Ctrl+W / Ctrl+Alt+T | Close tab / close other tabs in pane |
+| Ctrl+R | Rename tab |
+| Ctrl+Shift+] / [ | Next / previous tab |
+| Ctrl+Alt+Shift+[ / ] | Move tab left / right |
+| Ctrl+F, Ctrl+G | Find, find next |
+| Ctrl+B / Ctrl+Alt+B | Toggle sidebar / file explorer |
+| Ctrl+Shift+E | Focus the file explorer |
+| Ctrl+Alt+U | Toggle unread |
+| Ctrl+Shift+B / Ctrl+Shift+Q | Open / close browser |
+| Ctrl+Shift+C / V | Copy / paste |
 
-Shortcuts are configurable via TOML config file. Workspace move overrides are
-`move_workspace_up` and `move_workspace_down` under `[shortcuts]`.
+## Workspaces
 
-## Terminal preferences
+**New Workspace** (`Ctrl+N`) chooses a local folder and an optional POSIX startup script, run in each new terminal and again after restart. **New SSH Workspace** (`Ctrl+Shift+S`) opens a daemon-backed SSH workspace (SSH config alias or `user@host`, key/agent authentication without prompts; prepare the daemon with `./scripts/install-cmuxd-remote.sh`). Splits and tabs stay remote; after a reconnect shells start fresh, so use `local-tmux` or a remote session manager for processes that must survive.
 
-Open the window menu → **Preferences** to set the terminal font size (6–72
-points). **Apply** updates existing terminals and saves the size for new tabs
-and future launches in `~/.config/cmux/preferences.json` (respecting
-`XDG_CONFIG_HOME`). Until a size is saved, terminals use their Ghostty configuration.
+The whole layout (split tree, divider ratios, order, colors) is saved and restored. To recover the snapshot of the last normal launch, quit cmux and run `cmux-app --restore-previous-session`.
+
+## CLI
+
+```bash
+cmux --help                         # all commands
+cmux tree                           # windows, workspaces, panes and tabs
+cmux new-split right --command htop # open beside the calling terminal, keep focus
+cmux send --surface surface:2 'make test\n'
+cmux read-screen --surface surface:2
+cmux send-key --surface surface:2 ctrl-c
+cmux events                         # stream of workspace, notification and hook events
+cmux hooks setup                    # install hooks of every detected agent
+cmux local-tmux list                # tmux-backed sessions that outlive cmux
+cmux browser open example.com       # browser surface driven by agent-browser
+cmux diff --unstaged                # review working-tree changes in a side pane
+cmux markdown NOTES.md              # render a Markdown file
+cmux config validate                # check cmux.json against the schema
+cmux identify                       # instance info
+```
+
+Agent hooks exist for Claude Code, Codex, Grok, OpenCode, Pi, OMP, Campfire, Amp, Cursor, Gemini CLI, Kiro, Antigravity, Hermes Agent, Kimi, Rovo Dev, GitHub Copilot, CodeBuddy, Factory Droid and Qoder. Setup keeps unrelated provider configuration and binds resume and notification events to the originating terminal.
+
+The socket is `$XDG_RUNTIME_DIR/cmux/cmux.sock` (override with `CMUX_SOCKET` or `--socket`): v2 JSON-RPC, wire-compatible with macOS cmux, with SO_PEERCRED authentication.
 
 ## Diagnostics
 
-Window size and maximized state are restored on launch. X11 also restores the
-last position when that monitor is still available; Wayland controls placement
-through the compositor. Window state is saved beside the session in
-`$XDG_DATA_HOME/cmux/window-state.json` (normally `~/.local/share/cmux/`).
+Logs: `$XDG_STATE_HOME/cmux/cmux.log` (normally `~/.local/state/cmux/cmux.log`, override with `CMUX_LOG`). `cmux diagnostics --json` reports process resources; `cmux --verbose ping` gives a trace ID to match CLI requests with GTK timings.
 
-cmux records startup, pane/tab lifecycle events, and panic backtraces in
-`$XDG_STATE_HOME/cmux/cmux.log` (normally `~/.local/state/cmux/cmux.log`). Set
-`CMUX_LOG` to use a different path. Desktop-launch output is also available
-through `journalctl --user`.
+## Architecture
 
-Use `cmux diagnostics --json` for process resources and diagnostic writer health.
-Use `cmux --verbose ping` to obtain a trace ID for matching CLI requests to GTK
-queue and dispatch timings in the JSONL diagnostic file. New log output rotates
-at 8 MiB with one backup (`cmux.log.1`); a full diagnostic queue drops records
-instead of blocking the application, and the snapshot reports that count.
+Rust, GTK4 (gtk4-rs), Ghostty through libghostty, tokio bridged to the GLib main loop, agent-browser over CDP, the Go remote daemon (`cmuxd-remote`) reused from macOS. See [Architecture](Docs/Architecture.md) and [Components](Docs/Components.md).
 
-## Building Packages
+## Origin and credits
 
-```bash
-# Build all release binaries
-cargo build --release --bin cmux --bin cmux-app
+This code base has a long lineage, and parts of it come from other projects:
 
-# Optional: resolve an installed or locally linked agent-browser
-./scripts/resolve-agent-browser.sh
+- **[manaflow-ai/cmux](https://github.com/manaflow-ai/cmux)** (Lawrence Chen and contributors, GPL-3.0-or-later): the original macOS app. Its history is in ours (about 1,400 commits). It is the reference for interface and behavior, and its `tests_v2` suite is replayed as the parity oracle (the tests are run, not copied).
+- **[bradwilson331/cmux-linux](https://github.com/bradwilson331/cmux-linux)** (Brad): the first Linux port (March 2026), in our history.
+- **[nitecon/cmux-gtk](https://github.com/nitecon/cmux-gtk)** (Will Hattingh): the GTK4 port this fork starts from (v0.2.1, September 2026).
+- **[douglas/cmux-gtk](https://github.com/douglas/cmux-gtk)** (Douglas Soares de Andrade, AGPL-3.0): the file explorer tree structure (lazy loading with a placeholder row, `TreeStore` columns in `src/file_explorer.rs`) follows his implementation.
+- **[Ghostty](https://github.com/ghostty-org/ghostty)** (MIT): the terminal engine, through the submodule nitecon/ghostty ← manaflow-ai/ghostty ← ghostty-org/ghostty.
+- **[agent-browser](https://github.com/vercel-labs/agent-browser)** (Vercel Labs): the browser daemon, used as an external tool.
+- **[Tabler Icons](https://github.com/tabler/tabler-icons)** (MIT), four **[Adwaita](https://gitlab.gnome.org/GNOME/adwaita-icon-theme)** symbolic icons as fallback, **[Bonsplit](https://github.com/almonk/bonsplit)** (MIT).
 
-# Build .deb
-./packaging/scripts/build-deb.sh
-
-# Build .rpm
-./packaging/scripts/build-rpm.sh
-
-# Validate packages
-./packaging/scripts/validate-deb.sh
-./packaging/scripts/validate-rpm.sh
-```
-
-## Continuous Integration and Releases
-
-Pull requests and commits to `main` run the development CI suite: formatting,
-workspace checks, Clippy correctness vetting, debug builds, unit tests,
-remote-daemon tests, and the web typecheck.
-
-Pushing a semantic version tag such as `v0.2.0` runs the Linux release workflow
-without rerunning the development suite. It builds against the Debian 12 glibc
-baseline, validates the binaries and packages, publishes the tarball, checksum,
-DEB, and RPM to the GitHub release, then updates
-[`nitecon/homebrew-cmux-gtk`](https://github.com/nitecon/homebrew-cmux-gtk). The workflow
-can also be dispatched manually without publishing for an artifact-only dry run.
+Full license texts: [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
 
 ## License
 
-This project is licensed under the GNU Affero General Public License v3.0 or later (`AGPL-3.0-or-later`).
-
-See `LICENSE` for the full text.
-
-## Upstream
-
-Linux port of [cmux](https://github.com/manaflow-ai/cmux) by [manaflow-ai](https://github.com/manaflow-ai).
-
-Desktop message delivery uses `notify-send` 0.8 or newer and the notification service in your desktop session. DEB/RPM/Homebrew dependencies and the development setup include the helper. For an archive installation, install `libnotify-bin` on Debian/Ubuntu or `libnotify` on Fedora/Arch; inbox messages remain available if desktop delivery fails.
-
-To recover the snapshot archived at the last normal launch, quit cmux and run `cmux-app --restore-previous-session`. The backup lives beside `session.json` as `session.previous.json`; autosaves do not replace it during that run. Missing or invalid backups fail without replacing your current saved session.
+GNU Affero General Public License v3.0 or later (`AGPL-3.0-or-later`), see `LICENSE`.

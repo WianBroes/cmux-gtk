@@ -4,8 +4,9 @@
 //! `FileExplorerWorkspaceRootResolver.swift`): the tree lists the focused workspace's
 //! current directory, directories first in case-insensitive name order, dot files
 //! included (upstream shows hidden files by default) and children loaded on the first
-//! expansion. The GTK widgets follow douglas's `file_explorer.rs`: a `TreeView` on a
-//! `TreeStore` where an unloaded directory carries a dummy child row for its expander.
+//! expansion. The GTK widgets follow douglas's `file_explorer.rs`
+//! (https://github.com/douglas/cmux-gtk, AGPL-3.0): a `TreeView` on a `TreeStore`
+//! where an unloaded directory carries a dummy child row for its expander.
 //!
 //! Ownership: one `FileExplorer` lives inside the right sidebar for the whole session;
 //! it is built, read and mutated on the GTK main thread only. Every filesystem read uses
