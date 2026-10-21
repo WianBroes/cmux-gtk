@@ -2090,11 +2090,17 @@ fn handle_socket_command_traced(
                 "focus_down" | "focusdown" => Ok(A::FocusDown),
                 "split_right" | "splitright" => Ok(A::SplitRight),
                 "split_down" | "splitdown" => Ok(A::SplitDown),
-                known @ ("resize_pane_left" | "resizepaneleft" | "resize-pane-left"
-                | "resize_pane_right" | "resizepaneright" | "resize-pane-right"
-                | "resize_pane_up" | "resizepaneup" | "resize-pane-up"
-                | "resize_pane_down" | "resizepanedown" | "resize-pane-down"
-                | "workspace_digits" | "workspace_number" | "select_workspace_by_number"
+                "resize_pane_left" | "resizepaneleft" | "resize-pane-left" => {
+                    Ok(A::ResizePaneLeft)
+                }
+                "resize_pane_right" | "resizepaneright" | "resize-pane-right" => {
+                    Ok(A::ResizePaneRight)
+                }
+                "resize_pane_up" | "resizepaneup" | "resize-pane-up" => Ok(A::ResizePaneUp),
+                "resize_pane_down" | "resizepanedown" | "resize-pane-down" => {
+                    Ok(A::ResizePaneDown)
+                }
+                known @ ("workspace_digits" | "workspace_number" | "select_workspace_by_number"
                 | "surface_digits" | "surface_number" | "select_surface_by_number"
                 | "focus_sidebar" | "focussidebar"
                 | "pane_digits" | "pane_number" | "focus_pane_by_number") => Err(format!(

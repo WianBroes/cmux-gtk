@@ -166,6 +166,7 @@ impl SplitEngine {
         Some(SplitEngine {
             root,
             active_pane_id: active_id,
+            zoom: None,
             next_pane_id,
             ghostty_app,
             working_directory,

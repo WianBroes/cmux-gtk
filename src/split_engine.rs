@@ -71,6 +71,15 @@ pub enum FocusDirection {
     Down,
 }
 
+/// Direction for moving the divider next to the active pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResizeDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
 /// A terminal or browser surface shown as a tab inside one pane.
 #[derive(Clone)]
 pub enum PaneSurface {
@@ -324,6 +333,7 @@ fn surface_tab_label(surface: &PaneSurface) -> gtk4::Box {
     gesture.connect_released({
         let popover = popover.downgrade();
         let area = area.clone();
+        let tab_label = tab.downgrade();
         move |_, _, x, y| {
             let Some(popover) = popover.upgrade() else {
                 return;
@@ -350,6 +360,24 @@ fn surface_tab_label(surface: &PaneSurface) -> gtk4::Box {
             append_tab_menu_item(&close, "Close Tabs to Right", "win.tab-close-right", uuid);
             append_tab_menu_item(&close, "Close Other Tabs", "win.tab-close-others", uuid);
             model.append_section(None, &close);
+            if let Some(notebook) = tab_label
+                .upgrade()
+                .and_then(|tab| tab.ancestor(gtk4::Notebook::static_type()))
+                .and_then(|widget| widget.downcast::<gtk4::Notebook>().ok())
+            {
+                // Several panes: this pane's notebook sits directly in a split divider (the
+                // sidebar's Paned is a farther ancestor of every pane, so `ancestor` would lie).
+                if notebook.parent().is_some_and(|parent| parent.is::<gtk4::Paned>()) {
+                    let zoom = gtk4::gio::Menu::new();
+                    let label = if notebook.has_css_class("zoomed-pane") {
+                        "Exit Zoom"
+                    } else {
+                        "Zoom Pane"
+                    };
+                    append_tab_menu_item(&zoom, label, "win.tab-toggle-zoom", uuid);
+                    model.append_section(None, &zoom);
+                }
+            }
             popover.set_menu_model(Some(&model));
             popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
             popover.popup();
@@ -984,10 +1012,22 @@ fn attach_terminal_context_menu(gl_area: &gtk4::GLArea) {
     gl_area.add_controller(gesture);
 }
 
+/// Upstream `PaneResizeStepSettings.defaultPixels`.
+const PANE_RESIZE_STEP: i32 = 20;
+
+/// Hidden siblings and divider positions while one pane fills the workspace.
+struct PaneZoom {
+    pane_id: u64,
+    hidden: Vec<gtk4::Widget>,
+    positions: Vec<(gtk4::Paned, i32)>,
+}
+
 /// SplitEngine manages one workspace's pane layout tree.
 pub struct SplitEngine {
     pub root: SplitNode,
     pub active_pane_id: u64,
+    /// The zoomed pane, if any; session restore never persists it.
+    zoom: Option<PaneZoom>,
     /// Monotonically increasing pane ID counter.
     next_pane_id: u64,
     /// Ghostty app handle needed to create new surfaces.
@@ -1022,6 +1062,7 @@ impl SplitEngine {
         SplitEngine {
             root,
             active_pane_id: pane_id,
+            zoom: None,
             next_pane_id: pane_id + 1,
             ghostty_app,
             working_directory,
@@ -1070,6 +1111,9 @@ impl SplitEngine {
     /// Mark a pane active without changing GTK focus. Pointer handlers use this
     /// before focusing the exact child that was clicked.
     pub fn activate_pane(&mut self, pane_id: u64) -> bool {
+        if self.zoom.as_ref().is_some_and(|zoom| zoom.pane_id != pane_id) {
+            self.clear_zoom();
+        }
         if self.root.find_node(pane_id).is_none() {
             return false;
         }
@@ -1106,6 +1150,9 @@ impl SplitEngine {
         let Some(pane_id) = self.root.find_pane_id_by_uuid(uuid) else {
             return false;
         };
+        if self.zoom.as_ref().is_some_and(|zoom| zoom.pane_id != pane_id) {
+            self.clear_zoom();
+        }
         let Some((notebook, surfaces)) = find_pane_tabs(&self.root, pane_id) else {
             return false;
         };
@@ -1142,6 +1189,7 @@ impl SplitEngine {
     /// Split the active pane and focus a new terminal, inheriting native context when available.
     /// Browser-only panes use workspace launch settings. Return None for a missing active pane.
     pub fn split_active(&mut self, orientation: gtk4::Orientation) -> Option<u64> {
+        self.clear_zoom();
         let active_id = self.active_pane_id;
         self.root.find_node(active_id)?;
         let new_pane_id = self.next_pane_id;
@@ -1251,6 +1299,7 @@ impl SplitEngine {
 
     /// Launch an explicit local command in a new pane to the right, like Split Right.
     pub(crate) fn split_right_command(&mut self, command: &str) -> Option<u64> {
+        self.clear_zoom();
         if self.remote_launch.is_some() {
             return None;
         }
@@ -1314,6 +1363,7 @@ impl SplitEngine {
         launch: TerminalLaunch,
         focus: bool,
     ) -> Result<(u64, Uuid), &'static str> {
+        self.clear_zoom();
         if self.root.find_node(target_pane).is_none() {
             return Err("pane not found");
         }
@@ -1382,6 +1432,7 @@ impl SplitEngine {
         launch: TerminalLaunch,
         focus: bool,
     ) -> Result<Uuid, &'static str> {
+        self.clear_zoom();
         let (notebook, surfaces) = find_pane_tabs(&self.root, pane_id).ok_or("pane not found")?;
         // SAFETY: as in `new_terminal_tab`.
         let inherited = find_any_terminal_surface(&self.root, pane_id).map(|surface| unsafe {
@@ -1434,6 +1485,7 @@ impl SplitEngine {
 
     /// Create and select a terminal surface tab in the focused pane.
     pub fn new_terminal_tab(&mut self) -> Option<Uuid> {
+        self.clear_zoom();
         let pane_id = self.active_pane_id;
         // SAFETY: the pane lookup returns a live GTK-owned native surface. The
         // non-copying result owns its directory independently of that source.
@@ -1466,6 +1518,7 @@ impl SplitEngine {
 
     /// Select a pane and create a terminal tab there (used by Ghostty actions).
     pub fn new_terminal_tab_for_pane(&mut self, pane_id: u64) -> Option<Uuid> {
+        self.clear_zoom();
         self.root.find_node(pane_id)?;
         self.active_pane_id = pane_id;
         self.root.update_focus_css(pane_id);
@@ -1500,6 +1553,7 @@ impl SplitEngine {
         select: bool,
         profile: Option<String>,
     ) -> Option<crate::browser::PreviewPaneWidgets> {
+        self.clear_zoom();
         let (notebook, surfaces) = find_pane_tabs(&self.root, pane_id)?;
         let widgets = create_preview_surface(profile);
         append_pane_surface(
@@ -1528,6 +1582,7 @@ impl SplitEngine {
         profile: Option<String>,
         focus: bool,
     ) -> Result<(u64, crate::browser::PreviewPaneWidgets), &'static str> {
+        self.clear_zoom();
         if self.root.find_node(target_pane).is_none() {
             return Err("pane not found");
         }
@@ -1737,6 +1792,7 @@ impl SplitEngine {
         position: Option<usize>,
         focus: bool,
     ) -> Result<SurfaceMoveResult, &'static str> {
+        self.clear_zoom();
         let source_pane = self
             .find_pane_id_by_uuid(&uuid.to_string())
             .ok_or("surface not found")?;
@@ -1844,6 +1900,7 @@ impl SplitEngine {
 
     /// Detach one stable surface without destroying its terminal or browser owner.
     pub(crate) fn detach_surface(&mut self, uuid: Uuid) -> Result<DetachedSurface, &'static str> {
+        self.clear_zoom();
         let source_pane = self
             .find_pane_id_by_uuid(&uuid.to_string())
             .ok_or("surface not found")?;
@@ -1882,6 +1939,7 @@ impl SplitEngine {
         position: Option<usize>,
         focus: bool,
     ) -> SurfaceMoveResult {
+        self.clear_zoom();
         let (notebook, surfaces) = find_pane_tabs(&self.root, pane_id)
             .expect("cross-workspace destination validated before detach");
         let count = surfaces.borrow().len();
@@ -1909,6 +1967,7 @@ impl SplitEngine {
         target_pane: u64,
         direction: FocusDirection,
     ) -> Result<u64, &'static str> {
+        self.clear_zoom();
         let source_pane = self
             .find_pane_id_by_uuid(&uuid.to_string())
             .ok_or("surface not found")?;
@@ -1986,6 +2045,7 @@ impl SplitEngine {
     /// Removes the active leaf, replaces its parent Split with the surviving sibling.
     /// Returns the new active pane_id, or None if this was the last pane.
     pub fn close_active(&mut self) -> Option<u64> {
+        self.clear_zoom();
         self.close_pane(self.active_pane_id)
     }
 
@@ -2021,6 +2081,7 @@ impl SplitEngine {
     /// Close a tab and its pane when empty, leaving final-workspace policy to the caller.
     /// LastSurfaceInPane means only the workspace's final pane remains; no workspace is removed here.
     pub fn close_surface_and_empty_pane(&mut self, uuid: Uuid) -> CloseSurfaceResult {
+        self.clear_zoom();
         match self.close_surface_tab(uuid) {
             CloseSurfaceResult::LastSurfaceInPane => {
                 let pane_id = self.find_pane_id_by_uuid(&uuid.to_string());
@@ -2040,6 +2101,7 @@ impl SplitEngine {
     /// Close one sibling surface tab without removing its containing pane.
     /// Closing the final surface delegates to the existing pane-close flow.
     pub fn close_surface_tab(&mut self, uuid: Uuid) -> CloseSurfaceResult {
+        self.clear_zoom();
         let Some(pane_id) = self.find_pane_id_by_uuid(&uuid.to_string()) else {
             crate::diagnostics::event(format_args!("surface-tab close not found uuid={uuid}"));
             return CloseSurfaceResult::NotFound;
@@ -2103,6 +2165,7 @@ impl SplitEngine {
 
     /// Navigate focus to the pane adjacent in `direction` (Ctrl+Alt+arrows per D-10).
     pub fn focus_next_in_direction(&mut self, direction: FocusDirection) -> bool {
+        self.clear_zoom();
         let active_id = self.active_pane_id;
         if let Some(new_id) = find_adjacent(&self.root, active_id, direction) {
             // Unfocus old surface.
@@ -2212,11 +2275,98 @@ impl SplitEngine {
         let Some(pane_id) = self.pane_for_ref(reference) else {
             return false;
         };
+        if self.zoom.as_ref().is_some_and(|zoom| zoom.pane_id != pane_id) {
+            self.clear_zoom();
+        }
         if !self.activate_pane(pane_id) {
             return false;
         }
         self.grab_active_focus();
         true
+    }
+
+    /// Move the nearest matching ancestor divider by one resize step.
+    pub fn resize_active_pane(&mut self, direction: ResizeDirection) -> bool {
+        self.clear_zoom();
+        let mut splits = Vec::new();
+        if !collect_split_ancestors(&self.root, self.active_pane_id, &mut splits) {
+            return false;
+        }
+        let (orientation, pane_in_start, step) = match direction {
+            ResizeDirection::Right => (gtk4::Orientation::Horizontal, true, PANE_RESIZE_STEP),
+            ResizeDirection::Down => (gtk4::Orientation::Vertical, true, PANE_RESIZE_STEP),
+            ResizeDirection::Left => (gtk4::Orientation::Horizontal, false, -PANE_RESIZE_STEP),
+            ResizeDirection::Up => (gtk4::Orientation::Vertical, false, -PANE_RESIZE_STEP),
+        };
+        let Some((paned, _, _)) = splits
+            .into_iter()
+            .find(|(_, split_orientation, split_pane_in_start)| {
+                *split_orientation == orientation && *split_pane_in_start == pane_in_start
+            })
+        else {
+            return false;
+        };
+        paned.set_position(paned.position() + step);
+        true
+    }
+
+    /// Give every split a position proportional to the pane counts on each side.
+    pub fn equalize_splits(&mut self) -> bool {
+        self.clear_zoom();
+        equalize_node(&self.root)
+    }
+
+    /// Fill the workspace with one pane, or leave zoom when it is already active.
+    pub fn toggle_zoom(&mut self, pane_id: u64) -> bool {
+        if self.zoom.is_some() {
+            self.clear_zoom();
+            return true;
+        }
+        if matches!(self.root, SplitNode::Leaf { .. }) || self.root.find_node(pane_id).is_none() {
+            return false;
+        }
+        let Some((notebook, _)) = find_pane_tabs(&self.root, pane_id) else {
+            return false;
+        };
+        let mut hidden = Vec::new();
+        let mut positions = Vec::new();
+        if !collect_zoom_ancestors(&self.root, pane_id, &mut hidden, &mut positions) {
+            return false;
+        }
+        for widget in &hidden {
+            widget.set_visible(false);
+        }
+        notebook.add_css_class("zoomed-pane");
+        self.active_pane_id = pane_id;
+        self.root.update_focus_css(pane_id);
+        self.zoom = Some(PaneZoom {
+            pane_id,
+            hidden,
+            positions,
+        });
+        self.grab_active_focus();
+        true
+    }
+
+    /// Restore the pane layout hidden by [`Self::toggle_zoom`].
+    pub fn clear_zoom(&mut self) {
+        let Some(zoom) = self.zoom.take() else {
+            return;
+        };
+        for widget in zoom.hidden {
+            widget.set_visible(true);
+        }
+        for (paned, position) in zoom.positions {
+            paned.set_position(position);
+        }
+        if let Some((notebook, _)) = find_pane_tabs(&self.root, zoom.pane_id) {
+            notebook.remove_css_class("zoomed-pane");
+        }
+    }
+
+    /// Whether one pane currently fills the workspace.
+    pub fn is_zoomed(&self) -> bool {
+        self.zoom.is_some()
     }
 
     /// Clone a terminal widget by stable tab identity without changing notebook selection or focus.
@@ -2769,6 +2919,106 @@ fn collect_leaves_in_order(node: &SplitNode, out: &mut Vec<u64>) {
         SplitNode::Split { start, end, .. } => {
             collect_leaves_in_order(start, out);
             collect_leaves_in_order(end, out);
+        }
+    }
+}
+
+/// Collect the splits on the path to `pane_id`, nearest ancestor first.
+/// The flag is true when the pane is in the split's `start` child.
+fn collect_split_ancestors(
+    node: &SplitNode,
+    pane_id: u64,
+    out: &mut Vec<(gtk4::Paned, gtk4::Orientation, bool)>,
+) -> bool {
+    match node {
+        SplitNode::Leaf { pane_id: id, .. } => *id == pane_id,
+        SplitNode::Split {
+            orientation,
+            paned,
+            start,
+            end,
+        } => {
+            if collect_split_ancestors(start, pane_id, out) {
+                out.push((paned.clone(), *orientation, true));
+                true
+            } else if collect_split_ancestors(end, pane_id, out) {
+                out.push((paned.clone(), *orientation, false));
+                true
+            } else {
+                false
+            }
+        }
+    }
+}
+
+/// Collect the siblings to hide and the divider positions on the path to `pane_id`.
+fn collect_zoom_ancestors(
+    node: &SplitNode,
+    pane_id: u64,
+    hidden: &mut Vec<gtk4::Widget>,
+    positions: &mut Vec<(gtk4::Paned, i32)>,
+) -> bool {
+    match node {
+        SplitNode::Leaf { pane_id: id, .. } => *id == pane_id,
+        SplitNode::Split {
+            paned, start, end, ..
+        } => {
+            if collect_zoom_ancestors(start, pane_id, hidden, positions) {
+                hidden.push(end.widget());
+                positions.push((paned.clone(), paned.position()));
+                true
+            } else if collect_zoom_ancestors(end, pane_id, hidden, positions) {
+                hidden.push(start.widget());
+                positions.push((paned.clone(), paned.position()));
+                true
+            } else {
+                false
+            }
+        }
+    }
+}
+
+/// Pane count along `orientation`: leaves are one, matching splits add their children,
+/// and a split with the other orientation counts as one.
+fn count_panes_along(node: &SplitNode, orientation: gtk4::Orientation) -> i32 {
+    match node {
+        SplitNode::Leaf { .. } => 1,
+        SplitNode::Split {
+            orientation: split_orientation,
+            start,
+            end,
+            ..
+        } => {
+            if *split_orientation == orientation {
+                count_panes_along(start, orientation) + count_panes_along(end, orientation)
+            } else {
+                1
+            }
+        }
+    }
+}
+
+/// Equalize every split in this subtree; true when it contains at least one split.
+fn equalize_node(node: &SplitNode) -> bool {
+    match node {
+        SplitNode::Leaf { .. } => false,
+        SplitNode::Split {
+            orientation,
+            paned,
+            start,
+            end,
+        } => {
+            let first = count_panes_along(start, *orientation);
+            let second = count_panes_along(end, *orientation);
+            if first + second > 0 {
+                let position =
+                    (paned.max_position() as f64 * first as f64 / (first + second) as f64).round()
+                        as i32;
+                paned.set_position(position);
+            }
+            equalize_node(start);
+            equalize_node(end);
+            true
         }
     }
 }

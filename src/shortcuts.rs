@@ -4,7 +4,7 @@ pub use crate::browser::ui::{handle_browser_close, handle_browser_open, restore_
 
 use crate::app_state::AppState;
 use crate::config::ShortcutAction;
-use crate::split_engine::FocusDirection;
+use crate::split_engine::{FocusDirection, ResizeDirection};
 use gtk4::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -133,6 +133,43 @@ pub fn install_shortcuts(
                 }
                 ShortcutAction::SplitDown => {
                     handle_split(&state, true);
+                }
+                ShortcutAction::EqualizeSplits => {
+                    let changed = {
+                        let mut s = state.borrow_mut();
+                        s.active_split_engine_mut()
+                            .is_some_and(|engine| engine.equalize_splits())
+                    };
+                    if changed {
+                        state.borrow().trigger_session_save();
+                    }
+                }
+                action @ (ShortcutAction::ResizePaneLeft
+                | ShortcutAction::ResizePaneRight
+                | ShortcutAction::ResizePaneUp
+                | ShortcutAction::ResizePaneDown) => {
+                    let direction = match action {
+                        ShortcutAction::ResizePaneLeft => ResizeDirection::Left,
+                        ShortcutAction::ResizePaneRight => ResizeDirection::Right,
+                        ShortcutAction::ResizePaneUp => ResizeDirection::Up,
+                        ShortcutAction::ResizePaneDown => ResizeDirection::Down,
+                        _ => unreachable!(),
+                    };
+                    let changed = {
+                        let mut s = state.borrow_mut();
+                        s.active_split_engine_mut()
+                            .is_some_and(|engine| engine.resize_active_pane(direction))
+                    };
+                    if changed {
+                        state.borrow().trigger_session_save();
+                    }
+                }
+                ShortcutAction::ToggleSplitZoom => {
+                    let mut s = state.borrow_mut();
+                    if let Some(engine) = s.active_split_engine_mut() {
+                        let pane_id = engine.active_pane_id;
+                        engine.toggle_zoom(pane_id);
+                    }
                 }
                 ShortcutAction::ClosePane => {
                     handle_close_pane(&state, &app_clone);
@@ -354,8 +391,8 @@ pub fn install_shortcuts(
     key_ctrl.connect_key_pressed({
         let dispatch = dispatch.clone();
         move |_ctrl, keyval, keycode, mods| {
-            // Bracket shortcuts follow the key's place on a US keyboard (Wian, 2026-10-21): on
-            // a Belgian layout that key types ^ or $, and Shift turns ] into } everywhere.
+            // Bracket and = shortcuts follow the key's place on a US keyboard (Wian, 2026-10-21):
+            // on a Belgian layout those keys type ^, $ or -, and Shift turns ] into } everywhere.
             let result = dispatch(keyval, mods);
             match us_bracket_key(keycode) {
                 Some(bracket) if result == gtk4::glib::Propagation::Proceed && bracket != keyval => {
@@ -427,6 +464,12 @@ pub const MENU_ACTIONS: &[(&str, ShortcutAction)] = &[
     ("previous-surface", ShortcutAction::PrevSurface),
     ("reorder-surface-left", ShortcutAction::MoveSurfaceLeft),
     ("reorder-surface-right", ShortcutAction::MoveSurfaceRight),
+    ("equalize-splits", ShortcutAction::EqualizeSplits),
+    ("resize-pane-left", ShortcutAction::ResizePaneLeft),
+    ("resize-pane-right", ShortcutAction::ResizePaneRight),
+    ("resize-pane-up", ShortcutAction::ResizePaneUp),
+    ("resize-pane-down", ShortcutAction::ResizePaneDown),
+    ("toggle-split-zoom", ShortcutAction::ToggleSplitZoom),
 ];
 
 /// Find Next (Ctrl+G), Find Previous (Ctrl+Alt+G), Hide Find Bar (Ctrl+Alt+Shift+F) while the
@@ -462,9 +505,10 @@ fn find_key(
     gtk4::glib::Propagation::Stop
 }
 
-/// `[` / `]` for the X11 keycodes of their keys on a US keyboard (evdev 26/27 + 8).
+/// `=` / `[` / `]` for the X11 keycodes of their keys on a US keyboard (evdev 13/26/27 + 8).
 fn us_bracket_key(keycode: u32) -> Option<gtk4::gdk::Key> {
     match keycode {
+        21 => Some(gtk4::gdk::Key::equal),
         34 => Some(gtk4::gdk::Key::bracketleft),
         35 => Some(gtk4::gdk::Key::bracketright),
         _ => None,

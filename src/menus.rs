@@ -194,6 +194,30 @@ pub fn register_actions(
     });
     window.add_action(&action);
 
+    // win.tab-toggle-zoom — fill the workspace with the tab's pane, or leave zoom.
+    let action = gio::SimpleAction::new("tab-toggle-zoom", Some(&String::static_variant_type()));
+    action.connect_activate({
+        let state = state.clone();
+        move |_, parameter| {
+            let Some(uuid) = parameter.and_then(|value| value.str()).map(str::to_owned) else {
+                return;
+            };
+            let mut s = state.borrow_mut();
+            let Some(index) = crate::tab_actions::workspace_of(&s, &uuid) else {
+                return;
+            };
+            let Some(engine) = s.split_engines.get_mut(index) else {
+                return;
+            };
+            let Some((pane_id, _)) = engine.surface_location(&uuid) else {
+                return;
+            };
+            engine.focus_surface(&uuid);
+            engine.toggle_zoom(pane_id);
+        }
+    });
+    window.add_action(&action);
+
     // GtkNotebook pointer reordering mutates its local surface model before asking the
     // application to persist the resulting workspace topology.
     let action = gio::SimpleAction::new("surface-tabs-changed", None);
@@ -865,6 +889,13 @@ pub fn build_menu_bar() -> gio::Menu {
         &[
             ("Split Right", "win.split-right"),
             ("Split Down", "win.split-down"),
+        ],
+        &[
+            ("Equalize Splits", "win.equalize-splits"),
+            ("Resize Pane Left", "win.resize-pane-left"),
+            ("Resize Pane Right", "win.resize-pane-right"),
+            ("Resize Pane Up", "win.resize-pane-up"),
+            ("Resize Pane Down", "win.resize-pane-down"),
         ],
         &[
             ("Workspace 1", "win.workspace-1"),
