@@ -5,7 +5,7 @@
 //! current directory, directories first in case-insensitive name order, dot files
 //! included (upstream shows hidden files by default) and children loaded on the first
 //! expansion. The GTK widgets follow douglas's `file_explorer.rs`
-//! (https://github.com/douglas/cmux-gtk, AGPL-3.0): a `TreeView` on a `TreeStore`
+//! (https://github.com/douglas/cmux-gtk, AGPL-3.0-or-later): a `TreeView` on a `TreeStore`
 //! where an unloaded directory carries a dummy child row for its expander.
 //!
 //! Ownership: one `FileExplorer` lives inside the right sidebar for the whole session;
