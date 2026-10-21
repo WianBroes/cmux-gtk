@@ -137,6 +137,48 @@ pub fn install_shortcuts(
                 ShortcutAction::ClosePane => {
                     handle_close_pane(&state, &app_clone);
                 }
+                // -- Tab shortcuts: the focused pane's selected tab --
+                action @ (ShortcutAction::CloseTab
+                    | ShortcutAction::CloseOtherTabsInPane
+                    | ShortcutAction::RenameTab) => {
+                    let target = {
+                        let s = state.borrow();
+                        let Some(engine) = s.active_split_engine() else {
+                            return;
+                        };
+                        let pane_id = engine.active_pane_id;
+                        let Some(surface) = engine
+                            .pane_info()
+                            .into_iter()
+                            .find(|pane| pane.id == pane_id)
+                            .and_then(|pane| pane.selected_surface)
+                        else {
+                            return;
+                        };
+                        (s.active_index, surface)
+                    };
+                    let (active_index, surface) = target;
+                    let uuid = surface.to_string();
+                    match action {
+                        ShortcutAction::CloseTab => {
+                            handle_close_surface_tab(&state, &app_clone, surface);
+                        }
+                        ShortcutAction::CloseOtherTabsInPane => {
+                            let _ = crate::tab_actions::close_around(
+                                &mut state.borrow_mut(),
+                                active_index,
+                                &uuid,
+                                crate::tab_actions::CloseScope::Others,
+                            );
+                        }
+                        _ => {
+                            let s = state.borrow();
+                            if let Some(engine) = s.split_engines.get(active_index) {
+                                let _ = engine.begin_tab_rename(&uuid);
+                            }
+                        }
+                    }
+                }
                 // -- SSH workspace shortcut --
                 ShortcutAction::NewSshWorkspace => {
                     handle_new_ssh_workspace(&state, &app_clone);
@@ -320,6 +362,12 @@ pub const MENU_ACTIONS: &[(&str, ShortcutAction)] = &[
     ("workspace-7", ShortcutAction::Workspace7),
     ("workspace-8", ShortcutAction::Workspace8),
     ("workspace-9", ShortcutAction::Workspace9),
+    ("close-tab", ShortcutAction::CloseTab),
+    (
+        "close-other-tabs-in-pane",
+        ShortcutAction::CloseOtherTabsInPane,
+    ),
+    ("rename-tab", ShortcutAction::RenameTab),
 ];
 
 /// Find Next (Ctrl+G), Find Previous (Ctrl+Alt+G), Hide Find Bar (Ctrl+Alt+Shift+F) while the

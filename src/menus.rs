@@ -136,6 +136,64 @@ pub fn register_actions(
     });
     window.add_action(&action);
 
+    // win.tab-close-left / -right / -others — close tabs around one surface inside its pane.
+    for (name, scope) in [
+        ("tab-close-left", crate::tab_actions::CloseScope::Left),
+        ("tab-close-right", crate::tab_actions::CloseScope::Right),
+        ("tab-close-others", crate::tab_actions::CloseScope::Others),
+    ] {
+        let action = gio::SimpleAction::new(name, Some(&String::static_variant_type()));
+        action.connect_activate({
+            let state = state.clone();
+            move |_, parameter| {
+                let Some(uuid) = parameter.and_then(|value| value.str()).map(str::to_owned)
+                else {
+                    return;
+                };
+                let mut s = state.borrow_mut();
+                let Some(index) = crate::tab_actions::workspace_of(&s, &uuid) else {
+                    return;
+                };
+                let _ = crate::tab_actions::close_around(&mut s, index, &uuid, scope);
+            }
+        });
+        window.add_action(&action);
+    }
+
+    // win.tab-rename — prompt for a new custom name on one terminal tab.
+    let action = gio::SimpleAction::new("tab-rename", Some(&String::static_variant_type()));
+    action.connect_activate({
+        let state = state.clone();
+        move |_, parameter| {
+            let Some(uuid) = parameter.and_then(|value| value.str()).map(str::to_owned) else {
+                return;
+            };
+            let s = state.borrow();
+            let Some(index) = crate::tab_actions::workspace_of(&s, &uuid) else {
+                return;
+            };
+            let _ = s.split_engines[index].begin_tab_rename(&uuid);
+        }
+    });
+    window.add_action(&action);
+
+    // win.tab-clear-name — drop a tab's custom name and show its program title again.
+    let action = gio::SimpleAction::new("tab-clear-name", Some(&String::static_variant_type()));
+    action.connect_activate({
+        let state = state.clone();
+        move |_, parameter| {
+            let Some(uuid) = parameter.and_then(|value| value.str()).map(str::to_owned) else {
+                return;
+            };
+            let s = state.borrow();
+            let Some(index) = crate::tab_actions::workspace_of(&s, &uuid) else {
+                return;
+            };
+            let _ = s.split_engines[index].set_custom_title(&uuid, None);
+        }
+    });
+    window.add_action(&action);
+
     // GtkNotebook pointer reordering mutates its local surface model before asking the
     // application to persist the resulting workspace topology.
     let action = gio::SimpleAction::new("surface-tabs-changed", None);
@@ -753,6 +811,8 @@ pub fn build_menu_bar() -> gio::Menu {
         ],
         &[("Command Palette…", "win.project-palette")],
         &[
+            ("Close Tab", "win.close-tab"),
+            ("Close Other Tabs in Pane", "win.close-other-tabs-in-pane"),
             ("Close Pane", "win.close-pane"),
             ("Close Workspace", "win.close-workspace"),
         ],
@@ -791,6 +851,7 @@ pub fn build_menu_bar() -> gio::Menu {
             ("Previous Workspace", "win.previous-workspace"),
             ("Move Workspace Up", "win.move-workspace-up"),
             ("Move Workspace Down", "win.move-workspace-down"),
+            ("Rename Tab…", "win.rename-tab"),
             ("Rename Workspace…", "win.rename-workspace"),
             ("Edit Workspace Description…", "win.edit-workspace-description"),
             ("Toggle Focused Workspace's Group Collapse", "win.toggle-workspace-group"),

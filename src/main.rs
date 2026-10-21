@@ -60,6 +60,7 @@ mod split_engine;
 mod ssh;
 mod ssh_dialog;
 mod ssh_hosts;
+mod tab_actions;
 mod task;
 mod terminal_search;
 #[allow(dead_code)]

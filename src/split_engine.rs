@@ -43,6 +43,18 @@ fn show_tab_title(area: &gtk4::GLArea) -> bool {
     true
 }
 
+/// Store a terminal tab's custom name and show it; `None` falls back to the program title.
+fn apply_custom_title(area: &gtk4::GLArea, title: Option<&str>) -> bool {
+    // SAFETY: see `set_surface_title`.
+    unsafe {
+        match title {
+            Some(title) => area.set_data(CUSTOM_TITLE, title.to_owned()),
+            None => drop(area.steal_data::<String>(CUSTOM_TITLE)),
+        }
+    }
+    show_tab_title(area)
+}
+
 /// Realized GTK bounds used for pointer automation and layout triage.
 pub struct PaneGeometry {
     pub id: u64,
@@ -211,6 +223,13 @@ fn request_surface_tab_close(widget: &impl IsA<gtk4::Widget>, uuid: Uuid) {
     );
 }
 
+/// Append one tab menu row whose action target is the surface UUID.
+fn append_tab_menu_item(menu: &gtk4::gio::Menu, label: &str, action: &str, uuid: Uuid) {
+    let item = gtk4::gio::MenuItem::new(Some(label), None);
+    item.set_action_and_target_value(Some(action), Some(&uuid.to_string().to_variant()));
+    menu.append_item(&item);
+}
+
 /// Build a tab label and close affordance with weak widget captures to avoid ownership cycles.
 const TAB_UNREAD_DOT: &str = "tab-unread-dot";
 const TAB_TITLE: &str = "tab-title";
@@ -292,28 +311,46 @@ fn surface_tab_label(surface: &PaneSurface) -> gtk4::Box {
         set_tab_agent_icon(tab.upcast_ref(), resume.as_ref());
     }
 
-    let popover = gtk4::Popover::new();
+    let area = match surface {
+        PaneSurface::Terminal { gl_area, .. } => Some(gl_area.downgrade()),
+        PaneSurface::Browser { .. } => None,
+    };
+    let empty_menu = gtk4::gio::Menu::new();
+    let popover = gtk4::PopoverMenu::from_model(Some(&empty_menu));
     popover.set_parent(&tab);
     popover.set_has_arrow(false);
-    let close_item = gtk4::Button::with_label("Close Tab");
-    close_item.add_css_class("flat");
-    close_item.connect_clicked({
-        let tab = tab.downgrade();
-        move |_| {
-            if let Some(tab) = tab.upgrade() {
-                request_surface_tab_close(&tab, uuid);
-            }
-        }
-    });
-    popover.set_child(Some(&close_item));
     let gesture = gtk4::GestureClick::new();
     gesture.set_button(3);
     gesture.connect_released({
         let popover = popover.downgrade();
+        let area = area.clone();
         move |_, _, x, y| {
             let Some(popover) = popover.upgrade() else {
                 return;
             };
+            // Rebuilt on every right-click so "Remove Custom Tab Name" tracks the live name.
+            let model = gtk4::gio::Menu::new();
+            if let Some(area) = area.as_ref().and_then(|area| area.upgrade()) {
+                let names = gtk4::gio::Menu::new();
+                append_tab_menu_item(&names, "Rename Tab…", "win.tab-rename", uuid);
+                // SAFETY: `CUSTOM_TITLE` only stores `String` values (see `apply_custom_title`).
+                if unsafe { area.data::<String>(CUSTOM_TITLE) }.is_some() {
+                    append_tab_menu_item(
+                        &names,
+                        "Remove Custom Tab Name",
+                        "win.tab-clear-name",
+                        uuid,
+                    );
+                }
+                model.append_section(None, &names);
+            }
+            let close = gtk4::gio::Menu::new();
+            append_tab_menu_item(&close, "Close Tab", "win.close-surface-tab", uuid);
+            append_tab_menu_item(&close, "Close Tabs to Left", "win.tab-close-left", uuid);
+            append_tab_menu_item(&close, "Close Tabs to Right", "win.tab-close-right", uuid);
+            append_tab_menu_item(&close, "Close Other Tabs", "win.tab-close-others", uuid);
+            model.append_section(None, &close);
+            popover.set_menu_model(Some(&model));
             popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
             popover.popup();
         }
@@ -2204,14 +2241,64 @@ impl SplitEngine {
         let Some(area) = self.gl_area_for_surface(uuid) else {
             return false;
         };
-        // SAFETY: see `set_surface_title`.
-        unsafe {
-            match title {
-                Some(title) => area.set_data(CUSTOM_TITLE, title.to_owned()),
-                None => drop(area.steal_data::<String>(CUSTOM_TITLE)),
-            }
+        apply_custom_title(&area, title)
+    }
+
+    /// Prompt for a custom tab name on a terminal tab (upstream `renameTab`); an empty name
+    /// removes it. False when the tab is not a terminal of this workspace.
+    pub fn begin_tab_rename(&self, uuid: &str) -> bool {
+        let Some(area) = self.gl_area_for_surface(uuid) else {
+            return false;
+        };
+        let Some(tab_label) = area
+            .ancestor(gtk4::Notebook::static_type())
+            .and_then(|widget| widget.downcast::<gtk4::Notebook>().ok())
+            .and_then(|notebook| notebook.tab_label(&area))
+        else {
+            return false;
+        };
+        let popover = gtk4::Popover::new();
+        popover.set_parent(&tab_label);
+        popover.set_has_arrow(false);
+        let entry = gtk4::Entry::new();
+        if let Some(title) = self.surface_title(uuid) {
+            entry.set_text(&title);
         }
-        show_tab_title(&area)
+        entry.select_region(0, -1);
+        popover.set_child(Some(&entry));
+        entry.connect_activate({
+            let area = area.downgrade();
+            let popover = popover.downgrade();
+            move |entry| {
+                let Some(area) = area.upgrade() else {
+                    return;
+                };
+                let text = entry.text();
+                let title = text.trim();
+                let title = (!title.is_empty()).then_some(title);
+                apply_custom_title(&area, title);
+                if let Some(popover) = popover.upgrade() {
+                    popover.popdown();
+                }
+            }
+        });
+        // Typing goes back to the terminal, renamed or not.
+        popover.connect_closed({
+            let area = area.downgrade();
+            move |popover| {
+                let popover = popover.clone();
+                let area = area.clone();
+                gtk4::glib::idle_add_local_once(move || {
+                    popover.unparent();
+                    if let Some(area) = area.upgrade() {
+                        area.grab_focus();
+                    }
+                });
+            }
+        });
+        popover.popup();
+        entry.grab_focus();
+        true
     }
 
     /// A terminal tab's title: its custom name, else the title shown on the tab.

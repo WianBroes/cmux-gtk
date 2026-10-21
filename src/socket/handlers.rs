@@ -1586,41 +1586,23 @@ fn handle_socket_command_traced(
             match action.as_str() {
                 // Every close stays inside the anchor's pane and never closes the anchor.
                 "close_left" | "close_right" | "close_others" => {
-                    let Some((_, slot)) = s.split_engines[index].surface_location(&surface_uuid)
-                    else {
-                        let _ = resp_tx.send(err(req_id, "not_found", "surface not found"));
-                        return;
+                    let scope = match action.as_str() {
+                        "close_left" => crate::tab_actions::CloseScope::Left,
+                        "close_right" => crate::tab_actions::CloseScope::Right,
+                        _ => crate::tab_actions::CloseScope::Others,
                     };
-                    let Some(pane) = s.split_engines[index]
-                        .pane_info()
-                        .into_iter()
-                        .find(|pane| pane.id == pane_id)
-                    else {
-                        let _ = resp_tx.send(err(req_id, "not_found", "pane not found"));
-                        return;
-                    };
-                    let ids = pane.surface_ids;
-                    let targets: Vec<uuid::Uuid> = match action.as_str() {
-                        "close_left" => ids[..slot].to_vec(),
-                        "close_right" => ids[(slot + 1).min(ids.len())..].to_vec(),
-                        _ => {
-                            let mut others = ids;
-                            others.remove(slot);
-                            others
-                        }
-                    };
-                    let mut closed = 0;
-                    for target in targets {
-                        if matches!(
-                            s.split_engines[index].close_surface_and_empty_pane(target),
-                            crate::split_engine::CloseSurfaceResult::Closed
-                        ) {
-                            closed += 1;
+                    match crate::tab_actions::close_around(
+                        &mut s,
+                        index,
+                        &surface_uuid.to_string(),
+                        scope,
+                    ) {
+                        Ok(closed) => extras["closed"] = json!(closed),
+                        Err((code, message)) => {
+                            let _ = resp_tx.send(err(req_id, code, message));
+                            return;
                         }
                     }
-                    crate::inbox_actions::purge_closed_surfaces(&mut s);
-                    s.trigger_session_save();
-                    extras["closed"] = json!(closed);
                 }
                 // Upstream `setPanelCustomTitle`: a trimmed, non-empty title, echoed back.
                 "rename" | "clear_name" => {
