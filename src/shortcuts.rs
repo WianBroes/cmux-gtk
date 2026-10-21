@@ -179,6 +179,51 @@ pub fn install_shortcuts(
                         }
                     }
                 }
+                // Upstream Next/Previous Surface wrap around the focused pane's tabs (bonsplit
+                // `selectNextTab`); Reorder Surface Left/Right stop at the ends (`reorderSurface`).
+                action @ (ShortcutAction::NextSurface
+                    | ShortcutAction::PrevSurface
+                    | ShortcutAction::MoveSurfaceLeft
+                    | ShortcutAction::MoveSurfaceRight) => {
+                    let mut s = state.borrow_mut();
+                    let Some(engine) = s.active_split_engine_mut() else {
+                        return;
+                    };
+                    let pane_id = engine.active_pane_id;
+                    let Some(pane) = engine.pane_info().into_iter().find(|pane| pane.id == pane_id)
+                    else {
+                        return;
+                    };
+                    let Some(slot) = pane
+                        .selected_surface
+                        .and_then(|selected| pane.surface_ids.iter().position(|id| *id == selected))
+                    else {
+                        return;
+                    };
+                    let (count, last) = (pane.surface_ids.len(), pane.surface_ids.len() - 1);
+                    match action {
+                        ShortcutAction::NextSurface | ShortcutAction::PrevSurface => {
+                            let next = if action == ShortcutAction::NextSurface {
+                                (slot + 1) % count
+                            } else {
+                                (slot + count - 1) % count
+                            };
+                            engine.focus_surface(&pane.surface_ids[next].to_string());
+                        }
+                        _ => {
+                            let target = if action == ShortcutAction::MoveSurfaceLeft {
+                                slot.saturating_sub(1)
+                            } else {
+                                (slot + 1).min(last)
+                            };
+                            if target != slot
+                                && engine.reorder_surface(pane.surface_ids[slot], target).is_ok()
+                            {
+                                s.trigger_session_save();
+                            }
+                        }
+                    }
+                }
                 // -- SSH workspace shortcut --
                 ShortcutAction::NewSshWorkspace => {
                     handle_new_ssh_workspace(&state, &app_clone);
@@ -308,7 +353,17 @@ pub fn install_shortcuts(
     });
     key_ctrl.connect_key_pressed({
         let dispatch = dispatch.clone();
-        move |_ctrl, keyval, _keycode, mods| dispatch(keyval, mods)
+        move |_ctrl, keyval, keycode, mods| {
+            // Bracket shortcuts follow the key's place on a US keyboard (Wian, 2026-10-21): on
+            // a Belgian layout that key types ^ or $, and Shift turns ] into } everywhere.
+            let result = dispatch(keyval, mods);
+            match us_bracket_key(keycode) {
+                Some(bracket) if result == gtk4::glib::Propagation::Proceed && bracket != keyval => {
+                    dispatch(bracket, mods)
+                }
+                _ => result,
+            }
+        }
     });
     KEY_DISPATCH.with(|slot| *slot.borrow_mut() = Some(dispatch));
 
@@ -368,6 +423,10 @@ pub const MENU_ACTIONS: &[(&str, ShortcutAction)] = &[
         ShortcutAction::CloseOtherTabsInPane,
     ),
     ("rename-tab", ShortcutAction::RenameTab),
+    ("next-surface", ShortcutAction::NextSurface),
+    ("previous-surface", ShortcutAction::PrevSurface),
+    ("reorder-surface-left", ShortcutAction::MoveSurfaceLeft),
+    ("reorder-surface-right", ShortcutAction::MoveSurfaceRight),
 ];
 
 /// Find Next (Ctrl+G), Find Previous (Ctrl+Alt+G), Hide Find Bar (Ctrl+Alt+Shift+F) while the
@@ -401,6 +460,15 @@ fn find_key(
     }
     crate::terminal_search::binding(&area, binding);
     gtk4::glib::Propagation::Stop
+}
+
+/// `[` / `]` for the X11 keycodes of their keys on a US keyboard (evdev 26/27 + 8).
+fn us_bracket_key(keycode: u32) -> Option<gtk4::gdk::Key> {
+    match keycode {
+        34 => Some(gtk4::gdk::Key::bracketleft),
+        35 => Some(gtk4::gdk::Key::bracketright),
+        _ => None,
+    }
 }
 
 type KeyDispatch = dyn Fn(gtk4::gdk::Key, gtk4::gdk::ModifierType) -> gtk4::glib::Propagation;

@@ -847,6 +847,12 @@ pub fn build_menu_bar() -> gio::Menu {
             ("Toggle Right Sidebar Focus", "win.focus-right-sidebar"),
         ],
         &[
+            ("Next Surface", "win.next-surface"),
+            ("Previous Surface", "win.previous-surface"),
+            ("Reorder Surface Left", "win.reorder-surface-left"),
+            ("Reorder Surface Right", "win.reorder-surface-right"),
+        ],
+        &[
             ("Next Workspace", "win.next-workspace"),
             ("Previous Workspace", "win.previous-workspace"),
             ("Move Workspace Up", "win.move-workspace-up"),
