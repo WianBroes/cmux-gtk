@@ -398,10 +398,34 @@ pub fn register_actions(
     let action = gio::SimpleAction::new("context-menu-refresh", None);
     action.connect_activate({
         let state = state.clone();
+        let window = window.downgrade();
         move |_, _| {
             let bound = crate::local_tmux_settings::active_is_bound(&state);
             rename_session.set_enabled(bound);
             close_session.set_enabled(bound);
+
+            // The one-line paste is offered only for text the action would actually join.
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            let Some(paste_one_line) = window
+                .lookup_action("paste-one-line")
+                .and_then(|action| action.downcast::<gio::SimpleAction>().ok())
+            else {
+                return;
+            };
+            paste_one_line.set_enabled(false);
+            let clipboard = window.clipboard();
+            gtk4::glib::MainContext::default().spawn_local(async move {
+                let text = clipboard
+                    .read_text_future()
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|text| text.to_string())
+                    .unwrap_or_default();
+                paste_one_line.set_enabled(crate::paste_line_join::spans_multiple_lines(&text));
+            });
         }
     });
     window.add_action(&action);
@@ -463,6 +487,110 @@ pub fn register_actions(
                     }
                 }
             }
+        }
+    });
+    window.add_action(&action);
+
+    // win.paste-one-line -- join a multi-line clipboard into one literal line, without Enter.
+    let action = gio::SimpleAction::new("paste-one-line", None);
+    action.set_enabled(false);
+    action.connect_activate({
+        let state = state.clone();
+        let window = window.downgrade();
+        move |_, _| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            let clipboard = window.clipboard();
+            let state = state.clone();
+            gtk4::glib::MainContext::default().spawn_local(async move {
+                let Ok(Some(text)) = clipboard.read_text_future().await else {
+                    return;
+                };
+                let text = text.to_string();
+                if !crate::paste_line_join::spans_multiple_lines(&text) {
+                    return;
+                }
+                let joined = crate::paste_line_join::joined(&text);
+                let surface = {
+                    let s = state.borrow();
+                    s.active_split_engine().and_then(|engine| {
+                        engine.root.find_active_pane_id().and_then(|pane_id| {
+                            engine.root.find_surface_for_pane(pane_id)
+                        })
+                    })
+                };
+                if let Some(surface) = surface {
+                    // SAFETY: GTK main thread, surface read from the live model just above,
+                    // and the model borrow released before native input.
+                    let _ = unsafe { crate::ghostty::text::send_literal(surface, &joined) };
+                }
+            });
+        }
+    });
+    window.add_action(&action);
+
+    // win.reset-terminal -- Ghostty's reset binding on the active pane.
+    let action = gio::SimpleAction::new("reset-terminal", None);
+    action.connect_activate({
+        let state = state.clone();
+        move |_, _| {
+            let s = state.borrow();
+            if let Some(engine) = s.active_split_engine() {
+                if let Some(pane_id) = engine.root.find_active_pane_id() {
+                    if let Some(surface) = engine.root.find_surface_for_pane(pane_id) {
+                        let action_str = b"reset";
+                        unsafe {
+                            crate::ghostty::ffi::ghostty_surface_binding_action(
+                                surface,
+                                action_str.as_ptr() as *const _,
+                                action_str.len(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    });
+    window.add_action(&action);
+
+    // win.copy-ids -- copy the active workspace, pane and surface identities for socket clients.
+    let action = gio::SimpleAction::new("copy-ids", None);
+    action.connect_activate({
+        let state = state.clone();
+        let window = window.downgrade();
+        move |_, _| {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            let text = {
+                let s = state.borrow();
+                let Some(workspace) = s.workspaces.get(s.active_index) else {
+                    return;
+                };
+                let Some(engine) = s.active_split_engine() else {
+                    return;
+                };
+                let pane_id = engine.active_pane_id;
+                let Some(surface_id) = engine.active_pane_uuid() else {
+                    return;
+                };
+                let workspace_id = workspace.uuid.to_string();
+                let workspace_ref = s.handles.ensure_ref(
+                    crate::socket::handles::HandleKind::Workspace,
+                    &workspace_id.to_lowercase(),
+                );
+                let surface_ref = s.handles.ensure_ref(
+                    crate::socket::handles::HandleKind::Surface,
+                    &surface_id.to_lowercase(),
+                );
+                format!(
+                    "workspace_ref={workspace_ref}\nworkspace_id={}\npane_ref=pane:{pane_id}\npane_id=pane:{pane_id}\nsurface_ref={surface_ref}\nsurface_id={}",
+                    workspace_id.to_uppercase(),
+                    surface_id.to_uppercase(),
+                )
+            };
+            window.clipboard().set_text(&text);
         }
     });
     window.add_action(&action);
@@ -898,6 +1026,7 @@ pub fn build_menu_bar() -> gio::Menu {
             ("Rename Tab…", "win.rename-tab"),
             ("Rename Workspace…", "win.rename-workspace"),
             ("Edit Workspace Description…", "win.edit-workspace-description"),
+            ("Toggle Full Screen", "win.toggle-full-screen"),
             ("Toggle Focused Workspace's Group Collapse", "win.toggle-workspace-group"),
         ],
         &[
@@ -961,6 +1090,9 @@ pub fn build_terminal_context_menu() -> gio::Menu {
     let edit_section = gio::Menu::new();
     edit_section.append(Some("Copy"), Some("win.copy"));
     edit_section.append(Some("Paste"), Some("win.paste"));
+    let paste_one_line = gio::MenuItem::new(Some("Paste as One Line"), Some("win.paste-one-line"));
+    paste_one_line.set_attribute_value("hidden-when", Some(&"action-disabled".to_variant()));
+    edit_section.append_item(&paste_one_line);
     menu.append_section(None, &edit_section);
 
     let pane_section = gio::Menu::new();
@@ -968,6 +1100,7 @@ pub fn build_terminal_context_menu() -> gio::Menu {
     pane_section.append(Some("Split Down"), Some("win.split-down"));
     pane_section.append(Some("Split Right in tmux"), Some("win.local-tmux-split"));
     pane_section.append(Some("Close Pane"), Some("win.close-pane"));
+    pane_section.append(Some("Reset Terminal"), Some("win.reset-terminal"));
     for (label, action) in [
         ("Rename tmux Session…", "win.local-tmux-rename"),
         ("Kill tmux Session…", "win.local-tmux-close"),
@@ -977,6 +1110,10 @@ pub fn build_terminal_context_menu() -> gio::Menu {
         pane_section.append_item(&item);
     }
     menu.append_section(None, &pane_section);
+
+    let identity_section = gio::Menu::new();
+    identity_section.append(Some("Copy IDs"), Some("win.copy-ids"));
+    menu.append_section(None, &identity_section);
 
     let browser_section = gio::Menu::new();
     browser_section.append(Some("Open Browser Here"), Some("win.browser-open"));

@@ -29,6 +29,7 @@ pub fn install_shortcuts(
 
     let sidebar_clone = sidebar.clone();
     let app_clone = app.clone();
+    let window_weak = window.downgrade();
 
     // One entry point per shortcut action: the key handler below and the menu bar's actions
     // (`win.<action>`, see `add_menu_actions`) run the same code.
@@ -315,6 +316,15 @@ pub fn install_shortcuts(
                 ShortcutAction::BrowserClose => {
                     handle_browser_close(&state);
                 }
+                ShortcutAction::ToggleFullScreen => {
+                    if let Some(window) = window_weak.upgrade() {
+                        if window.is_fullscreen() {
+                            window.unfullscreen();
+                        } else {
+                            window.fullscreen();
+                        }
+                    }
+                }
             }
         }
     });
@@ -482,6 +492,7 @@ pub const MENU_ACTIONS: &[(&str, ShortcutAction)] = &[
     ("resize-pane-up", ShortcutAction::ResizePaneUp),
     ("resize-pane-down", ShortcutAction::ResizePaneDown),
     ("toggle-split-zoom", ShortcutAction::ToggleSplitZoom),
+    ("toggle-full-screen", ShortcutAction::ToggleFullScreen),
 ];
 
 /// Find Next (Ctrl+G), Find Previous (Ctrl+Alt+G), Hide Find Bar (Ctrl+Alt+Shift+F) while the

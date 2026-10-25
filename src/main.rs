@@ -31,6 +31,7 @@ mod menus;
 mod notification;
 mod notification_caller;
 mod notification_menu;
+mod paste_line_join;
 mod ports;
 mod preferences;
 mod project_config;
