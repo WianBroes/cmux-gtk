@@ -316,6 +316,15 @@ fn create(
     surface: Option<Uuid>,
     content: crate::inbox::Content,
 ) -> Value {
+    // Upstream `isMuted` is an admission filter: a muted workspace gets no notification at all.
+    if state.workspaces[index].muted {
+        let workspace = state.workspaces[index].uuid;
+        crate::diagnostics::record(
+            "notification.inbox.muted",
+            json!({"workspace":workspace,"surface":surface}),
+        );
+        return json!({"id": null, "workspace_id": workspace, "surface_id": surface});
+    }
     let focused = state.active_index == index
         && surface.is_none_or(|surface| {
             state.split_engines[index].active_pane_uuid().as_deref() == Some(&surface.to_string())

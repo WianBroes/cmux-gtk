@@ -413,6 +413,7 @@ impl AppState {
             .clone()
             .filter(|c| crate::workspace::valid_workspace_color(c));
         workspace.pinned = ws.pinned;
+        workspace.muted = ws.muted;
         workspace.group_id = ws.group_id.filter(|group_id| {
             self.workspace_groups
                 .iter()
@@ -879,6 +880,23 @@ impl AppState {
         self.workspaces[index].pinned = pinned;
         self.reorder_workspace(index, target);
         Some(target)
+    }
+
+    /// Toggle notification admission for a workspace (upstream `isMuted`). The row glyphs and
+    /// dimmed title follow; the choice is saved with the session.
+    pub fn set_workspace_muted(&mut self, index: usize, muted: bool) {
+        let Some(workspace) = self.workspaces.get(index) else {
+            return;
+        };
+        if workspace.muted == muted {
+            return;
+        }
+        let (id, pinned) = (workspace.id, workspace.pinned);
+        self.workspaces[index].muted = muted;
+        if let Some(row) = crate::sidebar::row_for_workspace(&self.sidebar_list, id) {
+            crate::sidebar::set_row_indicators(&row, pinned, muted);
+        }
+        self.trigger_session_save();
     }
 
     /// Forget the user-chosen name so the workspace follows its focused terminal's title
@@ -1900,6 +1918,7 @@ impl AppState {
                             custom_description: ws.custom_description.clone(),
                             color: ws.color.clone(),
                             pinned: ws.pinned,
+                            muted: ws.muted,
                             group_id: ws.group_id,
                             startup_script: ws.startup_script.clone(),
                             remote_target: ws.remote_target.clone(),

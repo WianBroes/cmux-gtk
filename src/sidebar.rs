@@ -417,6 +417,31 @@ pub fn rebuild_sidebar_row_content(name: &str) -> gtk4::Box {
     slot.set_visible(false);
     hbox.append(&slot);
 
+    // Upstream draws the pinned then the muted glyph ahead of the name, both hidden by default.
+    let indicators = gtk4::Box::new(gtk4::Orientation::Horizontal, 2);
+    indicators.add_css_class("workspace-indicators");
+    indicators.set_valign(gtk4::Align::Start);
+    let top_margin = slot.margin_top();
+    if top_margin > 0 {
+        indicators.set_margin_top(top_margin);
+    }
+    let pin = gtk4::Image::from_icon_name("cmux-pin-symbolic");
+    pin.set_pixel_size(13);
+    pin.add_css_class("dim-label");
+    pin.add_css_class("workspace-pin-indicator");
+    pin.set_tooltip_text(Some("Pinned workspace — protected from Close"));
+    pin.set_visible(false);
+    indicators.append(&pin);
+    let muted = gtk4::Image::from_icon_name("cmux-bell-off-symbolic");
+    muted.set_pixel_size(13);
+    muted.add_css_class("dim-label");
+    muted.add_css_class("workspace-muted-indicator");
+    muted.set_tooltip_text(Some("Notifications muted for this workspace"));
+    muted.set_visible(false);
+    indicators.append(&muted);
+    indicators.set_visible(false);
+    hbox.append(&indicators);
+
     let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
     vbox.add_css_class("workspace-row-text");
     let label = gtk4::Label::new(Some(name));
@@ -555,6 +580,22 @@ pub fn attach_sidebar_context_menu(
         }
     });
     group.add_action(&toggle_pin);
+    let toggle_mute = gtk4::gio::SimpleAction::new("toggle-mute", None);
+    toggle_mute.connect_activate({
+        let state = Rc::downgrade(&state);
+        let row = row.downgrade();
+        move |_, _| {
+            let (Some(state), Some(row)) = (state.upgrade(), row.upgrade()) else {
+                return;
+            };
+            let Some(index) = workspace_index_for_row(&state.borrow(), &row) else {
+                return;
+            };
+            let muted = !state.borrow().workspaces[index].muted;
+            state.borrow_mut().set_workspace_muted(index, muted);
+        }
+    });
+    group.add_action(&toggle_mute);
     let clear_name = gtk4::gio::SimpleAction::new("clear-name", None);
     clear_name.connect_activate({
         let state = Rc::downgrade(&state);
@@ -868,6 +909,7 @@ pub fn attach_sidebar_context_menu(
             // The menu targets this row without selecting it, as upstream (`menu(for:)`).
             let (
                 pinned,
+                muted,
                 clear_name_enabled,
                 move_up_enabled,
                 move_down_enabled,
@@ -886,6 +928,7 @@ pub fn attach_sidebar_context_menu(
                 let count = s.workspaces.len();
                 (
                     workspace.pinned,
+                    workspace.muted,
                     workspace.custom_name,
                     s.adjacent_workspace_in_group(index, -1).is_some(),
                     s.adjacent_workspace_in_group(index, 1).is_some(),
@@ -900,6 +943,14 @@ pub fn attach_sidebar_context_menu(
             pin_section.append(
                 Some(if pinned { "Unpin Workspace" } else { "Pin Workspace" }),
                 Some("workspace.toggle-pin"),
+            );
+            pin_section.append(
+                Some(if muted {
+                    "Unmute Workspace Notifications"
+                } else {
+                    "Mute Workspace Notifications"
+                }),
+                Some("workspace.toggle-mute"),
             );
             pin_section.append_submenu(Some("Workspace Group"), &groups_menu);
             for (name, enabled) in [
@@ -939,9 +990,7 @@ pub fn wire_latest_row(
 /// Shared content keeps subtitles, attention and close controls intact after rename.
 pub fn workspace_row_content(workspace: &crate::workspace::Workspace) -> gtk4::Box {
     let hbox = rebuild_sidebar_row_content(&workspace.name);
-    let vbox = hbox
-        .first_child()
-        .and_then(|slot| slot.next_sibling())
+    let vbox = child_with_class(hbox.upcast_ref(), "workspace-row-text")
         .and_downcast::<gtk4::Box>()
         .unwrap();
     // Upstream `customDescription` sits under the name, before the notification message.
@@ -1018,6 +1067,31 @@ fn child_with_class(parent: &gtk4::Widget, class: &str) -> Option<gtk4::Widget> 
         child = widget.next_sibling();
     }
     None
+}
+
+/// Show a row's pinned and muted glyphs, hiding their box when both are off, and dim the
+/// title while notifications are muted, as upstream.
+pub fn set_row_indicators(row: &gtk4::ListBoxRow, pinned: bool, muted: bool) {
+    let Some(hbox) = row.child() else {
+        return;
+    };
+    let Some(indicators) = child_with_class(&hbox, "workspace-indicators") else {
+        return;
+    };
+    let mut visible = false;
+    for (class, shown) in [
+        ("workspace-pin-indicator", pinned),
+        ("workspace-muted-indicator", muted),
+    ] {
+        if let Some(image) = child_with_class(&indicators, class) {
+            image.set_visible(shown);
+            visible |= shown;
+        }
+    }
+    indicators.set_visible(visible);
+    if let Some(title) = row_title(row) {
+        title.set_opacity(if muted { 0.6 } else { 1.0 });
+    }
 }
 
 /// Upstream leading slot and message line: spinner while an agent runs, else the unread count
@@ -1097,6 +1171,8 @@ fn apply_description(label: &gtk4::Label, text: Option<&str>) {
 /// Replace the row color provider and full-location tooltip without accumulating providers.
 pub fn style_workspace_row(row: &gtk4::ListBoxRow, workspace: &crate::workspace::Workspace) {
     row.set_tooltip_text(Some(&workspace.location()));
+    // Every caller has just (re)built the row content, which starts with both glyphs hidden.
+    set_row_indicators(row, workspace.pinned, workspace.muted);
     let context = row.style_context();
     unsafe {
         if let Some(previous) = row.steal_data::<gtk4::CssProvider>("workspace-color-provider") {

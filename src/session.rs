@@ -23,6 +23,9 @@ pub struct WorkspaceSession {
     /// Leading-pinned tier membership; absent in older sessions.
     #[serde(default)]
     pub pinned: bool,
+    /// Notification admission; absent in older sessions.
+    #[serde(default)]
+    pub muted: bool,
     #[serde(default)]
     pub group_id: Option<uuid::Uuid>,
     #[serde(default)]
@@ -525,6 +528,7 @@ mod tests {
                 custom_description: None,
                 color: None,
                 pinned: false,
+                muted: false,
                 group_id: None,
                 startup_script: None,
                 remote_target: None,
@@ -594,6 +598,17 @@ mod tests {
         let json = r#"{"version":2,"active_index":0,"workspaces":[{"uuid":"test-uuid-1","name":"Legacy","active_pane_uuid":null,"layout":{"type":"Leaf","pane_id":1000,"surface_uuid":"00000000-0000-0000-0000-000000000000","shell":"/bin/sh","cwd":"/tmp"}}]}"#;
         let parsed: SessionData = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.workspaces[0].working_directory, None);
+    }
+
+    /// Muting is saved with the session and defaults off for records written before it existed.
+    #[test]
+    fn test_workspace_muted_defaults_and_roundtrips() {
+        let json = r#"{"version":2,"active_index":0,"workspaces":[{"uuid":"test-uuid-1","name":"Legacy","active_pane_uuid":null,"layout":{"type":"Leaf","pane_id":1000,"surface_uuid":"00000000-0000-0000-0000-000000000000","shell":"/bin/sh","cwd":"/tmp"}}]}"#;
+        let parsed: SessionData = serde_json::from_str(json).unwrap();
+        assert!(!parsed.workspaces[0].muted);
+        let muted = json.replace(r#""name":"Legacy""#, r#""name":"Legacy","muted":true"#);
+        let parsed: SessionData = serde_json::from_str(&muted).unwrap();
+        assert!(parsed.workspaces[0].muted);
     }
 
     /// SESS-03: Atomic write -- the .tmp file is gone after a successful rename.

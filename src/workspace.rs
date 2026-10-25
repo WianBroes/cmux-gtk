@@ -107,6 +107,9 @@ pub struct Workspace {
     /// Pinned workspaces gather at the head of the sidebar and of `workspace list`, and
     /// survive the close-others family; saved with the session (upstream `isPinned`).
     pub pinned: bool,
+    /// Notifications destined for this workspace are not admitted while muted (upstream
+    /// `isMuted`); saved with the session.
+    pub muted: bool,
     /// Stable optional group membership, independent of sidebar row position.
     pub group_id: Option<Uuid>,
     pub startup_script: Option<PathBuf>,
@@ -139,6 +142,7 @@ impl Workspace {
             ports: None,
             color: None,
             pinned: false,
+            muted: false,
             group_id: None,
             startup_script: None,
             remote_directory: None,
