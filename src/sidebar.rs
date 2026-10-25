@@ -883,10 +883,6 @@ pub fn attach_sidebar_context_menu(
     info_section.append(Some("Open Folder"), Some("workspace.open-folder"));
     menu_model.append_section(None, &info_section);
 
-    let split_section = gtk4::gio::Menu::new();
-    split_section.append(Some("Split Right"), Some("workspace.split-right"));
-    split_section.append(Some("Split Down"), Some("workspace.split-down"));
-    menu_model.append_section(None, &split_section);
 
     row.insert_action_group("workspace", Some(&group));
     let popover = gtk4::PopoverMenu::from_model(Some(&menu_model));

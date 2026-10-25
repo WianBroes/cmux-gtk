@@ -1080,8 +1080,6 @@ pub const SIDEBAR_SELECTING_ACTIONS: &[(&str, &str)] = &[
     ("Edit Workspace Description…", "edit-workspace-description"),
     ("Clear Workspace Description", "clear-workspace-description"),
     ("Close Workspace", "close-workspace"),
-    ("Split Right", "split-right"),
-    ("Split Down", "split-down"),
 ];
 
 /// Build terminal pane context menu (D-08).
