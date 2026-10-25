@@ -9,6 +9,8 @@
 const PACK: &[(&str, &[u8])] = &[
     ("cmux-sidebar-symbolic", include_bytes!("../resources/icons/tabler/cmux-sidebar-symbolic.svg")),
     ("cmux-bell-symbolic", include_bytes!("../resources/icons/tabler/cmux-bell-symbolic.svg")),
+    ("cmux-bell-off-symbolic", include_bytes!("../resources/icons/tabler/cmux-bell-off-symbolic.svg")),
+    ("cmux-pin-symbolic", include_bytes!("../resources/icons/tabler/cmux-pin-symbolic.svg")),
     ("cmux-plus-symbolic", include_bytes!("../resources/icons/tabler/cmux-plus-symbolic.svg")),
     ("cmux-chevron-down-symbolic", include_bytes!("../resources/icons/tabler/cmux-chevron-down-symbolic.svg")),
     ("cmux-back-symbolic", include_bytes!("../resources/icons/tabler/cmux-back-symbolic.svg")),

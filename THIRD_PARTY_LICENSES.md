@@ -35,7 +35,7 @@ SOFTWARE.
 - **License:** MIT License
 - **Copyright:** Copyright (c) 2020-2024 Paweł Kuna
 - **Source:** https://github.com/tabler/tabler-icons (`@tabler/icons` 3.19.0, outline)
-- **Files:** `resources/icons/tabler/cmux-*-symbolic.svg` — 14 icons, renamed by role; the 24×24 bounding path removed and the stroke attributes and GTK symbolic classes (`transparent-fill foreground-stroke`) set on each element so GTK recolors them.
+- **Files:** `resources/icons/tabler/cmux-*-symbolic.svg` — 16 icons, renamed by role; the 24×24 bounding path removed and the stroke attributes and GTK symbolic classes (`transparent-fill foreground-stroke`) set on each element so GTK recolors them.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
