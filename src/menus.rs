@@ -369,41 +369,10 @@ pub fn register_actions(
     });
     window.add_action(&action);
 
-    // win.local-tmux-split: new pane to the right in a fresh local-tmux session.
-    let action = gio::SimpleAction::new("local-tmux-split", None);
-    action.connect_activate({
-        let state = state.clone();
-        move |_, _| crate::local_tmux_settings::split_right_session(&state)
-    });
-    window.add_action(&action);
-
-    // win.local-tmux-rename / win.local-tmux-close: only offered on a terminal bound by
-    // `cmux local-tmux`; win.context-menu-refresh updates that before each terminal context menu opens.
-    let rename_session = gio::SimpleAction::new("local-tmux-rename", None);
-    rename_session.set_enabled(false);
-    rename_session.connect_activate({
-        let state = state.clone();
-        let window = window.clone();
-        move |_, _| crate::local_tmux_settings::rename_active_session(&state, &window)
-    });
-    window.add_action(&rename_session);
-    let close_session = gio::SimpleAction::new("local-tmux-close", None);
-    close_session.set_enabled(false);
-    close_session.connect_activate({
-        let state = state.clone();
-        let window = window.clone();
-        move |_, _| crate::local_tmux_settings::close_active_session(&state, &window)
-    });
-    window.add_action(&close_session);
     let action = gio::SimpleAction::new("context-menu-refresh", None);
     action.connect_activate({
-        let state = state.clone();
         let window = window.downgrade();
         move |_, _| {
-            let bound = crate::local_tmux_settings::active_is_bound(&state);
-            rename_session.set_enabled(bound);
-            close_session.set_enabled(bound);
-
             // The one-line paste is offered only for text the action would actually join.
             let Some(window) = window.upgrade() else {
                 return;
@@ -1093,29 +1062,16 @@ pub fn build_terminal_context_menu() -> gio::Menu {
     edit_section.append_item(&paste_one_line);
     menu.append_section(None, &edit_section);
 
+    // Upstream labels: Split Horizontally stacks the new pane below, Split Vertically beside.
     let pane_section = gio::Menu::new();
-    pane_section.append(Some("Split Right"), Some("win.split-right"));
-    pane_section.append(Some("Split Down"), Some("win.split-down"));
-    pane_section.append(Some("Split Right in tmux"), Some("win.local-tmux-split"));
-    pane_section.append(Some("Close Pane"), Some("win.close-pane"));
+    pane_section.append(Some("Split Horizontally"), Some("win.split-down"));
+    pane_section.append(Some("Split Vertically"), Some("win.split-right"));
     pane_section.append(Some("Reset Terminal"), Some("win.reset-terminal"));
-    for (label, action) in [
-        ("Rename tmux Session…", "win.local-tmux-rename"),
-        ("Kill tmux Session…", "win.local-tmux-close"),
-    ] {
-        let item = gio::MenuItem::new(Some(label), Some(action));
-        item.set_attribute_value("hidden-when", Some(&"action-disabled".to_variant()));
-        pane_section.append_item(&item);
-    }
     menu.append_section(None, &pane_section);
 
     let identity_section = gio::Menu::new();
     identity_section.append(Some("Copy IDs"), Some("win.copy-ids"));
     menu.append_section(None, &identity_section);
-
-    let browser_section = gio::Menu::new();
-    browser_section.append(Some("Open Browser Here"), Some("win.browser-open"));
-    menu.append_section(None, &browser_section);
 
     menu
 }

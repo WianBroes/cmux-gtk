@@ -1297,18 +1297,6 @@ impl SplitEngine {
         result
     }
 
-    /// Launch an explicit local command in a new pane to the right, like Split Right.
-    pub(crate) fn split_right_command(&mut self, command: &str) -> Option<u64> {
-        self.clear_zoom();
-        if self.remote_launch.is_some() {
-            return None;
-        }
-        let previous_command = self.launch_command.replace(project_launch(command));
-        let result = self.split_right();
-        self.launch_command = previous_command;
-        result
-    }
-
     /// Build a terminal for a socket creation request: `initial_input` is typed into the
     /// interactive shell followed by Enter, like upstream's `initial_input`. Without `focus`
     /// the terminal does not take keyboard focus when its native surface starts.
