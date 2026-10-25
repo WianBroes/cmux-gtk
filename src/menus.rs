@@ -944,22 +944,13 @@ pub fn build_menu_bar() -> gio::Menu {
     bar
 }
 
-/// Build sidebar workspace row context menu (D-03).
-pub fn build_sidebar_context_menu() -> gio::Menu {
-    let menu = gio::Menu::new();
-    for (label, name) in SIDEBAR_SELECTING_ACTIONS {
-        menu.append(Some(label), Some(&format!("workspace.{name}")));
-    }
-    menu
-}
-
 /// Row menu entries that act on the selected workspace: their `workspace.<name>` row action
 /// selects the row's workspace, then runs `win.<name>` (`sidebar::attach_sidebar_context_menu`).
 pub const SIDEBAR_SELECTING_ACTIONS: &[(&str, &str)] = &[
-    ("Rename", "rename-workspace"),
-    ("Edit Description…", "edit-workspace-description"),
-    ("Clear Description", "clear-workspace-description"),
-    ("Close", "close-workspace"),
+    ("Rename Workspace…", "rename-workspace"),
+    ("Edit Workspace Description…", "edit-workspace-description"),
+    ("Clear Workspace Description", "clear-workspace-description"),
+    ("Close Workspace", "close-workspace"),
     ("Split Right", "split-right"),
     ("Split Down", "split-down"),
 ];

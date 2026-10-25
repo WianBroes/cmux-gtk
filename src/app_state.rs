@@ -8,6 +8,14 @@ use std::rc::Rc;
 
 pub type AppStateRef = Rc<RefCell<AppState>>;
 
+/// Which workspaces a close action removes, relative to its target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseRange {
+    Others,
+    Above,
+    Below,
+}
+
 pub struct AppState {
     pub split_engines: Vec<SplitEngine>,
     pub gtk_app: gtk4::Application,
@@ -744,6 +752,31 @@ impl AppState {
         }
         self.trigger_session_save();
         true
+    }
+
+    /// Close the workspaces around `index` that `range` selects, sparing pinned ones. Returns how
+    /// many closed (the last workspace never closes).
+    pub fn close_workspaces_relative(&mut self, index: usize, range: CloseRange) -> usize {
+        // Pinned workspaces survive every close range, as upstream.
+        let candidates: Vec<usize> = (0..self.workspaces.len())
+            .filter(|candidate| {
+                *candidate != index
+                    && !self.workspaces[*candidate].pinned
+                    && match range {
+                        CloseRange::Above => *candidate < index,
+                        CloseRange::Below => *candidate > index,
+                        CloseRange::Others => true,
+                    }
+            })
+            .collect();
+        // Close from the end so the surviving candidates keep their indexes.
+        let mut closed = 0;
+        for candidate in candidates.into_iter().rev() {
+            if self.close_workspace(candidate) {
+                closed += 1;
+            }
+        }
+        closed
     }
 
     /// Switch to the workspace at `index` (0-based). Updates GtkStack visible child and

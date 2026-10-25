@@ -1440,26 +1440,12 @@ fn handle_socket_command_traced(
                     order_changed = true;
                 }
                 "close_others" | "close_above" | "close_below" => {
-                    // Pinned workspaces survive every close range, as upstream.
-                    let candidates: Vec<usize> = (0..s.workspaces.len())
-                        .filter(|candidate| {
-                            *candidate != index
-                                && !s.workspaces[*candidate].pinned
-                                && match action.as_str() {
-                                    "close_above" => *candidate < index,
-                                    "close_below" => *candidate > index,
-                                    _ => true,
-                                }
-                        })
-                        .collect();
-                    // Close from the end so the surviving candidates keep their indexes.
-                    let mut closed = 0;
-                    for candidate in candidates.into_iter().rev() {
-                        if s.close_workspace(candidate) {
-                            closed += 1;
-                        }
-                    }
-                    extras["closed"] = json!(closed);
+                    let range = match action.as_str() {
+                        "close_above" => crate::app_state::CloseRange::Above,
+                        "close_below" => crate::app_state::CloseRange::Below,
+                        _ => crate::app_state::CloseRange::Others,
+                    };
+                    extras["closed"] = json!(s.close_workspaces_relative(index, range));
                 }
                 "mark_read" => crate::inbox_actions::mark_workspace_read(&mut s, index),
                 // Lights the dot even when the workspace had nothing to read.

@@ -983,7 +983,7 @@ fn open_logged(path: &Path) {
 /// Open a file with the desktop's default application. Upstream opens its own
 /// preview panel; the Linux v1 hands the path straight to `xdg-open`, never through
 /// a shell. The launch is fire-and-forget, like upstream's background open.
-fn open_with_default_application(path: &Path) -> std::io::Result<()> {
+pub(crate) fn open_with_default_application(path: &Path) -> std::io::Result<()> {
     std::process::Command::new("xdg-open")
         .arg(path)
         .spawn()

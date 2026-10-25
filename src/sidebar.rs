@@ -447,9 +447,6 @@ pub fn attach_sidebar_context_menu(
     state: Rc<RefCell<crate::app_state::AppState>>,
 ) {
     wire_workspace_drag(row, state.clone());
-    let menu_model = crate::menus::build_sidebar_context_menu();
-    menu_model.append(Some("Move Up"), Some("workspace.move-up"));
-    menu_model.append(Some("Move Down"), Some("workspace.move-down"));
     let colors = gtk4::gio::Menu::new();
     let group = gtk4::gio::SimpleActionGroup::new();
     for (_, name) in crate::menus::SIDEBAR_SELECTING_ACTIONS {
@@ -538,6 +535,123 @@ pub fn attach_sidebar_context_menu(
         });
         group.add_action(&action);
     }
+    let toggle_pin = gtk4::gio::SimpleAction::new("toggle-pin", None);
+    toggle_pin.connect_activate({
+        let state = Rc::downgrade(&state);
+        let row = row.downgrade();
+        move |_, _| {
+            let (Some(state), Some(row)) = (state.upgrade(), row.upgrade()) else {
+                return;
+            };
+            let Some(index) = workspace_index_for_row(&state.borrow(), &row) else {
+                return;
+            };
+            {
+                let mut s = state.borrow_mut();
+                let pinned = !s.workspaces[index].pinned;
+                let _ = s.set_workspace_pinned(index, pinned);
+            }
+            rebuild_grouped_sidebar(&state);
+        }
+    });
+    group.add_action(&toggle_pin);
+    let clear_name = gtk4::gio::SimpleAction::new("clear-name", None);
+    clear_name.connect_activate({
+        let state = Rc::downgrade(&state);
+        let row = row.downgrade();
+        move |_, _| {
+            let (Some(state), Some(row)) = (state.upgrade(), row.upgrade()) else {
+                return;
+            };
+            let Some(index) = workspace_index_for_row(&state.borrow(), &row) else {
+                return;
+            };
+            state.borrow_mut().clear_workspace_name(index);
+        }
+    });
+    group.add_action(&clear_name);
+    let move_top = gtk4::gio::SimpleAction::new("move-top", None);
+    move_top.connect_activate({
+        let state = Rc::downgrade(&state);
+        let row = row.downgrade();
+        move |_, _| {
+            let (Some(state), Some(row)) = (state.upgrade(), row.upgrade()) else {
+                return;
+            };
+            let Some(index) = workspace_index_for_row(&state.borrow(), &row) else {
+                return;
+            };
+            let to = state.borrow().workspace_move_target(index, true, 0);
+            if to != index {
+                let changed = { state.borrow_mut().reorder_workspace(index, to) };
+                if changed {
+                    rebuild_grouped_sidebar(&state);
+                }
+            }
+        }
+    });
+    group.add_action(&move_top);
+    for (name, range) in [
+        ("close-others", crate::app_state::CloseRange::Others),
+        ("close-below", crate::app_state::CloseRange::Below),
+        ("close-above", crate::app_state::CloseRange::Above),
+    ] {
+        let action = gtk4::gio::SimpleAction::new(name, None);
+        action.connect_activate({
+            let state = Rc::downgrade(&state);
+            let row = row.downgrade();
+            move |_, _| {
+                let (Some(state), Some(row)) = (state.upgrade(), row.upgrade()) else {
+                    return;
+                };
+                let Some(index) = workspace_index_for_row(&state.borrow(), &row) else {
+                    return;
+                };
+                state.borrow_mut().close_workspaces_relative(index, range);
+            }
+        });
+        group.add_action(&action);
+    }
+    let copy_id = gtk4::gio::SimpleAction::new("copy-id", None);
+    copy_id.connect_activate({
+        let state = Rc::downgrade(&state);
+        let row = row.downgrade();
+        move |_, _| {
+            let (Some(state), Some(row)) = (state.upgrade(), row.upgrade()) else {
+                return;
+            };
+            let Some(index) = workspace_index_for_row(&state.borrow(), &row) else {
+                return;
+            };
+            let uuid = state.borrow().workspaces[index].uuid;
+            row.clipboard()
+                .set_text(&format!("workspace_id={}", uuid.to_string().to_uppercase()));
+        }
+    });
+    group.add_action(&copy_id);
+    let open_folder = gtk4::gio::SimpleAction::new("open-folder", None);
+    open_folder.connect_activate({
+        let state = Rc::downgrade(&state);
+        let row = row.downgrade();
+        move |_, _| {
+            let (Some(state), Some(row)) = (state.upgrade(), row.upgrade()) else {
+                return;
+            };
+            let Some(index) = workspace_index_for_row(&state.borrow(), &row) else {
+                return;
+            };
+            let directory = state.borrow().local_workspace_directory(index);
+            if let Some(directory) = directory {
+                if let Err(error) = crate::file_explorer::open_with_default_application(&directory) {
+                    crate::diagnostics::event(format_args!(
+                        "file_explorer.open_failed os_error={}",
+                        error.raw_os_error().unwrap_or(-1)
+                    ));
+                }
+            }
+        }
+    });
+    group.add_action(&open_folder);
     for (name, color) in [
         ("Default", None),
         ("Blue", Some("#24466b")),
@@ -571,7 +685,6 @@ pub fn attach_sidebar_context_menu(
         });
         group.add_action(&action);
     }
-    menu_model.append_submenu(Some("Background Color"), &colors);
     let groups_menu = gtk4::gio::Menu::new();
     groups_menu.append(
         Some("New Group from Workspace"),
@@ -660,7 +773,6 @@ pub fn attach_sidebar_context_menu(
         }
     });
     group.add_action(&create_group);
-    menu_model.append_submenu(Some("Workspace Group"), &groups_menu);
     let notifications = gtk4::gio::Menu::new();
     let section = gtk4::gio::Menu::new();
     section.append(Some("Mark Workspace as Read"), Some("workspace.mark-read"));
@@ -670,7 +782,71 @@ pub fn attach_sidebar_context_menu(
         Some("workspace.clear-latest-notification"),
     );
     section.append_submenu(Some("Notifications"), &notifications);
+
+    // Section order follows the cmux macOS row menu. The pin section is refilled on every
+    // open so its label matches the row's current pin state.
+    let menu_model = gtk4::gio::Menu::new();
+    let pin_section = gtk4::gio::Menu::new();
+    pin_section.append(Some("Pin Workspace"), Some("workspace.toggle-pin"));
+    pin_section.append_submenu(Some("Workspace Group"), &groups_menu);
+    menu_model.append_section(None, &pin_section);
+
+    let workspace_section = gtk4::gio::Menu::new();
+    workspace_section.append(Some("Rename Workspace…"), Some("workspace.rename-workspace"));
+    let clear_name_item = gtk4::gio::MenuItem::new(
+        Some("Remove Custom Workspace Name"),
+        Some("workspace.clear-name"),
+    );
+    clear_name_item.set_attribute_value("hidden-when", Some(&"action-disabled".to_variant()));
+    workspace_section.append_item(&clear_name_item);
+    workspace_section.append(
+        Some("Edit Workspace Description…"),
+        Some("workspace.edit-workspace-description"),
+    );
+    workspace_section.append(
+        Some("Clear Workspace Description"),
+        Some("workspace.clear-workspace-description"),
+    );
+    menu_model.append_section(None, &workspace_section);
+
+    let background_section = gtk4::gio::Menu::new();
+    background_section.append_submenu(Some("Background Color"), &colors);
+    menu_model.append_section(None, &background_section);
+
+    let order_section = gtk4::gio::Menu::new();
+    order_section.append(Some("Move Up"), Some("workspace.move-up"));
+    order_section.append(Some("Move Down"), Some("workspace.move-down"));
+    order_section.append(Some("Move to Top"), Some("workspace.move-top"));
+    menu_model.append_section(None, &order_section);
+
+    let close_section = gtk4::gio::Menu::new();
+    close_section.append(Some("Close Workspace"), Some("workspace.close-workspace"));
+    close_section.append(
+        Some("Close Other Workspaces"),
+        Some("workspace.close-others"),
+    );
+    close_section.append(
+        Some("Close Workspaces Below"),
+        Some("workspace.close-below"),
+    );
+    close_section.append(
+        Some("Close Workspaces Above"),
+        Some("workspace.close-above"),
+    );
+    menu_model.append_section(None, &close_section);
+
     menu_model.append_section(None, &section);
+
+    let info_section = gtk4::gio::Menu::new();
+    info_section.append(Some("Copy Workspace ID"), Some("workspace.copy-id"));
+    info_section.append(Some("Open Folder"), Some("workspace.open-folder"));
+    menu_model.append_section(None, &info_section);
+
+    let split_section = gtk4::gio::Menu::new();
+    split_section.append(Some("Split Right"), Some("workspace.split-right"));
+    split_section.append(Some("Split Down"), Some("workspace.split-down"));
+    menu_model.append_section(None, &split_section);
+
     row.insert_action_group("workspace", Some(&group));
     let popover = gtk4::PopoverMenu::from_model(Some(&menu_model));
     popover.set_parent(row);
@@ -690,10 +866,59 @@ pub fn attach_sidebar_context_menu(
                 return;
             };
             // The menu targets this row without selecting it, as upstream (`menu(for:)`).
-            let Some(index) = workspace_index_for_row(&state.borrow(), &row) else {
-                return;
+            let (
+                pinned,
+                clear_name_enabled,
+                move_up_enabled,
+                move_down_enabled,
+                move_top_enabled,
+                close_others_enabled,
+                close_below_enabled,
+                close_above_enabled,
+                open_folder_enabled,
+            ) = {
+                let s = state.borrow();
+                let Some(index) = workspace_index_for_row(&s, &row) else {
+                    return;
+                };
+                crate::notification_menu::fill_row(&s, index, &group, &notifications);
+                let workspace = &s.workspaces[index];
+                let count = s.workspaces.len();
+                (
+                    workspace.pinned,
+                    workspace.custom_name,
+                    s.adjacent_workspace_in_group(index, -1).is_some(),
+                    s.adjacent_workspace_in_group(index, 1).is_some(),
+                    s.workspace_move_target(index, true, 0) != index,
+                    count > 1,
+                    index + 1 < count,
+                    index > 0,
+                    s.local_workspace_directory(index).is_some(),
+                )
             };
-            crate::notification_menu::fill_row(&state.borrow(), index, &group, &notifications);
+            pin_section.remove_all();
+            pin_section.append(
+                Some(if pinned { "Unpin Workspace" } else { "Pin Workspace" }),
+                Some("workspace.toggle-pin"),
+            );
+            pin_section.append_submenu(Some("Workspace Group"), &groups_menu);
+            for (name, enabled) in [
+                ("clear-name", clear_name_enabled),
+                ("move-up", move_up_enabled),
+                ("move-down", move_down_enabled),
+                ("move-top", move_top_enabled),
+                ("close-others", close_others_enabled),
+                ("close-below", close_below_enabled),
+                ("close-above", close_above_enabled),
+                ("open-folder", open_folder_enabled),
+            ] {
+                if let Some(action) = group
+                    .lookup_action(name)
+                    .and_then(|action| action.downcast::<gtk4::gio::SimpleAction>().ok())
+                {
+                    action.set_enabled(enabled);
+                }
+            }
             popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
             popover.popup();
         }
