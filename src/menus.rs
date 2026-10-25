@@ -369,11 +369,15 @@ pub fn register_actions(
     });
     window.add_action(&action);
 
-    let action = gio::SimpleAction::new("context-menu-refresh", None);
+    let action = gio::SimpleAction::new(
+        "context-menu-refresh",
+        Some(gtk4::glib::VariantTy::BOOLEAN),
+    );
     action.connect_activate({
         let window = window.downgrade();
-        move |_, _| {
-            // The one-line paste is offered only for text the action would actually join.
+        move |_, parameter| {
+            // The one-line paste is offered only for text the action would actually join;
+            // the caller reads the clipboard and passes whether it spans several lines.
             let Some(window) = window.upgrade() else {
                 return;
             };
@@ -383,18 +387,7 @@ pub fn register_actions(
             else {
                 return;
             };
-            paste_one_line.set_enabled(false);
-            let clipboard = window.clipboard();
-            gtk4::glib::MainContext::default().spawn_local(async move {
-                let text = clipboard
-                    .read_text_future()
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|text| text.to_string())
-                    .unwrap_or_default();
-                paste_one_line.set_enabled(crate::paste_line_join::spans_multiple_lines(&text));
-            });
+            paste_one_line.set_enabled(parameter.and_then(|p| p.get::<bool>()).unwrap_or(false));
         }
     });
     window.add_action(&action);

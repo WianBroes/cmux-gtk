@@ -1005,8 +1005,24 @@ fn attach_terminal_context_menu(gl_area: &gtk4::GLArea) {
                 return;
             };
             popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-            let _ = popover.activate_action("win.context-menu-refresh", None);
-            popover.popup();
+            // The clipboard is read before the popover sizes itself: an entry enabled after
+            // popup() does not grow it, and the last entry gets cut off.
+            let clipboard = popover.clipboard();
+            gtk4::glib::MainContext::default().spawn_local(async move {
+                let text = clipboard
+                    .read_text_future()
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|text| text.to_string())
+                    .unwrap_or_default();
+                let multiline = crate::paste_line_join::spans_multiple_lines(&text);
+                let _ = popover.activate_action(
+                    "win.context-menu-refresh",
+                    Some(&gtk4::glib::prelude::ToVariant::to_variant(&multiline)),
+                );
+                popover.popup();
+            });
         }
     });
     gl_area.add_controller(gesture);
