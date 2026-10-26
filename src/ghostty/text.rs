@@ -113,8 +113,21 @@ pub(crate) unsafe fn read_history(
     if end == 0 || max_lines == 0 {
         return Ok((String::new(), end));
     }
-    let top = end.saturating_sub(max_lines);
-    Ok((unsafe { read_rows(surface, top, end - 1) }?, end))
+    // Ghostty refuses a read wider than max_bytes / 4 cells (clipboard work
+    // budget), about 450 rows of a 140-column pane: read in slices that fit.
+    let columns = u64::from(unsafe { ffi::ghostty_surface_size(surface) }.columns).max(1);
+    let slice = ((MAX_BYTES as u64 / 4) / columns).saturating_sub(1).max(1);
+    let mut top = end.saturating_sub(max_lines);
+    let mut text = String::new();
+    while top < end {
+        let bottom = (top + slice).min(end) - 1;
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&unsafe { read_rows(surface, top, bottom) }?);
+        top = bottom + 1;
+    }
+    Ok((text, end))
 }
 
 /// Viewport position and size in rows.
