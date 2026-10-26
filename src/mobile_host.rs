@@ -92,6 +92,8 @@ async fn handle_connection(
     // Requests keep flowing after a subscription: events go out from their own task.
     let writer = Arc::new(tokio::sync::Mutex::new(writer));
     let mut events: Option<tokio::task::JoinHandle<()>> = None;
+    // Wakes the event task right after a scroll or input instead of at the next tick.
+    let wake = Arc::new(tokio::sync::Notify::new());
     let mut reader = BufReader::new(reader);
     loop {
         let frame = match read_frame(&mut reader).await {
@@ -262,6 +264,7 @@ async fn handle_connection(
                     let _ = send_json(&writer, &error_response(id, &code, &message)).await;
                     continue;
                 }
+                wake.notify_one();
                 let result = json!({"surface_id": surface_id, "keys": key_count});
                 if send_json(&writer, &success_response(id, result))
                     .await
@@ -297,6 +300,7 @@ async fn handle_connection(
                         continue;
                     }
                 }
+                wake.notify_one();
                 let result = json!({"surface_id": surface_id, "delta_lines": delta_lines});
                 if send_json(&writer, &success_response(id, result))
                     .await
@@ -391,6 +395,7 @@ async fn handle_connection(
                     writer.clone(),
                     surface_id.to_owned(),
                     cmd_tx.clone(),
+                    wake.clone(),
                 )));
             }
             "mobile.app.latest" => {
@@ -450,18 +455,23 @@ async fn handle_connection(
     }
 }
 
-/// Poll one terminal at four frames per second and emit its full text whenever it changes.
+/// Poll one terminal at four frames per second, or at once when `wake` fires
+/// (scroll, input), and emit its full text whenever it changes.
 async fn stream_terminal_events(
     writer: Arc<tokio::sync::Mutex<OwnedWriteHalf>>,
     surface_id: String,
     cmd_tx: mpsc::Sender<SocketCommand>,
+    wake: Arc<tokio::sync::Notify>,
 ) {
     let mut sequence = 0u64;
     let mut last: Option<String> = None;
     let mut ticker = tokio::time::interval(std::time::Duration::from_millis(250));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        ticker.tick().await;
+        tokio::select! {
+            _ = ticker.tick() => {}
+            _ = wake.notified() => {}
+        }
         let Ok(text) = read_terminal_text(&cmd_tx, &surface_id).await else {
             continue;
         };
