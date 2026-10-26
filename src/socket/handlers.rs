@@ -3121,6 +3121,7 @@ fn handle_socket_command_traced(
         SocketCommand::SurfaceReadText {
             req_id,
             scrollback,
+            render_grid,
             id,
             workspace,
             resp_tx,
@@ -3135,7 +3136,12 @@ fn handle_socket_command_traced(
                         crate::ghostty::text::read_visible(surface).and_then(|text| {
                             crate::ghostty::text::rows_above_viewport(surface).map(|rows| {
                                 let columns = u64::from(crate::ghostty::ffi::ghostty_surface_size(surface).columns);
-                                (text, Some((rows, columns)))
+                                let grid = if render_grid {
+                                    crate::ghostty::text::render_grid_json(surface, id.as_deref().unwrap_or(""), 0).ok()
+                                } else {
+                                    None
+                                };
+                                (text, Some((rows, columns, grid)))
                             })
                         })
                     }
@@ -3149,9 +3155,12 @@ fn handle_socket_command_traced(
                         "text": text,
                         "base64": base64::engine::general_purpose::STANDARD.encode(&text),
                     });
-                    if let (Some((rows, columns)), Some(fields)) = (grid, payload.as_object_mut()) {
+                    if let (Some((rows, columns, render_grid)), Some(fields)) = (grid, payload.as_object_mut()) {
                         fields.insert("rows_above".into(), rows.into());
                         fields.insert("columns".into(), columns.into());
+                        if let Some(frame) = render_grid.and_then(|json| serde_json::from_str::<Value>(&json).ok()) {
+                            fields.insert("render_grid".into(), frame);
+                        }
                     }
                     let s = state.borrow();
                     let location = terminal_location(&s, id.as_deref(), workspace.as_deref())

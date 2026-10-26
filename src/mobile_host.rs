@@ -207,12 +207,13 @@ async fn handle_connection(
                     continue;
                 };
                 match read_terminal_text(&cmd_tx, surface_id).await {
-                    Ok((text, rows_above, columns)) => {
+                    Ok(TerminalScreen { text, rows_above, columns, render_grid }) => {
                         let result = json!({
                             "surface_id": surface_id,
                             "text": text,
                             "rows_above": rows_above,
                             "columns": columns,
+                            "render_grid": render_grid,
                         });
                         if send_json(&writer, &success_response(id, result))
                             .await
@@ -508,7 +509,7 @@ async fn stream_terminal_events(
     wake: Arc<tokio::sync::Notify>,
 ) {
     let mut sequence = 0u64;
-    let mut last: Option<(String, u64, u64)> = None;
+    let mut last: Option<TerminalScreen> = None;
     let mut ticker = tokio::time::interval(std::time::Duration::from_millis(250));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
@@ -523,7 +524,7 @@ async fn stream_terminal_events(
             continue;
         }
         sequence += 1;
-        let (text, rows_above, columns) = &screen;
+        let TerminalScreen { text, rows_above, columns, render_grid } = &screen;
         let event = json!({
             "kind": "event",
             "topic": "terminal.text",
@@ -532,6 +533,7 @@ async fn stream_terminal_events(
                 "text": text,
                 "rows_above": rows_above,
                 "columns": columns,
+                "render_grid": render_grid,
                 "seq": sequence,
             },
         });
@@ -542,16 +544,27 @@ async fn stream_terminal_events(
     }
 }
 
+/// One read of a terminal for the phone.
+#[derive(PartialEq)]
+struct TerminalScreen {
+    text: String,
+    rows_above: u64,
+    columns: u64,
+    /// Styled grid (`terminal.render_grid` format of the macOS host), `null` if unavailable.
+    render_grid: Value,
+}
+
 /// Ask the GTK main thread for the current visible terminal text, the number of
 /// scrollback rows above it (0 on the alternate screen) and the grid width in columns,
 /// which the phone uses to fit the whole width on its screen.
 async fn read_terminal_text(
     cmd_tx: &mpsc::Sender<SocketCommand>,
     surface_id: &str,
-) -> Result<(String, u64, u64), (String, String)> {
+) -> Result<TerminalScreen, (String, String)> {
     let result = gtk_call(cmd_tx, |resp_tx| SocketCommand::SurfaceReadText {
         req_id: Value::Null,
         scrollback: false,
+        render_grid: true,
         id: Some(surface_id.to_owned()),
         workspace: None,
         resp_tx,
@@ -564,7 +577,8 @@ async fn read_terminal_text(
         .to_owned();
     let rows_above = result.get("rows_above").and_then(Value::as_u64).unwrap_or(0);
     let columns = result.get("columns").and_then(Value::as_u64).unwrap_or(0);
-    Ok((text, rows_above, columns))
+    let render_grid = result.get("render_grid").cloned().unwrap_or(Value::Null);
+    Ok(TerminalScreen { text, rows_above, columns, render_grid })
 }
 
 /// Count workspaces through the existing GTK command; unavailable state reports zero.

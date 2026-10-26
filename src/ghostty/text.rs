@@ -91,6 +91,42 @@ pub(crate) unsafe fn read_visible(surface: ffi::ghostty_surface_t) -> Result<Str
     unsafe { read_rows(surface, viewport.offset, bottom) }
 }
 
+/// Styled render-grid frame of the viewport (the macOS host's `terminal.render_grid`
+/// format), for a phone that replays it into its own terminal emulator.
+///
+/// # Safety
+/// Same contract as [`read_visible`].
+pub(crate) unsafe fn render_grid_json(
+    surface: ffi::ghostty_surface_t,
+    surface_id: &str,
+    scrollback_lines: usize,
+) -> Result<String, &'static str> {
+    // SAFETY: the caller guarantees surface lifetime; the id is borrowed only
+    // for this synchronous call.
+    let value = unsafe {
+        ffi::ghostty_surface_render_grid_json_v2(
+            surface,
+            surface_id.as_ptr().cast(),
+            surface_id.len(),
+            0,
+            scrollback_lines,
+            true,
+            false,
+        )
+    };
+    let result = if value.ptr.is_null() || value.len == 0 {
+        Err("render grid unavailable")
+    } else {
+        // SAFETY: Ghostty returned `len` initialized bytes owned by `value`.
+        std::str::from_utf8(unsafe { std::slice::from_raw_parts(value.ptr.cast::<u8>(), value.len) })
+            .map(str::to_owned)
+            .map_err(|_| "render grid is not UTF-8")
+    };
+    // SAFETY: this is the sole release of the allocation returned above.
+    unsafe { ffi::ghostty_string_free(value) };
+    result
+}
+
 /// Rows of scrollback above the current viewport (0 on the alternate screen).
 ///
 /// # Safety

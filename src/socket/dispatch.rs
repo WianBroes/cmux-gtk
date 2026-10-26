@@ -1262,6 +1262,7 @@ async fn dispatch_request(
             };
             commands::SocketCommand::SurfaceReadText {
                 scrollback: method == "surface.read_scrollback",
+                render_grid: false,
                 req_id: req_id.clone(),
                 id: target,
                 workspace,

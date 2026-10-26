@@ -349,6 +349,8 @@ pub enum SocketCommand {
     SurfaceReadText {
         req_id: Value,
         scrollback: bool,
+        /// Also return the styled render-grid frame (mobile only).
+        render_grid: bool,
         id: Option<String>,
         workspace: Option<String>,
         resp_tx: RespTx,
