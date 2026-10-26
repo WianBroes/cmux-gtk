@@ -258,6 +258,9 @@ pub enum Commands {
     Update,
     /// Ping the running cmux instance
     Ping,
+    /// Print the JSON pairing ticket for the Android mobile host
+    #[command(name = "mobile-ticket")]
+    MobileTicket,
     /// Show cmux instance identity (version, platform, pid) and focused topology
     Identify {
         /// Workspace handle used as the caller anchor

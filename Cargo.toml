@@ -37,6 +37,8 @@ clap = { version = "4", features = ["derive", "color", "env"] }
 clap_complete = "4.6"
 clap_mangen = "0.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# Pairing QR code rendered as Unicode blocks by `cmux mobile-ticket`; no image backend.
+qrcode = { version = "0.14", default-features = false }
 hmac = "0.12.1"
 pulldown-cmark = { version = "0.13.4", default-features = false }
 # Schema `pattern` validation for cmux.json; already in the tree through bindgen.

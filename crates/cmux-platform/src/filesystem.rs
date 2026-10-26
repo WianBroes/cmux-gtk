@@ -55,6 +55,12 @@ pub fn load_or_create_secret(path: &Path) -> io::Result<[u8; 32]> {
     }
 }
 
+/// Return the effective user id used for owner-only file checks.
+pub fn current_uid() -> u32 {
+    // SAFETY: geteuid has no pointer or initialization preconditions.
+    unsafe { libc::geteuid() }
+}
+
 /// Open a regular file for bounded worker reads, rejecting FIFOs/devices without waiting for a peer.
 /// Follows symlinks; validates the opened descriptor so a path replacement cannot bypass the type check.
 pub fn open_regular_read(path: &Path) -> io::Result<std::fs::File> {

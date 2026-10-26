@@ -78,6 +78,11 @@ pub enum SocketCommand {
         req_id: Value,
         resp_tx: RespTx,
     },
+    /// Mobile workspace snapshot with each entry's active terminal surface and host status.
+    MobileWorkspaceList {
+        req_id: Value,
+        resp_tx: RespTx,
+    },
     WorkspaceCurrent {
         req_id: Value,
         resp_tx: RespTx,

@@ -16,6 +16,9 @@ mod agent_resume;
 pub mod format;
 mod hooks;
 mod local_tmux;
+#[path = "../mobile.rs"]
+#[allow(dead_code)]
+pub mod mobile;
 #[path = "../local_tmux.rs"]
 #[allow(dead_code)]
 mod local_tmux_shared;
@@ -155,6 +158,14 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
     }
     if let Commands::Comments { command } = &cli.command {
         return comments::run(command, cli.json);
+    }
+    if matches!(cli.command, Commands::MobileTicket) {
+        let ticket = mobile::ticket().map_err(CliError::Command)?;
+        println!("{}", serde_json::to_string(&ticket).map_err(|error| CliError::Command(error.to_string()))?);
+        let link = mobile::pairing_link(&ticket).map_err(CliError::Command)?;
+        println!("{}", link);
+        println!("{}", mobile::pairing_qr(&link).map_err(CliError::Command)?);
+        return Ok(());
     }
     // `cmux config` only reads cmux.json and the bundled schema, so it runs before the socket
     // path is ever considered and works with cmux closed.
@@ -1566,6 +1577,7 @@ fn command_to_rpc(cmd: &Commands) -> (&'static str, serde_json::Value) {
             unreachable!("team launch commands are handled before socket discovery")
         }
         Commands::Ping => ("system.ping", json!({})),
+        Commands::MobileTicket => unreachable!("mobile-ticket runs without socket dispatch"),
         Commands::Identify {
             workspace,
             surface,

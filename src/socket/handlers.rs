@@ -179,6 +179,90 @@ fn workspace_record(state: &crate::app_state::AppState, index: usize) -> Option<
     }))
 }
 
+/// Snapshot one workspace in the mobile client's shape: upstream row keys plus the active
+/// terminal surface and the public host status attached to every entry.
+fn mobile_workspace_record(
+    state: &crate::app_state::AppState,
+    index: usize,
+    host_status: &Value,
+) -> Option<Value> {
+    use super::handles::MAIN_WINDOW_ID;
+    let workspace = state.workspaces.get(index)?;
+    let current_directory = state
+        .local_workspace_directory(index)
+        .map(|path| path.to_string_lossy().into_owned())
+        .or_else(|| workspace.remote_directory.clone());
+    let mut terminals = Vec::new();
+    let mut surfaces = Vec::new();
+    let mut active_surface = None;
+    let mut first_terminal = None;
+    if let Some(engine) = state.split_engines.get(index) {
+        let active_pane = engine.active_pane_id;
+        for pane in engine.pane_info() {
+            for (slot, surface) in pane.surface_ids.iter().enumerate() {
+                let browser = pane
+                    .browser_urls
+                    .get(slot)
+                    .and_then(|url| url.as_ref());
+                let focused = index == state.active_index
+                    && pane.id == active_pane
+                    && pane.selected_surface == Some(*surface);
+                let title = engine
+                    .surface_title(&surface.to_string())
+                    .or_else(|| browser.cloned())
+                    .unwrap_or_else(|| surface.to_string());
+                if browser.is_none() {
+                    if first_terminal.is_none() {
+                        first_terminal = Some(surface.to_string());
+                    }
+                    if focused || (pane.id == active_pane && pane.selected_surface == Some(*surface))
+                    {
+                        active_surface = Some(surface.to_string());
+                    }
+                    terminals.push(json!({
+                        "id": surface,
+                        "title": title.clone(),
+                        "current_directory": current_directory.clone(),
+                        "is_ready": true,
+                        "is_focused": focused,
+                        "agent_source": null,
+                        "agent_state": null,
+                    }));
+                }
+                surfaces.push(json!({
+                    "surface_id": surface,
+                    "kind": if browser.is_some() { "browser" } else { "terminal" },
+                    "title": title,
+                    "is_focused": focused,
+                    "file_path": null,
+                }));
+            }
+        }
+    }
+    Some(json!({
+        "id": workspace.uuid,
+        "window_id": MAIN_WINDOW_ID,
+        "title": workspace.name.clone(),
+        "description": workspace.custom_description.clone(),
+        "description_truncated": false,
+        "custom_color": workspace.color.clone(),
+        "current_directory": current_directory,
+        "is_selected": index == state.active_index,
+        "is_pinned": workspace.pinned,
+        "group_id": workspace.group_id,
+        "preview": null,
+        "preview_at": null,
+        "last_activity_at": 0,
+        "has_unread": workspace.has_attention,
+        "unread_count": 0,
+        "terminals": terminals,
+        "surfaces": surfaces,
+        "simulators": [],
+        "surface_id": active_surface.or(first_terminal),
+        "host_status": host_status,
+    }))
+}
+
 /// The single main window, with its ref and index like upstream `window.list` items.
 fn window_record(state: &crate::app_state::AppState) -> Value {
     use super::handles::{HandleKind, MAIN_WINDOW_ID};
@@ -974,6 +1058,19 @@ fn handle_socket_command_traced(
                 .filter_map(|index| workspace_record(&s, index))
                 .collect();
             let _ = resp_tx.send(ok(req_id, json!({"workspaces": list})));
+        }
+
+        SocketCommand::MobileWorkspaceList { req_id, resp_tx } => {
+            // SOCK-05: No focus side effects.
+            let s = state.borrow();
+            let host_status = crate::mobile::host_status(s.workspaces.len());
+            let list: Vec<Value> = (0..s.workspaces.len())
+                .filter_map(|index| mobile_workspace_record(&s, index, &host_status))
+                .collect();
+            let _ = resp_tx.send(ok(
+                req_id,
+                json!({"workspaces": list, "host_status": host_status}),
+            ));
         }
 
         SocketCommand::WorkspaceCurrent { req_id, resp_tx } => {

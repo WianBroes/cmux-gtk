@@ -13,6 +13,7 @@ pub mod filesystem;
 pub mod installation;
 pub mod listeners;
 pub mod local_socket;
+pub mod network;
 pub mod notification;
 pub mod paths;
 pub mod peer;

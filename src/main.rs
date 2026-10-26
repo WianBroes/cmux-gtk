@@ -28,6 +28,9 @@ mod inbox_actions;
 mod inbox_view;
 mod line_reader;
 mod menus;
+#[allow(dead_code)]
+mod mobile;
+mod mobile_host;
 mod notification;
 mod notification_caller;
 mod notification_menu;
@@ -848,6 +851,7 @@ fn build_ui(
     // Start socket server (tokio accept loop + XDG path setup).
     // cmd_tx is passed in so the socket server dispatches commands through the
     // existing tokio mpsc bridge to the GTK main thread (spawn_local above).
+    crate::mobile_host::start(&runtime_handle, cmd_tx.clone());
     crate::socket::start_socket_server(&runtime_handle, cmd_tx);
 
     // 5. Handle delete-event for close confirmation
