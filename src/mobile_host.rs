@@ -239,6 +239,57 @@ async fn handle_connection(
                     .await;
                     continue;
                 };
+                // Typed input is delivered as key presses so control bytes stay real
+                // keys instead of landing in the terminal as bracketed paste.
+                let keys = mobile::input_keys(&text);
+                let key_count = keys.len();
+                let mut first_error: Option<(String, String)> = None;
+                for key in keys {
+                    let delivered = gtk_call(&cmd_tx, |resp_tx| SocketCommand::SurfaceSendKey {
+                        req_id: Value::Null,
+                        id: Some(surface_id.to_owned()),
+                        workspace: None,
+                        key,
+                        resp_tx,
+                    })
+                    .await;
+                    if let Err(error) = delivered {
+                        first_error = Some(error);
+                        break;
+                    }
+                }
+                if let Some((code, message)) = first_error {
+                    let _ = send_json(&writer, &error_response(id, &code, &message)).await;
+                    continue;
+                }
+                let result = json!({"surface_id": surface_id, "keys": key_count});
+                if send_json(&writer, &success_response(id, result))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            "mobile.terminal.paste" => {
+                let text = match params.get("text").and_then(Value::as_str) {
+                    Some(text) if !text.is_empty() => text.to_owned(),
+                    _ => {
+                        let _ = send_json(
+                            &writer,
+                            &error_response(id, "invalid_params", "Missing text"),
+                        )
+                        .await;
+                        continue;
+                    }
+                };
+                let Some(surface_id) = params.get("surface_id").and_then(Value::as_str) else {
+                    let _ = send_json(
+                        &writer,
+                        &error_response(id, "invalid_params", "Missing surface_id"),
+                    )
+                    .await;
+                    continue;
+                };
                 match gtk_call(&cmd_tx, |resp_tx| SocketCommand::SurfaceSendText {
                     req_id: Value::Null,
                     id: Some(surface_id.to_owned()),
@@ -524,6 +575,36 @@ fn error_response(id: Value, code: &str, message: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every emitted token is one literal character or a name `named_key::parse` accepts.
+    #[test]
+    fn input_keys_emits_named_key_payloads() {
+        let samples = [
+            "ls\r",
+            "\x03",
+            "\x1b[A\x1b[D",
+            "\x1bOB",
+            "\x1b[5~\x1b[6~",
+            "\x1b",
+            "\x1bb",
+            "a\r\nb",
+            "\x7f",
+            "a b",
+            "\x1b[Z",
+            "\x1b[9x",
+            "\x1b[H\x1bOF",
+            "\x01\x1a",
+            "\x1b1",
+        ];
+        for sample in samples {
+            for key in crate::mobile::input_keys(sample) {
+                assert!(
+                    key.chars().count() == 1 || crate::ghostty::named_key::parse(&key).is_some(),
+                    "{key:?} from {sample:?} is neither a character nor a key name",
+                );
+            }
+        }
+    }
 
     /// Two complete frames coalesced into one read are returned separately and in order.
     #[tokio::test]

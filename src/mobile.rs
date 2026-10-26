@@ -132,8 +132,112 @@ pub fn host_status(workspace_count: usize) -> Value {
         "mac_display_name": display_name(),
         "workspace_count": workspace_count,
         "terminal_fidelity": "text",
-        "capabilities": ["terminal.text", "app.update"],
+        "capabilities": ["terminal.text", "app.update", "terminal.input.keys", "terminal.paste"],
     })
+}
+
+/// Split typed text into the individual key presses `surface.send_key` accepts.
+///
+/// Control bytes and escape sequences become key names (`0x03` → `ctrl-c`, `ESC[A` → `up`);
+/// every other character stays a one-character string. `mobile.terminal.input` types text
+/// this way so control bytes arrive as real key presses instead of bracketed paste.
+pub fn input_keys(text: &str) -> Vec<String> {
+    let characters: Vec<char> = text.chars().collect();
+    let mut keys = Vec::new();
+    let mut index = 0;
+    while index < characters.len() {
+        let character = characters[index];
+        index += 1;
+        match character {
+            '\u{1b}' => keys.extend(escape_keys(&characters, &mut index)),
+            '\r' => {
+                // A CRLF pair is one Enter, not two.
+                if characters.get(index) == Some(&'\n') {
+                    index += 1;
+                }
+                keys.push("enter".to_owned());
+            }
+            '\n' => keys.push("enter".to_owned()),
+            '\t' => keys.push("tab".to_owned()),
+            '\u{8}' | '\u{7f}' => keys.push("backspace".to_owned()),
+            ' ' => keys.push("space".to_owned()),
+            control if ('\u{1}'..='\u{1a}').contains(&control) => {
+                keys.push(format!("ctrl-{}", (control as u8 - 1 + b'a') as char));
+            }
+            '\0' | '\u{1c}'..='\u{1f}' => {}
+            other => keys.push(other.to_string()),
+        }
+    }
+    keys
+}
+
+/// Keys produced by one `ESC`, advancing `index` over the characters it consumed.
+///
+/// An unknown or incomplete sequence yields `escape` alone, leaving the following
+/// characters to be read again as ordinary input.
+fn escape_keys(characters: &[char], index: &mut usize) -> Vec<String> {
+    let Some(&next) = characters.get(*index) else {
+        return vec!["escape".to_owned()];
+    };
+    let sequence = match next {
+        '[' => csi_sequence(characters, *index + 1),
+        'O' => ss3_sequence(characters, *index + 1),
+        _ => None,
+    };
+    if let Some((key, consumed)) = sequence {
+        *index += consumed;
+        return vec![key];
+    }
+    if next == '[' || next == 'O' {
+        return vec!["escape".to_owned()];
+    }
+    if next.is_ascii_alphabetic() {
+        *index += 1;
+        return vec![format!("alt-{}", next.to_ascii_lowercase())];
+    }
+    if !next.is_control() {
+        *index += 1;
+        return vec!["escape".to_owned(), next.to_string()];
+    }
+    vec!["escape".to_owned()]
+}
+
+/// Key name of a CSI sequence (`ESC [ …`) and the characters it spans from the `[`.
+fn csi_sequence(characters: &[char], start: usize) -> Option<(String, usize)> {
+    match *characters.get(start)? {
+        'A' => Some(("up".to_owned(), 2)),
+        'B' => Some(("down".to_owned(), 2)),
+        'C' => Some(("right".to_owned(), 2)),
+        'D' => Some(("left".to_owned(), 2)),
+        'H' => Some(("home".to_owned(), 2)),
+        'F' => Some(("end".to_owned(), 2)),
+        'Z' => Some(("shift-tab".to_owned(), 2)),
+        '2'..='6' if characters.get(start + 1) == Some(&'~') => {
+            let key = match characters[start] {
+                '2' => "insert",
+                '3' => "delete",
+                '5' => "pageup",
+                '6' => "pagedown",
+                _ => return None,
+            };
+            Some((key.to_owned(), 3))
+        }
+        _ => None,
+    }
+}
+
+/// Key name of an SS3 sequence (`ESC O …`) and the characters it spans from the `O`.
+fn ss3_sequence(characters: &[char], start: usize) -> Option<(String, usize)> {
+    let key = match *characters.get(start)? {
+        'A' => "up",
+        'B' => "down",
+        'C' => "right",
+        'D' => "left",
+        'H' => "home",
+        'F' => "end",
+        _ => return None,
+    };
+    Some((key.to_owned(), 2))
 }
 
 /// Whether a local IPv4 address may be bound: loopback or Tailscale's CGNAT range.
@@ -331,9 +435,44 @@ mod tests {
         let status = host_status(3);
         assert_eq!(status["workspace_count"], 3);
         assert_eq!(status["terminal_fidelity"], "text");
-        assert_eq!(status["capabilities"], json!(["terminal.text", "app.update"]));
+        assert_eq!(
+            status["capabilities"],
+            json!(["terminal.text", "app.update", "terminal.input.keys", "terminal.paste"])
+        );
         assert!(status["mac_device_id"].is_string());
         assert!(status["mac_display_name"].is_string());
+    }
+
+    /// Typed text is split into key presses: controls, escape sequences and literals.
+    #[test]
+    fn input_keys_splits_typed_text() {
+        assert_eq!(input_keys("ls\r"), ["l", "s", "enter"]);
+        assert_eq!(input_keys("\x03"), ["ctrl-c"]);
+        assert_eq!(input_keys("\x1b[A\x1b[D"), ["up", "left"]);
+        assert_eq!(input_keys("\x1bOB"), ["down"]);
+        assert_eq!(input_keys("\x1b[5~\x1b[6~"), ["pageup", "pagedown"]);
+        assert_eq!(input_keys("\x1b"), ["escape"]);
+        assert_eq!(input_keys("\x1bb"), ["alt-b"]);
+        assert_eq!(input_keys("a\r\nb"), ["a", "enter", "b"]);
+        assert_eq!(input_keys("\x7f"), ["backspace"]);
+        assert_eq!(input_keys("a b"), ["a", "space", "b"]);
+        assert_eq!(input_keys("\x1b[Z"), ["shift-tab"]);
+        assert_eq!(input_keys("\x1b[9x"), ["escape", "[", "9", "x"]);
+    }
+
+    /// The remaining control bytes and escape sequences, including what is dropped.
+    #[test]
+    fn input_keys_covers_controls_and_sequences() {
+        assert_eq!(input_keys("\x01\x1a"), ["ctrl-a", "ctrl-z"]);
+        assert_eq!(input_keys("\x0b\x0c"), ["ctrl-k", "ctrl-l"]);
+        assert_eq!(input_keys("\t\x08"), ["tab", "backspace"]);
+        assert_eq!(input_keys("\x1b[H\x1b[F"), ["home", "end"]);
+        assert_eq!(input_keys("\x1bOH\x1bOF"), ["home", "end"]);
+        assert_eq!(input_keys("\x1b[3~\x1b[2~"), ["delete", "insert"]);
+        assert_eq!(input_keys("\x1bB"), ["alt-b"]);
+        assert_eq!(input_keys("\x1b1"), ["escape", "1"]);
+        assert!(input_keys("\0\x1c\x1d\x1e\x1f").is_empty());
+        assert_eq!(input_keys("É+-"), ["É", "+", "-"]);
     }
 
     /// Every other method needs the exact token; missing, short and wrong tokens are refused.
