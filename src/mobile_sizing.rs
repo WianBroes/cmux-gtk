@@ -14,6 +14,8 @@
 //! is the contract. Keep the two implementations identical, including the
 //! JSON wire shape.
 
+// cmux-gtk: kept whole as upstream wrote it; parts not wired yet stay unused.
+#![allow(dead_code)]
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// A terminal grid in cells.

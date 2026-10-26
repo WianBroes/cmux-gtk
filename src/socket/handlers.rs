@@ -3099,6 +3099,31 @@ fn handle_socket_command_traced(
             let _ = resp_tx.send(response);
         }
 
+        SocketCommand::MobileSizing { op, resp_tx } => {
+            use crate::mobile_sizing_host as sizing;
+            use super::commands::MobileSizingOp;
+            let area_for = |surface_id: &str| {
+                let s = state.borrow();
+                s.split_engines.iter().find_map(|engine| engine.gl_area_for_surface(surface_id))
+            };
+            let result = match op {
+                MobileSizingOp::Viewport { surface_id, participant } => match area_for(&surface_id) {
+                    Some(area) => sizing::viewport(&area, &surface_id, participant),
+                    None => None,
+                },
+                MobileSizingOp::Detach { surface_id, participant_id } => sizing::detach(&surface_id, &participant_id),
+                MobileSizingOp::Policy { surface_id, policy } => sizing::set_policy(&surface_id, policy),
+                MobileSizingOp::Activity { surface_id, participant_id } => {
+                    sizing::note_activity(&surface_id, &participant_id)
+                }
+                MobileSizingOp::Refresh { surface_id } => sizing::refresh_pc(&surface_id),
+            };
+            let size_state = result
+                .and_then(|state| serde_json::to_value(state).ok())
+                .unwrap_or(Value::Null);
+            let _ = resp_tx.send(ok(Value::Null, json!({"size_state": size_state})));
+        }
+
         SocketCommand::SurfaceReadHistory {
             req_id,
             id,

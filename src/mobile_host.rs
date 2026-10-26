@@ -6,7 +6,7 @@
 //! `attach_token` in each request, except for the public `mobile.host.status` method.
 
 use crate::mobile;
-use crate::socket::commands::{self, SocketCommand};
+use crate::socket::commands::{self, MobileSizingOp, SocketCommand};
 use serde_json::{json, Value};
 use std::io;
 use std::net::{SocketAddr, TcpListener as StdTcpListener};
@@ -94,6 +94,14 @@ async fn handle_connection(
     let mut events: Option<tokio::task::JoinHandle<()>> = None;
     // Wakes the event task right after a scroll or input instead of at the next tick.
     let wake = Arc::new(tokio::sync::Notify::new());
+    // Shared sizing: this phone's participant id and the terminal it is sized on
+    // (one at a time, like upstream); it leaves on disconnect.
+    static NEXT_CLIENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let mut sizing_id = format!(
+        "mobile:conn-{}",
+        NEXT_CLIENT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let mut sized: Option<String> = None;
     let mut reader = BufReader::new(reader);
     loop {
         let frame = match read_frame(&mut reader).await {
@@ -270,6 +278,14 @@ async fn handle_connection(
                     let _ = send_json(&writer, &error_response(id, &code, &message)).await;
                     continue;
                 }
+                if sized.as_deref() == Some(surface_id) {
+                    // Follow latest: typing from the phone makes it the owner (upstream 0.65.1).
+                    let _ = sizing_call(&cmd_tx, MobileSizingOp::Activity {
+                        surface_id: surface_id.to_owned(),
+                        participant_id: sizing_id.clone(),
+                    })
+                    .await;
+                }
                 wake.notify_one();
                 let result = json!({"surface_id": surface_id, "keys": key_count});
                 if send_json(&writer, &success_response(id, result))
@@ -396,6 +412,71 @@ async fn handle_connection(
                     }
                 }
             }
+            "mobile.terminal.viewport" | "mobile.terminal.size_policy.set" | "mobile.terminal.size_state" => {
+                let Some(surface_id) = params.get("surface_id").and_then(Value::as_str) else {
+                    let _ = send_json(
+                        &writer,
+                        &error_response(id, "invalid_params", "Missing surface_id"),
+                    )
+                    .await;
+                    continue;
+                };
+                let op = match method {
+                    "mobile.terminal.viewport" => {
+                        if let Some(client) = params.get("client_id").and_then(Value::as_str) {
+                            if !client.is_empty() {
+                                sizing_id = format!("mobile:{client}");
+                            }
+                        }
+                        // A phone sizes one terminal at a time: leave the previous one.
+                        if let Some(previous) = sized.take().filter(|previous| previous != surface_id) {
+                            let _ = sizing_call(&cmd_tx, MobileSizingOp::Detach {
+                                surface_id: previous,
+                                participant_id: sizing_id.clone(),
+                            })
+                            .await;
+                        }
+                        sized = Some(surface_id.to_owned());
+                        MobileSizingOp::Viewport {
+                            surface_id: surface_id.to_owned(),
+                            participant: viewport_participant(&sizing_id, &params),
+                        }
+                    }
+                    "mobile.terminal.size_policy.set" => {
+                        let Some(policy) = params
+                            .get("policy")
+                            .cloned()
+                            .and_then(|policy| serde_json::from_value(policy).ok())
+                        else {
+                            let _ = send_json(
+                                &writer,
+                                &error_response(id, "invalid_params", "Missing or invalid policy"),
+                            )
+                            .await;
+                            continue;
+                        };
+                        MobileSizingOp::Policy { surface_id: surface_id.to_owned(), policy }
+                    }
+                    _ => MobileSizingOp::Refresh { surface_id: surface_id.to_owned() },
+                };
+                let response = match sizing_call(&cmd_tx, op).await {
+                    Ok(size_state) => {
+                        wake.notify_one();
+                        success_response(
+                            id,
+                            json!({
+                                "surface_id": surface_id,
+                                "size_state": size_state,
+                                "self_participant_id": sizing_id,
+                            }),
+                        )
+                    }
+                    Err((code, message)) => error_response(id, &code, &message),
+                };
+                if send_json(&writer, &response).await.is_err() {
+                    break;
+                }
+            }
             "mobile.events.subscribe" => {
                 let topics = params.get("topics").and_then(Value::as_array);
                 if !topics.is_some_and(|topics| {
@@ -498,6 +579,42 @@ async fn handle_connection(
     if let Some(task) = events {
         task.abort();
     }
+    if let Some(surface_id) = sized {
+        let _ = sizing_call(&cmd_tx, MobileSizingOp::Detach {
+            surface_id,
+            participant_id: sizing_id,
+        })
+        .await;
+    }
+}
+
+/// This phone as a sizing participant, from `mobile.terminal.viewport` params
+/// (upstream MobileTerminalViewportParameters.report).
+fn viewport_participant(id: &str, params: &Value) -> crate::mobile_sizing::TerminalSizingParticipant {
+    use crate::mobile_sizing::{TerminalDeviceKind, TerminalGridSize, TerminalSizingParticipant};
+    let text = |key: &str| params.get(key).and_then(Value::as_str).map(str::to_owned);
+    let cells = |key: &str| {
+        params
+            .get(key)
+            .and_then(Value::as_u64)
+            .and_then(|value| u16::try_from(value).ok())
+            .filter(|value| *value > 0)
+    };
+    let kind = text("device_kind").map(|kind| TerminalDeviceKind::parse(&kind)).unwrap_or_default();
+    let mut participant = TerminalSizingParticipant::new(id, kind);
+    participant.device_name = text("device_name");
+    participant.device_id = text("device_id");
+    participant.viewport = match (cells("viewport_columns"), cells("viewport_rows")) {
+        (Some(cols), Some(rows)) => Some(TerminalGridSize { cols, rows }),
+        _ => None,
+    };
+    participant
+}
+
+/// Run one shared-sizing event on the GTK thread; the terminal's `size_state` or null.
+async fn sizing_call(cmd_tx: &mpsc::Sender<SocketCommand>, op: MobileSizingOp) -> Result<Value, (String, String)> {
+    let result = gtk_call(cmd_tx, |resp_tx| SocketCommand::MobileSizing { op, resp_tx }).await?;
+    Ok(result.get("size_state").cloned().unwrap_or(Value::Null))
 }
 
 /// Poll one terminal at four frames per second, or at once when `wake` fires
@@ -510,12 +627,27 @@ async fn stream_terminal_events(
 ) {
     let mut sequence = 0u64;
     let mut last: Option<TerminalScreen> = None;
+    let mut last_size: Value = Value::Null;
     let mut ticker = tokio::time::interval(std::time::Duration::from_millis(250));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             _ = ticker.tick() => {}
             _ = wake.notified() => {}
+        }
+        // Shared sizing: re-measure the PC pane and push the state when it changes.
+        if let Ok(size_state) = sizing_call(&cmd_tx, MobileSizingOp::Refresh { surface_id: surface_id.clone() }).await {
+            if !size_state.is_null() && size_state != last_size {
+                let event = json!({
+                    "kind": "event",
+                    "topic": "mobile.terminal.size_state",
+                    "payload": {"surface_id": surface_id, "size_state": size_state},
+                });
+                last_size = size_state;
+                if send_json(&writer, &event).await.is_err() {
+                    return;
+                }
+            }
         }
         let Ok(screen) = read_terminal_text(&cmd_tx, &surface_id).await else {
             continue;

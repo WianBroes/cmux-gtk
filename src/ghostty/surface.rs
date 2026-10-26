@@ -711,6 +711,8 @@ pub fn create_surface(
                 Some(s) => s,
                 None => return gtk4::glib::Propagation::Proceed,
             };
+            // Follow latest: typing on the PC takes the shared size back (no allocation).
+            crate::mobile_sizing_host::note_pc_key(surface);
 
             // Handle Linux clipboard shortcuts at the terminal, leaving entries alone.
             let modifiers = state

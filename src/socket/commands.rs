@@ -355,6 +355,11 @@ pub enum SocketCommand {
         workspace: Option<String>,
         resp_tx: RespTx,
     },
+    /// Shared terminal sizing for mobile viewers (mobile only), see `mobile_sizing_host`.
+    MobileSizing {
+        op: MobileSizingOp,
+        resp_tx: RespTx,
+    },
     /// Rows just above the viewport, for the mobile history (mobile only).
     SurfaceReadHistory {
         req_id: Value,
@@ -556,5 +561,30 @@ pub enum SocketCommand {
         params: Value,
         surface_ref: Option<String>,
         resp_tx: RespTx,
+    },
+}
+
+/// One shared-sizing event for a terminal (upstream `mobile.terminal.viewport`,
+/// `mobile.terminal.size_policy.set`, activity, detach). Answers `{"size_state": …}`.
+pub enum MobileSizingOp {
+    Viewport {
+        surface_id: String,
+        participant: crate::mobile_sizing::TerminalSizingParticipant,
+    },
+    Detach {
+        surface_id: String,
+        participant_id: String,
+    },
+    Policy {
+        surface_id: String,
+        policy: crate::mobile_sizing::TerminalSizingPolicy,
+    },
+    Activity {
+        surface_id: String,
+        participant_id: String,
+    },
+    /// Re-measure the PC pane (window resized) and return the current state.
+    Refresh {
+        surface_id: String,
     },
 }

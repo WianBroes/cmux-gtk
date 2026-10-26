@@ -32,6 +32,7 @@ mod menus;
 mod mobile;
 mod mobile_host;
 mod mobile_sizing;
+mod mobile_sizing_host;
 mod notification;
 mod notification_caller;
 mod notification_menu;
