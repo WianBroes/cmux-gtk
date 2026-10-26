@@ -3076,7 +3076,7 @@ fn handle_socket_command_traced(
             resp_tx,
         } => {
             // Like upstream mobileScroll: pointer inside the terminal, then a wheel
-            // event of delta_lines (positive scrolls back into history). The pointer
+            // scroll of delta_lines (positive scrolls back into history). The pointer
             // goes to the middle of the first cell, inside the surface at any scale.
             let result = terminal_target(state, id.as_deref(), None).map(|surface| {
                 // SAFETY: resolution found a live GTK-owned terminal; no model
@@ -3086,7 +3086,10 @@ fn handle_socket_command_traced(
                     let x = f64::from(size.cell_width_px) / 2.0;
                     let y = f64::from(size.cell_height_px) / 2.0;
                     crate::ghostty::ffi::ghostty_surface_mouse_pos(surface, x, y, 0);
-                    crate::ghostty::ffi::ghostty_surface_mouse_scroll(surface, 0.0, delta_lines, 0);
+                    // Precision mode (bit 0): yoff in pixels, so one requested line is
+                    // one cell high instead of a wheel tick times mouse-scroll-multiplier.discrete (3).
+                    let pixels = delta_lines * f64::from(size.cell_height_px);
+                    crate::ghostty::ffi::ghostty_surface_mouse_scroll(surface, 0.0, pixels, 1);
                 }
             });
             let response = match result {
