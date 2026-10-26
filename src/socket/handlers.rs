@@ -3133,22 +3133,25 @@ fn handle_socket_command_traced(
                         crate::ghostty::text::read_scrollback(surface).map(|text| (text, None))
                     } else {
                         crate::ghostty::text::read_visible(surface).and_then(|text| {
-                            crate::ghostty::text::rows_above_viewport(surface)
-                                .map(|rows| (text, Some(rows)))
+                            crate::ghostty::text::rows_above_viewport(surface).map(|rows| {
+                                let columns = u64::from(crate::ghostty::ffi::ghostty_surface_size(surface).columns);
+                                (text, Some((rows, columns)))
+                            })
                         })
                     }
                 }
                 .map_err(|message| ("read_failed", message))
             });
             let response = match result {
-                Ok((text, rows_above)) => {
+                Ok((text, grid)) => {
                     use base64::Engine as _;
                     let mut payload = json!({
                         "text": text,
                         "base64": base64::engine::general_purpose::STANDARD.encode(&text),
                     });
-                    if let (Some(rows), Some(fields)) = (rows_above, payload.as_object_mut()) {
+                    if let (Some((rows, columns)), Some(fields)) = (grid, payload.as_object_mut()) {
                         fields.insert("rows_above".into(), rows.into());
+                        fields.insert("columns".into(), columns.into());
                     }
                     let s = state.borrow();
                     let location = terminal_location(&s, id.as_deref(), workspace.as_deref())
