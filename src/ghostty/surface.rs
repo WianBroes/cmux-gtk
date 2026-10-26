@@ -841,6 +841,9 @@ pub fn create_surface(
                 Some(s) => s,
                 None => return,
             };
+            // Follow latest: a click in the pane takes the shared size back, like the
+            // Mac's focus-click (upstream TerminalSizingEngine.noteActivity).
+            crate::mobile_sizing_host::note_pc_key(surface);
             let button = match gesture.current_button() {
                 1 => ffi::ghostty_input_mouse_button_e_GHOSTTY_MOUSE_LEFT,
                 2 => ffi::ghostty_input_mouse_button_e_GHOSTTY_MOUSE_MIDDLE,

@@ -24,8 +24,27 @@ struct Entry {
 
 thread_local! {
     static ENGINES: std::cell::RefCell<std::collections::HashMap<String, Entry>> = Default::default();
-    /// Policy given to new engines (last one set by any phone), upstream default Fit everyone.
-    static DEFAULT_POLICY: std::cell::RefCell<TerminalSizingPolicy> = Default::default();
+    /// Policy given to new engines (last one set by any phone, kept across restarts),
+    /// upstream default Fit everyone.
+    static DEFAULT_POLICY: std::cell::RefCell<TerminalSizingPolicy> = std::cell::RefCell::new(load_policy());
+}
+
+fn policy_path() -> std::path::PathBuf {
+    cmux_platform::paths::state_dir().join("mobile-sizing-policy.json")
+}
+
+/// The last policy a phone chose; a missing or unreadable file gives the default.
+fn load_policy() -> TerminalSizingPolicy {
+    std::fs::read(policy_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn save_policy(policy: &TerminalSizingPolicy) {
+    if let Ok(bytes) = serde_json::to_vec(policy) {
+        let _ = std::fs::write(policy_path(), bytes);
+    }
 }
 
 /// Attach `phone` to `area`'s terminal, creating its engine on first use with
@@ -101,6 +120,7 @@ pub(crate) fn set_policy(
 ) -> Option<TerminalSizingState> {
     ENGINES.with(|cell| {
         DEFAULT_POLICY.with(|default| *default.borrow_mut() = policy.clone());
+        save_policy(&policy);
         let mut engines = cell.borrow_mut();
         let entry = engines.get_mut(surface_id)?;
         entry.engine.set_policy(policy);
@@ -121,7 +141,7 @@ pub(crate) fn note_activity(surface_id: &str, participant_id: &str) -> Option<Te
     })
 }
 
-/// The PC typed: record its activity for the entry owning `surface` without
+/// The PC typed or clicked: record its activity for the entry owning `surface` without
 /// allocating, applying only when that changed the published state.
 pub(crate) fn note_pc_key(surface: ffi::ghostty_surface_t) {
     ENGINES.with(|cell| {
