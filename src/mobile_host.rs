@@ -448,6 +448,79 @@ async fn handle_connection(
                     }
                 }
             }
+            "mobile.terminal.paste_image" | "terminal.paste_image" => {
+                // Upstream `v2MobileTerminalPasteImage`: the phone sends the image as
+                // base64; it is saved to a temporary file and its shell-escaped path
+                // typed into the terminal, like a local image paste (Claude Code
+                // attaches it from the path).
+                use base64::Engine as _;
+                let Some(surface_id) = params.get("surface_id").and_then(Value::as_str) else {
+                    let _ = send_json(
+                        &writer,
+                        &error_response(id, "invalid_params", "Missing surface_id"),
+                    )
+                    .await;
+                    continue;
+                };
+                let image = params
+                    .get("image_base64")
+                    .and_then(Value::as_str)
+                    .and_then(|text| base64::engine::general_purpose::STANDARD.decode(text).ok())
+                    .filter(|image| !image.is_empty());
+                let Some(image) = image else {
+                    let _ = send_json(
+                        &writer,
+                        &error_response(id, "invalid_params", "Missing or invalid image_base64"),
+                    )
+                    .await;
+                    continue;
+                };
+                let format = params.get("image_format").and_then(Value::as_str).unwrap_or("png");
+                let path = match mobile::save_pasted_image(&std::env::temp_dir(), &image, format) {
+                    Ok(path) => path,
+                    Err(_) => {
+                        let _ = send_json(
+                            &writer,
+                            &error_response(
+                                id,
+                                "invalid_params",
+                                "Image payload was empty or exceeded the size limit",
+                            ),
+                        )
+                        .await;
+                        continue;
+                    }
+                };
+                let text = crate::ghostty::text::shell_escape(&path.to_string_lossy());
+                let pasted = gtk_call(&cmd_tx, |resp_tx| SocketCommand::SurfaceSendText {
+                    req_id: Value::Null,
+                    id: Some(surface_id.to_owned()),
+                    workspace: None,
+                    text,
+                    resp_tx,
+                })
+                .await;
+                if pasted.is_ok() && sized.as_deref() == Some(surface_id) {
+                    let _ = sizing_call(&cmd_tx, MobileSizingOp::Activity {
+                        surface_id: surface_id.to_owned(),
+                        participant_id: sizing_id.clone(),
+                    })
+                    .await;
+                }
+                let response = match pasted {
+                    Ok(_) => success_response(
+                        id,
+                        json!({"surface_id": surface_id, "path": path.to_string_lossy()}),
+                    ),
+                    Err((code, message)) => {
+                        let _ = std::fs::remove_file(&path);
+                        error_response(id, &code, &message)
+                    }
+                };
+                if send_json(&writer, &response).await.is_err() {
+                    break;
+                }
+            }
             "mobile.terminal.viewport" | "mobile.terminal.size_policy.set" | "mobile.terminal.size_state" => {
                 let Some(surface_id) = params.get("surface_id").and_then(Value::as_str) else {
                     let _ = send_json(

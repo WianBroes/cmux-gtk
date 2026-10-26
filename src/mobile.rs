@@ -16,6 +16,8 @@ pub const PORT: u16 = 7443;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 /// Largest single Android package chunk.
 pub const MAX_CHUNK_BYTES: u64 = 1_048_576;
+/// Largest pasted image, as the Mac's clipboard-image cap.
+pub const MAX_PASTED_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 /// Token file name below the cmux configuration directory.
 const TOKEN_FILE: &str = "mobile-token";
 
@@ -132,7 +134,7 @@ pub fn host_status(workspace_count: usize) -> Value {
         "mac_display_name": display_name(),
         "workspace_count": workspace_count,
         "terminal_fidelity": "text",
-        "capabilities": ["terminal.text", "app.update", "terminal.input.keys", "terminal.paste"],
+        "capabilities": ["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image"],
     })
 }
 
@@ -398,6 +400,35 @@ fn package_fingerprint(path: &Path) -> io::Result<(u64, String)> {
     Ok((size, hex(&hasher.finalize())))
 }
 
+/// Write image bytes pasted on the phone to a new temporary file and return its path.
+///
+/// Mirrors the Mac's `saveImageData`: `clipboard-<date>-<id>.<ext>` in the temporary
+/// directory, extension limited to known image types (default `png`), 10 MB cap. The
+/// caller types the shell-escaped path into the terminal, as for a local image paste.
+pub fn save_pasted_image(directory: &Path, data: &[u8], format: &str) -> io::Result<PathBuf> {
+    if data.is_empty() || data.len() > MAX_PASTED_IMAGE_BYTES {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "image empty or too large"));
+    }
+    let token = format.trim().to_ascii_lowercase();
+    let extension = match token.as_str() {
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "heic" | "heif" | "tiff" | "bmp" => token.as_str(),
+        _ => "png",
+    };
+    let timestamp = glib::DateTime::now_local()
+        .and_then(|now| now.format("%Y-%m-%d-%H%M%S"))
+        .map(|text| text.to_string())
+        .unwrap_or_default();
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    let path = directory.join(format!("clipboard-{timestamp}-{}.{extension}", &id[..8]));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
+    file.write_all(data)?;
+    Ok(path)
+}
+
 /// Lowercase hexadecimal encoding.
 fn hex(bytes: &[u8]) -> String {
     let mut output = String::with_capacity(bytes.len() * 2);
@@ -436,10 +467,28 @@ mod tests {
         assert_eq!(status["terminal_fidelity"], "text");
         assert_eq!(
             status["capabilities"],
-            json!(["terminal.text", "app.update", "terminal.input.keys", "terminal.paste"])
+            json!(["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image"])
         );
         assert!(status["mac_device_id"].is_string());
         assert!(status["mac_display_name"].is_string());
+    }
+
+    /// A pasted image lands in a new private file with a safe extension.
+    #[test]
+    fn pasted_image_is_saved_with_a_safe_extension() {
+        let directory = std::env::temp_dir().join(format!("cmux-paste-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = save_pasted_image(&directory, b"\x89PNG", "JPG").unwrap();
+        assert_eq!(path.parent(), Some(directory.as_path()));
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("clipboard-") && name.ends_with(".jpg"), "{name}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"\x89PNG");
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        let odd = save_pasted_image(&directory, b"x", "../sh").unwrap();
+        assert_eq!(odd.extension().unwrap(), "png");
+        assert!(save_pasted_image(&directory, b"", "png").is_err());
+        assert!(save_pasted_image(&directory, &vec![0; MAX_PASTED_IMAGE_BYTES + 1], "png").is_err());
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 
     /// Typed text is split into key presses: controls, escape sequences and literals.
