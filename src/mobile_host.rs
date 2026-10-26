@@ -295,6 +295,34 @@ async fn handle_connection(
                     break;
                 }
             }
+            "mobile.terminal.activity" => {
+                // Not upstream: the phone took focus (tapped the input field or the
+                // terminal) without sending anything yet. Same effect as a keystroke
+                // for Follow latest, like the Mac's focus-click.
+                let Some(surface_id) = params.get("surface_id").and_then(Value::as_str) else {
+                    let _ = send_json(
+                        &writer,
+                        &error_response(id, "invalid_params", "Missing surface_id"),
+                    )
+                    .await;
+                    continue;
+                };
+                let noted = sized.as_deref() == Some(surface_id);
+                if noted {
+                    let _ = sizing_call(&cmd_tx, MobileSizingOp::Activity {
+                        surface_id: surface_id.to_owned(),
+                        participant_id: sizing_id.clone(),
+                    })
+                    .await;
+                }
+                let result = json!({"surface_id": surface_id, "noted": noted});
+                if send_json(&writer, &success_response(id, result))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
             "mobile.terminal.scroll" => {
                 let Some(surface_id) = params.get("surface_id").and_then(Value::as_str) else {
                     let _ = send_json(
@@ -390,15 +418,23 @@ async fn handle_connection(
                     .await;
                     continue;
                 };
-                match gtk_call(&cmd_tx, |resp_tx| SocketCommand::SurfaceSendText {
+                let pasted = gtk_call(&cmd_tx, |resp_tx| SocketCommand::SurfaceSendText {
                     req_id: Value::Null,
                     id: Some(surface_id.to_owned()),
                     workspace: None,
                     text,
                     resp_tx,
                 })
-                .await
-                {
+                .await;
+                if pasted.is_ok() && sized.as_deref() == Some(surface_id) {
+                    // Paste is explicit input for Follow latest, as on the Mac.
+                    let _ = sizing_call(&cmd_tx, MobileSizingOp::Activity {
+                        surface_id: surface_id.to_owned(),
+                        participant_id: sizing_id.clone(),
+                    })
+                    .await;
+                }
+                match pasted {
                     Ok(result) => {
                         if send_json(&writer, &success_response(id, result))
                             .await
