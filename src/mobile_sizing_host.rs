@@ -13,6 +13,13 @@ struct Entry {
     engine: TerminalSizingEngine,
     surface: ffi::ghostty_surface_t,       // to find the entry from a key press without allocating
     area: gtk4::glib::WeakRef<gtk4::GLArea>,
+    /// Ghostty's padding in device pixels, measured once while the pane had its full size:
+    /// measured on a pane being resized it is transient, and the shared grid oscillated.
+    pad: Option<(f64, f64)>,
+    /// Tab size in logical pixels the PC grid was last measured at; it is only
+    /// re-measured when the tab itself changes size.
+    parent_px: (i32, i32),
+    own: Option<TerminalGridSize>,
 }
 
 thread_local! {
@@ -30,10 +37,11 @@ pub(crate) fn viewport(
     phone: TerminalSizingParticipant,
 ) -> Option<TerminalSizingState> {
     let surface = crate::split_engine::surface_for_area(area)?;
-    let own = own_grid(area);
     ENGINES.with(|cell| {
         let mut engines = cell.borrow_mut();
         let entry = engines.entry(surface_id.to_string()).or_insert_with(|| {
+            let pad = measure_pad(area);
+            let (parent_px, own) = own_grid(area, pad);
             let initial = own.unwrap_or(TerminalGridSize::new(80, 24));
             let mut engine = TerminalSizingEngine::new(
                 initial,
@@ -43,11 +51,9 @@ pub(crate) fn viewport(
             pc.viewport = own;
             pc.device_name = Some("PC".into());
             engine.attach(pc);
-            Entry { engine, surface, area: area.downgrade() }
+            Entry { engine, surface, area: area.downgrade(), pad, parent_px, own }
         });
-        if let Some(grid) = own {
-            entry.engine.report(PC_ID, grid);
-        }
+        remeasure(entry);
         if entry.engine.contains(&phone.id) {
             entry.engine.update_identity(&phone);
             if let Some(viewport) = phone.viewport {
@@ -138,38 +144,72 @@ pub(crate) fn refresh_pc(surface_id: &str) -> Option<TerminalSizingState> {
     ENGINES.with(|cell| {
         let mut engines = cell.borrow_mut();
         let entry = engines.get_mut(surface_id)?;
-        if let Some(area) = entry.area.upgrade() {
-            if let Some(grid) = own_grid(&area) {
-                entry.engine.report(PC_ID, grid);
-            }
-        }
+        remeasure(entry);
         apply(entry);
         Some(entry.engine.state().clone())
     })
 }
 
-/// The grid `area` can show right now: its parent's size against the
-/// surface's cell metrics, in cells. `None` for a hidden pane (its parent has
-/// no size yet) or before the surface reports cells.
-fn own_grid(area: &gtk4::GLArea) -> Option<TerminalGridSize> {
-    let parent = area.parent()?;
-    if parent.width() <= 0 || parent.height() <= 0 {
-        return None;
-    }
+/// Ghostty's padding plus the leftover under one cell, in device pixels, as it lays
+/// out this surface right now. Only meaningful while the pane has its full size.
+fn measure_pad(area: &gtk4::GLArea) -> Option<(f64, f64)> {
     let surface = crate::split_engine::surface_for_area(area)?;
     // SAFETY: the surface belongs to this live GLArea on the GTK thread.
     let size = unsafe { ffi::ghostty_surface_size(surface) };
     if size.cell_width_px == 0 || size.cell_height_px == 0 {
         return None;
     }
+    Some((
+        f64::from(size.width_px) - f64::from(size.columns) * f64::from(size.cell_width_px),
+        f64::from(size.height_px) - f64::from(size.rows) * f64::from(size.cell_height_px),
+    ))
+}
+
+/// The grid `area`'s tab can show, from the tab size and the cell size, with the
+/// padding measured once. `None` for a hidden pane (its tab has no size yet).
+fn own_grid(area: &gtk4::GLArea, pad: Option<(f64, f64)>) -> ((i32, i32), Option<TerminalGridSize>) {
+    let Some(parent) = area.parent() else {
+        return ((0, 0), None);
+    };
+    let parent_px = (parent.width(), parent.height());
+    if parent_px.0 <= 0 || parent_px.1 <= 0 {
+        return (parent_px, None);
+    }
+    let (Some((pad_w, pad_h)), Some(surface)) = (pad, crate::split_engine::surface_for_area(area)) else {
+        return (parent_px, None);
+    };
+    // SAFETY: the surface belongs to this live GLArea on the GTK thread.
+    let size = unsafe { ffi::ghostty_surface_size(surface) };
+    if size.cell_width_px == 0 || size.cell_height_px == 0 {
+        return (parent_px, None);
+    }
     let scale = f64::from(area.scale_factor());
     let (cell_w, cell_h) = (f64::from(size.cell_width_px), f64::from(size.cell_height_px));
-    // Padding plus the leftover under one cell, as Ghostty lays out this surface.
-    let pad_w = f64::from(size.width_px) - f64::from(size.columns) * cell_w;
-    let pad_h = f64::from(size.height_px) - f64::from(size.rows) * cell_h;
-    let cols = ((f64::from(parent.width()) * scale - pad_w) / cell_w).floor().max(1.0) as u16;
-    let rows = ((f64::from(parent.height()) * scale - pad_h) / cell_h).floor().max(1.0) as u16;
-    Some(TerminalGridSize::new(cols, rows))
+    let cols = ((f64::from(parent_px.0) * scale - pad_w) / cell_w).floor().max(1.0) as u16;
+    let rows = ((f64::from(parent_px.1) * scale - pad_h) / cell_h).floor().max(1.0) as u16;
+    (parent_px, Some(TerminalGridSize::new(cols, rows)))
+}
+
+/// Re-measure the PC grid only when its tab changed size, and report it.
+fn remeasure(entry: &mut Entry) {
+    let Some(area) = entry.area.upgrade() else { return; };
+    let current = area.parent().map(|parent| (parent.width(), parent.height())).unwrap_or((0, 0));
+    if current != entry.parent_px || entry.own.is_none() {
+        if entry.pad.is_none() && area.size_request() == (-1, -1) {
+            entry.pad = measure_pad(&area);
+        }
+        let (parent_px, own) = own_grid(&area, entry.pad);
+        crate::diagnostics::record(
+            "mobile.sizing.measure",
+            serde_json::json!({"tab_px": [parent_px.0, parent_px.1], "pad": entry.pad.map(|(w, h)| [w, h]),
+                "own": own.map(|g| [g.cols, g.rows])}),
+        );
+        entry.parent_px = parent_px;
+        entry.own = own;
+    }
+    if let Some(grid) = entry.own {
+        entry.engine.report(PC_ID, grid);
+    }
 }
 
 /// Shrink a terminal to at most its shared grid, pinned top-left in its tab,
@@ -178,7 +218,7 @@ fn own_grid(area: &gtk4::GLArea) -> Option<TerminalGridSize> {
 /// surface.rs resize). A hidden pane is left untouched until it is shown.
 fn apply(entry: &Entry) {
     let Some(area) = entry.area.upgrade() else { return; };
-    let Some(own) = own_grid(&area) else { return; };
+    let (Some(own), Some((pad_w, pad_h))) = (entry.own, entry.pad) else { return; };
     let Some(TerminalGridSize { cols: columns, rows }) = limited(own, entry.engine.state().size()) else {
         release(&area);
         return;
@@ -195,11 +235,16 @@ fn apply(entry: &Entry) {
     }
     let scale = f64::from(area.scale_factor());
     let (cell_w, cell_h) = (f64::from(size.cell_width_px), f64::from(size.cell_height_px));
-    // Padding plus the leftover under one cell, as Ghostty lays out this surface.
-    let pad_w = f64::from(size.width_px) - f64::from(size.columns) * cell_w;
-    let pad_h = f64::from(size.height_px) - f64::from(size.rows) * cell_h;
     let width = ((f64::from(columns) * cell_w + pad_w) / scale).round() as i32;
     let height = ((f64::from(rows) * cell_h + pad_h) / scale).round() as i32;
+    // Same size again: leave the widget alone, a new request relayouts the pane.
+    if area.size_request() == (width, height) {
+        return;
+    }
+    crate::diagnostics::record(
+        "mobile.sizing.apply",
+        serde_json::json!({"own": [own.cols, own.rows], "grid": [columns, rows], "px": [width, height]}),
+    );
     area.set_halign(gtk4::Align::Start);
     area.set_valign(gtk4::Align::Start);
     area.set_size_request(width, height);
@@ -207,6 +252,9 @@ fn apply(entry: &Entry) {
 
 /// Return the pane to its full tab size.
 fn release(area: &gtk4::GLArea) {
+    if area.size_request() == (-1, -1) {
+        return;
+    }
     area.set_size_request(-1, -1);
     area.set_halign(gtk4::Align::Fill);
     area.set_valign(gtk4::Align::Fill);
