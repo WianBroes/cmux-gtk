@@ -31,6 +31,7 @@ mod menus;
 #[allow(dead_code)]
 mod mobile;
 mod mobile_host;
+mod mobile_sizing;
 mod notification;
 mod notification_caller;
 mod notification_menu;
