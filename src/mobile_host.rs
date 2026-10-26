@@ -412,15 +412,7 @@ async fn handle_connection(
                     }
                 }
             }
-            "mobile.terminal.size_policy.set" => {
-                // A phone never resizes the PC's panes (the user's choice): no policy to set,
-                // a Fixed policy would still shrink the pane.
-                let response = error_response(id, "disabled", "the phone never resizes the PC's panes");
-                if send_json(&writer, &response).await.is_err() {
-                    break;
-                }
-            }
-            "mobile.terminal.viewport" | "mobile.terminal.size_state" => {
+            "mobile.terminal.viewport" | "mobile.terminal.size_policy.set" | "mobile.terminal.size_state" => {
                 let Some(surface_id) = params.get("surface_id").and_then(Value::as_str) else {
                     let _ = send_json(
                         &writer,
@@ -449,6 +441,21 @@ async fn handle_connection(
                             surface_id: surface_id.to_owned(),
                             participant: viewport_participant(&sizing_id, &params),
                         }
+                    }
+                    "mobile.terminal.size_policy.set" => {
+                        let Some(policy) = params
+                            .get("policy")
+                            .cloned()
+                            .and_then(|policy| serde_json::from_value(policy).ok())
+                        else {
+                            let _ = send_json(
+                                &writer,
+                                &error_response(id, "invalid_params", "Missing or invalid policy"),
+                            )
+                            .await;
+                            continue;
+                        };
+                        MobileSizingOp::Policy { surface_id: surface_id.to_owned(), policy }
                     }
                     _ => MobileSizingOp::Refresh { surface_id: surface_id.to_owned() },
                 };
@@ -601,9 +608,6 @@ fn viewport_participant(id: &str, params: &Value) -> crate::mobile_sizing::Termi
         (Some(cols), Some(rows)) => Some(TerminalGridSize { cols, rows }),
         _ => None,
     };
-    // A phone only views: it never resizes the PC's panes (the user's choice, unlike
-    // upstream's Fit everyone); it folds lines to its own width instead.
-    participant.counts_override = Some(false);
     participant
 }
 

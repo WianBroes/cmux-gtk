@@ -24,6 +24,8 @@ struct Entry {
 
 thread_local! {
     static ENGINES: std::cell::RefCell<std::collections::HashMap<String, Entry>> = Default::default();
+    /// Policy given to new engines (last one set by any phone), upstream default Fit everyone.
+    static DEFAULT_POLICY: std::cell::RefCell<TerminalSizingPolicy> = Default::default();
 }
 
 /// Attach `phone` to `area`'s terminal, creating its engine on first use with
@@ -43,8 +45,7 @@ pub(crate) fn viewport(
             let initial = own.unwrap_or(TerminalGridSize::new(80, 24));
             let mut engine = TerminalSizingEngine::new(
                 initial,
-                // Upstream default; phones never count, so the PC alone sets the grid.
-                TerminalSizingPolicy::default(),
+                DEFAULT_POLICY.with(|policy| policy.borrow().clone()),
             );
             let mut pc = TerminalSizingParticipant::new(PC_ID, TerminalDeviceKind::Mac);
             pc.viewport = own;
@@ -89,6 +90,22 @@ pub(crate) fn detach(surface_id: &str, participant_id: &str) -> Option<TerminalS
             apply(entry);
             Some(entry.engine.state().clone())
         }
+    })
+}
+
+/// Set one terminal's policy, remembering it as the default for engines
+/// created later, then apply.
+pub(crate) fn set_policy(
+    surface_id: &str,
+    policy: TerminalSizingPolicy,
+) -> Option<TerminalSizingState> {
+    ENGINES.with(|cell| {
+        DEFAULT_POLICY.with(|default| *default.borrow_mut() = policy.clone());
+        let mut engines = cell.borrow_mut();
+        let entry = engines.get_mut(surface_id)?;
+        entry.engine.set_policy(policy);
+        apply(entry);
+        Some(entry.engine.state().clone())
     })
 }
 

@@ -3112,6 +3112,7 @@ fn handle_socket_command_traced(
                     None => None,
                 },
                 MobileSizingOp::Detach { surface_id, participant_id } => sizing::detach(&surface_id, &participant_id),
+                MobileSizingOp::Policy { surface_id, policy } => sizing::set_policy(&surface_id, policy),
                 MobileSizingOp::Activity { surface_id, participant_id } => {
                     sizing::note_activity(&surface_id, &participant_id)
                 }
