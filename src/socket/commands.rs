@@ -565,7 +565,7 @@ pub enum SocketCommand {
 }
 
 /// One shared-sizing event for a terminal (upstream `mobile.terminal.viewport`,
-/// `mobile.terminal.size_policy.set`, activity, detach). Answers `{"size_state": …}`.
+/// activity, detach). Answers `{"size_state": …}`.
 pub enum MobileSizingOp {
     Viewport {
         surface_id: String,
@@ -574,10 +574,6 @@ pub enum MobileSizingOp {
     Detach {
         surface_id: String,
         participant_id: String,
-    },
-    Policy {
-        surface_id: String,
-        policy: crate::mobile_sizing::TerminalSizingPolicy,
     },
     Activity {
         surface_id: String,
