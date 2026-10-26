@@ -160,7 +160,6 @@ pub fn input_keys(text: &str) -> Vec<String> {
             '\n' => keys.push("enter".to_owned()),
             '\t' => keys.push("tab".to_owned()),
             '\u{8}' | '\u{7f}' => keys.push("backspace".to_owned()),
-            ' ' => keys.push("space".to_owned()),
             control if ('\u{1}'..='\u{1a}').contains(&control) => {
                 keys.push(format!("ctrl-{}", (control as u8 - 1 + b'a') as char));
             }
@@ -455,7 +454,7 @@ mod tests {
         assert_eq!(input_keys("\x1bb"), ["alt-b"]);
         assert_eq!(input_keys("a\r\nb"), ["a", "enter", "b"]);
         assert_eq!(input_keys("\x7f"), ["backspace"]);
-        assert_eq!(input_keys("a b"), ["a", "space", "b"]);
+        assert_eq!(input_keys("a b"), ["a", " ", "b"]);
         assert_eq!(input_keys("\x1b[Z"), ["shift-tab"]);
         assert_eq!(input_keys("\x1b[9x"), ["escape", "[", "9", "x"]);
     }
