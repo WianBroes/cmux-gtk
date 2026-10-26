@@ -339,6 +339,13 @@ pub enum SocketCommand {
         key: String,
         resp_tx: RespTx,
     },
+    /// Mouse-wheel scroll of `delta_lines` lines on a terminal (mobile.terminal.scroll).
+    SurfaceMouseScroll {
+        req_id: Value,
+        id: Option<String>,
+        delta_lines: f64,
+        resp_tx: RespTx,
+    },
     SurfaceReadText {
         req_id: Value,
         scrollback: bool,

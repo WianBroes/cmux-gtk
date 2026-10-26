@@ -270,6 +270,41 @@ async fn handle_connection(
                     break;
                 }
             }
+            "mobile.terminal.scroll" => {
+                let Some(surface_id) = params.get("surface_id").and_then(Value::as_str) else {
+                    let _ = send_json(
+                        &writer,
+                        &error_response(id, "invalid_params", "Missing surface_id"),
+                    )
+                    .await;
+                    continue;
+                };
+                let delta_lines = params
+                    .get("delta_lines")
+                    .and_then(Value::as_f64)
+                    .filter(|delta| delta.is_finite())
+                    .unwrap_or(0.0);
+                if delta_lines != 0.0 {
+                    let scrolled = gtk_call(&cmd_tx, |resp_tx| SocketCommand::SurfaceMouseScroll {
+                        req_id: Value::Null,
+                        id: Some(surface_id.to_owned()),
+                        delta_lines,
+                        resp_tx,
+                    })
+                    .await;
+                    if let Err((code, message)) = scrolled {
+                        let _ = send_json(&writer, &error_response(id, &code, &message)).await;
+                        continue;
+                    }
+                }
+                let result = json!({"surface_id": surface_id, "delta_lines": delta_lines});
+                if send_json(&writer, &success_response(id, result))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
             "mobile.terminal.paste" => {
                 let text = match params.get("text").and_then(Value::as_str) {
                     Some(text) if !text.is_empty() => text.to_owned(),
