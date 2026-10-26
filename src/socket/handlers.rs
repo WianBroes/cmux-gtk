@@ -3099,6 +3099,25 @@ fn handle_socket_command_traced(
             let _ = resp_tx.send(response);
         }
 
+        SocketCommand::SurfaceReadHistory {
+            req_id,
+            id,
+            max_lines,
+            resp_tx,
+        } => {
+            let result = terminal_target(state, id.as_deref(), None).and_then(|surface| {
+                // SAFETY: resolution found a live GTK-owned terminal. No model
+                // borrow or event-loop iteration spans this bounded native read.
+                unsafe { crate::ghostty::text::read_history(surface, max_lines) }
+                    .map_err(|message| ("read_failed", message))
+            });
+            let response = match result {
+                Ok((text, end_row)) => ok(req_id, json!({"text": text, "end_row": end_row})),
+                Err((code, message)) => err(req_id, code, message),
+            };
+            let _ = resp_tx.send(response);
+        }
+
         SocketCommand::SurfaceReadText {
             req_id,
             scrollback,
@@ -3111,20 +3130,26 @@ fn handle_socket_command_traced(
                 // borrow or event-loop iteration spans this bounded native read.
                 unsafe {
                     if scrollback {
-                        crate::ghostty::text::read_scrollback(surface)
+                        crate::ghostty::text::read_scrollback(surface).map(|text| (text, None))
                     } else {
-                        crate::ghostty::text::read_visible(surface)
+                        crate::ghostty::text::read_visible(surface).and_then(|text| {
+                            crate::ghostty::text::rows_above_viewport(surface)
+                                .map(|rows| (text, Some(rows)))
+                        })
                     }
                 }
                 .map_err(|message| ("read_failed", message))
             });
             let response = match result {
-                Ok(text) => {
+                Ok((text, rows_above)) => {
                     use base64::Engine as _;
                     let mut payload = json!({
                         "text": text,
                         "base64": base64::engine::general_purpose::STANDARD.encode(&text),
                     });
+                    if let (Some(rows), Some(fields)) = (rows_above, payload.as_object_mut()) {
+                        fields.insert("rows_above".into(), rows.into());
+                    }
                     let s = state.borrow();
                     let location = terminal_location(&s, id.as_deref(), workspace.as_deref())
                         .and_then(|(index, surface)| identify_location(&s, index, Some(surface)));

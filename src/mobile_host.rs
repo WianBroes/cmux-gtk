@@ -207,8 +207,12 @@ async fn handle_connection(
                     continue;
                 };
                 match read_terminal_text(&cmd_tx, surface_id).await {
-                    Ok(text) => {
-                        let result = json!({"surface_id": surface_id, "text": text});
+                    Ok((text, rows_above)) => {
+                        let result = json!({
+                            "surface_id": surface_id,
+                            "text": text,
+                            "rows_above": rows_above,
+                        });
                         if send_json(&writer, &success_response(id, result))
                             .await
                             .is_err()
@@ -306,6 +310,45 @@ async fn handle_connection(
                     .await
                     .is_err()
                 {
+                    break;
+                }
+            }
+            "mobile.terminal.history" => {
+                // The phone scrolls its own copy of the history (upstream iOS owns
+                // primary-screen scrolling): rows just above the screen, end_row
+                // matching the rows_above of terminal.text.
+                let Some(surface_id) = params.get("surface_id").and_then(Value::as_str) else {
+                    let _ = send_json(
+                        &writer,
+                        &error_response(id, "invalid_params", "Missing surface_id"),
+                    )
+                    .await;
+                    continue;
+                };
+                let max_lines = params
+                    .get("max_lines")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1000)
+                    .min(2000);
+                let read = gtk_call(&cmd_tx, |resp_tx| SocketCommand::SurfaceReadHistory {
+                    req_id: Value::Null,
+                    id: Some(surface_id.to_owned()),
+                    max_lines,
+                    resp_tx,
+                })
+                .await;
+                let response = match read {
+                    Ok(result) => success_response(
+                        id,
+                        json!({
+                            "surface_id": surface_id,
+                            "text": result.get("text").cloned().unwrap_or_else(|| json!("")),
+                            "end_row": result.get("end_row").cloned().unwrap_or_else(|| json!(0)),
+                        }),
+                    ),
+                    Err((code, message)) => error_response(id, &code, &message),
+                };
+                if send_json(&writer, &response).await.is_err() {
                     break;
                 }
             }
@@ -464,7 +507,7 @@ async fn stream_terminal_events(
     wake: Arc<tokio::sync::Notify>,
 ) {
     let mut sequence = 0u64;
-    let mut last: Option<String> = None;
+    let mut last: Option<(String, u64)> = None;
     let mut ticker = tokio::time::interval(std::time::Duration::from_millis(250));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
@@ -472,34 +515,37 @@ async fn stream_terminal_events(
             _ = ticker.tick() => {}
             _ = wake.notified() => {}
         }
-        let Ok(text) = read_terminal_text(&cmd_tx, &surface_id).await else {
+        let Ok(screen) = read_terminal_text(&cmd_tx, &surface_id).await else {
             continue;
         };
-        if last.as_deref() == Some(text.as_str()) {
+        if last.as_ref() == Some(&screen) {
             continue;
         }
         sequence += 1;
-        last = Some(text.clone());
+        let (text, rows_above) = &screen;
         let event = json!({
             "kind": "event",
             "topic": "terminal.text",
             "payload": {
                 "surface_id": surface_id,
                 "text": text,
+                "rows_above": rows_above,
                 "seq": sequence,
             },
         });
+        last = Some(screen);
         if send_json(&writer, &event).await.is_err() {
             return;
         }
     }
 }
 
-/// Ask the GTK main thread for the current visible terminal text.
+/// Ask the GTK main thread for the current visible terminal text and the number of
+/// scrollback rows above it (0 on the alternate screen).
 async fn read_terminal_text(
     cmd_tx: &mpsc::Sender<SocketCommand>,
     surface_id: &str,
-) -> Result<String, (String, String)> {
+) -> Result<(String, u64), (String, String)> {
     let result = gtk_call(cmd_tx, |resp_tx| SocketCommand::SurfaceReadText {
         req_id: Value::Null,
         scrollback: false,
@@ -508,11 +554,13 @@ async fn read_terminal_text(
         resp_tx,
     })
     .await?;
-    Ok(result
+    let text = result
         .get("text")
         .and_then(Value::as_str)
         .unwrap_or_default()
-        .to_owned())
+        .to_owned();
+    let rows_above = result.get("rows_above").and_then(Value::as_u64).unwrap_or(0);
+    Ok((text, rows_above))
 }
 
 /// Count workspaces through the existing GTK command; unavailable state reports zero.

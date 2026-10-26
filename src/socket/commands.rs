@@ -353,6 +353,13 @@ pub enum SocketCommand {
         workspace: Option<String>,
         resp_tx: RespTx,
     },
+    /// Rows just above the viewport, for the mobile history (mobile only).
+    SurfaceReadHistory {
+        req_id: Value,
+        id: Option<String>,
+        max_lines: u64,
+        resp_tx: RespTx,
+    },
     SurfaceHealth {
         req_id: Value,
         id: Option<String>,

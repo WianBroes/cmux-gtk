@@ -80,19 +80,68 @@ pub(crate) unsafe fn send_character(
 /// The caller must hold a live native surface on its owning GTK thread throughout
 /// this call. No teardown or event-loop iteration may occur until it returns.
 pub(crate) unsafe fn read_visible(surface: ffi::ghostty_surface_t) -> Result<String, &'static str> {
+    let viewport = unsafe { scrollbar(surface) }?;
+    if viewport.len == 0 {
+        return Ok(String::new());
+    }
+    let bottom = viewport
+        .offset
+        .checked_add(viewport.len - 1)
+        .ok_or("terminal row exceeds native range")?;
+    unsafe { read_rows(surface, viewport.offset, bottom) }
+}
+
+/// Rows of scrollback above the current viewport (0 on the alternate screen).
+///
+/// # Safety
+/// Same contract as [`read_visible`].
+pub(crate) unsafe fn rows_above_viewport(surface: ffi::ghostty_surface_t) -> Result<u64, &'static str> {
+    Ok(unsafe { scrollbar(surface) }?.offset)
+}
+
+/// Copy up to `max_lines` rows just above the viewport, for a phone that scrolls its
+/// own copy of the history. Returns the text and the row where it ends (exclusive),
+/// which equals [`rows_above_viewport`] at the time of the read.
+///
+/// # Safety
+/// Same contract as [`read_visible`].
+pub(crate) unsafe fn read_history(
+    surface: ffi::ghostty_surface_t,
+    max_lines: u64,
+) -> Result<(String, u64), &'static str> {
+    let end = unsafe { scrollbar(surface) }?.offset;
+    if end == 0 || max_lines == 0 {
+        return Ok((String::new(), end));
+    }
+    let top = end.saturating_sub(max_lines);
+    Ok((unsafe { read_rows(surface, top, end - 1) }?, end))
+}
+
+/// Viewport position and size in rows.
+///
+/// # Safety
+/// Same contract as [`read_visible`].
+unsafe fn scrollbar(
+    surface: ffi::ghostty_surface_t,
+) -> Result<ffi::ghostty_surface_scrollbar_s, &'static str> {
     let mut viewport: ffi::ghostty_surface_scrollbar_s = unsafe { std::mem::zeroed() };
     if !unsafe { ffi::ghostty_surface_scrollbar(surface, &mut viewport) } {
         return Err("terminal viewport unavailable");
     }
-    if viewport.len == 0 {
-        return Ok(String::new());
-    }
-    let top = u32::try_from(viewport.offset).map_err(|_| "terminal row exceeds native range")?;
-    let bottom = viewport
-        .offset
-        .checked_add(viewport.len - 1)
-        .and_then(|row| u32::try_from(row).ok())
-        .ok_or("terminal row exceeds native range")?;
+    Ok(viewport)
+}
+
+/// Clipboard-formatted text of rows `top..=bottom`, at most 256 KiB.
+///
+/// # Safety
+/// Same contract as [`read_visible`].
+unsafe fn read_rows(
+    surface: ffi::ghostty_surface_t,
+    top: u64,
+    bottom: u64,
+) -> Result<String, &'static str> {
+    let top = u32::try_from(top).map_err(|_| "terminal row exceeds native range")?;
+    let bottom = u32::try_from(bottom).map_err(|_| "terminal row exceeds native range")?;
     let mut text: ffi::ghostty_text_s = unsafe { std::mem::zeroed() };
     if !unsafe {
         ffi::ghostty_surface_read_screen_clipboard_text(surface, top, bottom, MAX_BYTES, &mut text)
