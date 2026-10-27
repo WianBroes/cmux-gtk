@@ -123,6 +123,7 @@ pub fn upload(root: &Path, params: &Value) -> Result<Value, Failure> {
         }
     }
     let staging = directory.join(".staging");
+    private_dir(&directory)?;
     private_dir(&staging)?;
     private_dir(&directory.join(".completed"))?;
     let staged = staging.join(&upload);
@@ -187,6 +188,7 @@ mod tests {
         assert_eq!(Path::new(&path), root.join(&op).join("_.rapport.pdf"));
         assert_eq!(std::fs::read(&path).unwrap(), b"abcdef");
         assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::metadata(root.join(&op)).unwrap().permissions().mode() & 0o777, 0o700);
         let again = upload(&root, &chunk(&op, &up, "../.rapport.pdf", 6, 0, b"abc", false)).unwrap();
         assert_eq!(again["path"], json!(path));
         // Same name, other upload: a second file, not an overwrite.
