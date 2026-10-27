@@ -6,6 +6,7 @@
 //! `attach_token` in each request, except for the public `mobile.host.status` method.
 
 use crate::mobile;
+use crate::mobile_chat;
 use crate::socket::commands::{self, MobileSizingOp, SocketCommand};
 use serde_json::{json, Value};
 use std::io;
@@ -93,6 +94,7 @@ async fn handle_connection(
     let writer = Arc::new(tokio::sync::Mutex::new(writer));
     let mut events: Option<tokio::task::JoinHandle<()>> = None;
     let mut feed_events: Option<tokio::task::JoinHandle<()>> = None;
+    let mut chat_events: Option<tokio::task::JoinHandle<()>> = None;
     // Wakes the event task right after a scroll or input instead of at the next tick.
     let wake = Arc::new(tokio::sync::Notify::new());
     // Shared sizing: this phone's participant id and the terminal it is sized on
@@ -765,8 +767,43 @@ async fn handle_connection(
                     break;
                 }
             }
+            "mobile.chat.sessions"
+            | "mobile.chat.session"
+            | "mobile.chat.history"
+            | "mobile.chat.send"
+            | "mobile.chat.interrupt" => {
+                let response = match chat_call(method, &params, &cmd_tx).await {
+                    Ok(result) => success_response(id, result),
+                    Err((code, message)) => error_response(id, &code, &message),
+                };
+                if send_json(&writer, &response).await.is_err() {
+                    break;
+                }
+            }
             "mobile.events.subscribe" => {
                 let topics = params.get("topics").and_then(Value::as_array);
+                // Agent conversations (upstream `MobileChatEventSource`) subscribe on their own.
+                if topics.is_some_and(|topics| {
+                    topics
+                        .iter()
+                        .any(|topic| topic.as_str() == Some("chat.message"))
+                }) {
+                    if let Some(previous) = chat_events.take() {
+                        previous.abort();
+                    }
+                    chat_events = Some(tokio::spawn(stream_chat_events(
+                        writer.clone(),
+                        cmd_tx.clone(),
+                    )));
+                    let ack = success_response(
+                        id,
+                        json!({"subscribed": true, "topics": ["chat.message"]}),
+                    );
+                    if send_json(&writer, &ack).await.is_err() {
+                        break;
+                    }
+                    continue;
+                }
                 // Feed invalidations (`feed.changed`) need no terminal; they run beside it.
                 if topics.is_some_and(|topics| {
                     topics.iter().any(|topic| topic.as_str() == Some("feed.changed"))
@@ -892,6 +929,9 @@ async fn handle_connection(
     if let Some(task) = feed_events {
         task.abort();
     }
+    if let Some(task) = chat_events {
+        task.abort();
+    }
     if let Some(surface_id) = sized {
         let _ = sizing_call(&cmd_tx, MobileSizingOp::Detach {
             surface_id,
@@ -930,6 +970,232 @@ async fn stream_feed_events(writer: Arc<tokio::sync::Mutex<OwnedWriteHalf>>) {
             }
         }
         last = Some(revision);
+    }
+}
+
+async fn chat_terminals(
+    cmd_tx: &mpsc::Sender<SocketCommand>,
+) -> Result<Vec<mobile_chat::ChatTerminal>, (String, String)> {
+    let result = gtk_call(cmd_tx, |resp_tx| SocketCommand::MobileChatTerminals {
+        req_id: Value::Null,
+        resp_tx,
+    })
+    .await?;
+    Ok(result["terminals"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(mobile_chat::ChatTerminal::from_value)
+        .collect())
+}
+
+fn chat_descriptor(terminal: &mobile_chat::ChatTerminal) -> Value {
+    let activity = terminal
+        .transcript()
+        .and_then(|path| mobile_chat::modified_at(&path));
+    terminal.descriptor(activity.as_deref())
+}
+
+/// `mobile.chat.*` requests: sessions from the terminals' hook bindings, history from the
+/// transcript, and input typed into the session's terminal (Enter to send, Escape to interrupt).
+async fn chat_call(
+    method: &str,
+    params: &Value,
+    cmd_tx: &mpsc::Sender<SocketCommand>,
+) -> Result<Value, (String, String)> {
+    let failure = |code: &str, message: &str| (code.to_owned(), message.to_owned());
+    let terminals = chat_terminals(cmd_tx).await?;
+    if method == "mobile.chat.sessions" {
+        let workspace = params["workspace_id"].as_str();
+        let sessions: Vec<Value> = terminals
+            .iter()
+            .filter(|terminal| workspace.is_none_or(|id| terminal.workspace_id == id))
+            .map(chat_descriptor)
+            .collect();
+        return Ok(json!({"sessions": sessions}));
+    }
+    let session = params["session_id"]
+        .as_str()
+        .ok_or_else(|| failure("invalid_params", "Missing session_id"))?;
+    let terminal = terminals
+        .into_iter()
+        .find(|terminal| terminal.session_id == session)
+        .ok_or_else(|| failure("not_found", "Unknown chat session"))?;
+    let send_key = |key: &str| {
+        let (id, key) = (terminal.terminal_id.clone(), key.to_owned());
+        gtk_call(cmd_tx, move |resp_tx| SocketCommand::SurfaceSendKey {
+            req_id: Value::Null,
+            id: Some(id),
+            workspace: None,
+            key,
+            resp_tx,
+        })
+    };
+    match method {
+        "mobile.chat.session" => Ok(json!({"session": chat_descriptor(&terminal)})),
+        "mobile.chat.history" => {
+            let path = terminal
+                .transcript()
+                .ok_or_else(|| failure("not_found", "Transcript not found"))?;
+            let before = params["before_seq"].as_i64();
+            let limit = params["limit"].as_u64().unwrap_or(50).clamp(1, 500) as usize;
+            tokio::task::spawn_blocking(move || {
+                let mut transcript = mobile_chat::ClaudeTranscript::default();
+                transcript
+                    .read_from(&path)
+                    .map(|_| transcript.page(before, limit))
+            })
+            .await
+            .map_err(|error| failure("internal_error", &error.to_string()))?
+            .map_err(|error| failure("internal_error", &error.to_string()))
+        }
+        "mobile.chat.send" => {
+            let text = params["text"]
+                .as_str()
+                .filter(|text| !text.trim().is_empty())
+                .ok_or_else(|| failure("invalid_params", "Missing text"))?
+                .to_owned();
+            // Pasted, so newlines stay in the prompt; Enter then submits it.
+            let id = terminal.terminal_id.clone();
+            gtk_call(cmd_tx, move |resp_tx| SocketCommand::SurfaceSendText {
+                req_id: Value::Null,
+                id: Some(id),
+                workspace: None,
+                text,
+                resp_tx,
+            })
+            .await?;
+            send_key("enter").await?;
+            Ok(json!({"session_id": session, "sent": true}))
+        }
+        "mobile.chat.interrupt" => {
+            send_key("escape").await?;
+            Ok(json!({"session_id": session, "interrupted": true}))
+        }
+        _ => Err(failure("method_not_found", "Unknown chat method")),
+    }
+}
+
+/// One session followed by a `chat.message` subscription.
+struct FollowedChat {
+    terminal: mobile_chat::ChatTerminal,
+    path: Option<std::path::PathBuf>,
+    transcript: mobile_chat::ClaudeTranscript,
+    /// The transcript was read once: later reads are news.
+    caught_up: bool,
+}
+
+/// `chat.message` events (upstream `ChatSessionEventFrame`), every 500 ms: messages appended to
+/// or updated in each session's transcript, state and descriptor changes, sessions gone.
+/// A session's existing lines are read silently first; the phone asks for history itself.
+async fn stream_chat_events(
+    writer: Arc<tokio::sync::Mutex<OwnedWriteHalf>>,
+    cmd_tx: mpsc::Sender<SocketCommand>,
+) {
+    let mut followed: std::collections::HashMap<String, FollowedChat> = Default::default();
+    let mut armed = false;
+    let mut ticker = tokio::time::interval(std::time::Duration::from_millis(500));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticker.tick().await;
+        let Ok(terminals) = chat_terminals(&cmd_tx).await else {
+            continue;
+        };
+        let mut events: Vec<(String, Value)> = Vec::new();
+        let live: std::collections::HashSet<String> = terminals
+            .iter()
+            .map(|terminal| terminal.session_id.clone())
+            .collect();
+        followed.retain(|session, _| {
+            let keep = live.contains(session);
+            if !keep {
+                events.push((
+                    session.clone(),
+                    json!({"event": "session_removed", "version": 0}),
+                ));
+            }
+            keep
+        });
+        for terminal in terminals {
+            let session = terminal.session_id.clone();
+            let mut chat = match followed.remove(&session) {
+                Some(chat) => {
+                    if chat.terminal.state != terminal.state {
+                        let state = chat_descriptor(&terminal)["state"].clone();
+                        events.push((
+                            session.clone(),
+                            json!({"event": "state_changed", "state": state}),
+                        ));
+                    }
+                    if (&chat.terminal.title, &chat.terminal.cwd) != (&terminal.title, &terminal.cwd)
+                    {
+                        events.push((
+                            session.clone(),
+                            json!({"event": "descriptor_changed",
+                                "descriptor": chat_descriptor(&terminal)}),
+                        ));
+                    }
+                    FollowedChat { terminal, ..chat }
+                }
+                None => {
+                    if armed {
+                        events.push((
+                            session.clone(),
+                            json!({"event": "descriptor_changed",
+                                "descriptor": chat_descriptor(&terminal)}),
+                        ));
+                    }
+                    FollowedChat {
+                        terminal,
+                        path: None,
+                        transcript: Default::default(),
+                        caught_up: false,
+                    }
+                }
+            };
+            if chat.path.is_none() {
+                chat.path = chat.terminal.transcript();
+            }
+            if let Some(path) = chat.path.clone() {
+                let mut transcript = std::mem::take(&mut chat.transcript);
+                let read = tokio::task::spawn_blocking(move || {
+                    let change = transcript.read_from(&path);
+                    (transcript, change)
+                })
+                .await;
+                if let Ok((transcript, change)) = read {
+                    chat.transcript = transcript;
+                    if let Ok(change) = change {
+                        // The first read of a session only catches up with what is on disk.
+                        if chat.caught_up && !change.appended.is_empty() {
+                            events.push((
+                                session.clone(),
+                                json!({"event": "appended", "messages": change.appended}),
+                            ));
+                        }
+                        if chat.caught_up && !change.updated.is_empty() {
+                            events.push((
+                                session.clone(),
+                                json!({"event": "updated", "messages": change.updated}),
+                            ));
+                        }
+                        chat.caught_up = true;
+                    }
+                }
+            }
+            followed.insert(session, chat);
+        }
+        armed = true;
+        for (session, event) in events {
+            let frame = json!({
+                "kind": "event",
+                "topic": "chat.message",
+                "payload": {"session_id": session, "event": event},
+            });
+            if send_json(&writer, &frame).await.is_err() {
+                return;
+            }
+        }
     }
 }
 

@@ -1065,6 +1065,49 @@ fn handle_socket_command_traced(
             let _ = resp_tx.send(ok(req_id, json!({"workspaces": list})));
         }
 
+        SocketCommand::MobileChatTerminals { req_id, resp_tx } => {
+            let s = state.borrow();
+            let mut terminals = Vec::new();
+            for (index, engine) in s.split_engines.iter().enumerate() {
+                let workspace = &s.workspaces[index];
+                for pane in engine.pane_info() {
+                    for surface in &pane.surface_ids {
+                        let surface = surface.to_string();
+                        let Ok(Some(binding)) =
+                            engine.resume_action(&surface, &crate::resume::ResumeAction::Show)
+                        else {
+                            continue;
+                        };
+                        let (Some(agent), Some(session)) = (&binding.kind, &binding.checkpoint_id)
+                        else {
+                            continue;
+                        };
+                        if !crate::mobile_chat::AGENTS.contains(&agent.as_str()) {
+                            continue;
+                        }
+                        let agent_state = workspace
+                            .agents
+                            .get(&(surface.clone(), agent.clone()))
+                            .map(|state| match state {
+                                crate::agent_activity::AgentState::Running => "working",
+                                crate::agent_activity::AgentState::NeedsInput => "needs_input",
+                                crate::agent_activity::AgentState::Idle => "idle",
+                            });
+                        terminals.push(json!({
+                            "session_id": session,
+                            "agent": agent,
+                            "workspace_id": workspace.uuid,
+                            "terminal_id": surface,
+                            "title": engine.surface_title(&surface).unwrap_or_default(),
+                            "cwd": binding.cwd,
+                            "config_dir": binding.environment.get("CLAUDE_CONFIG_DIR"),
+                            "state": agent_state.unwrap_or("idle"),
+                        }));
+                    }
+                }
+            }
+            let _ = resp_tx.send(ok(req_id, json!({"terminals": terminals})));
+        }
         SocketCommand::MobileWorkspaceList { req_id, resp_tx } => {
             // SOCK-05: No focus side effects.
             let s = state.borrow();

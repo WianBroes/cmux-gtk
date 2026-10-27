@@ -83,6 +83,11 @@ pub enum SocketCommand {
         req_id: Value,
         resp_tx: RespTx,
     },
+    /// Terminals whose hooks bound a readable agent session (`mobile.chat.*`).
+    MobileChatTerminals {
+        req_id: Value,
+        resp_tx: RespTx,
+    },
     WorkspaceCurrent {
         req_id: Value,
         resp_tx: RespTx,

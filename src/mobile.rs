@@ -134,7 +134,7 @@ pub fn host_status(workspace_count: usize) -> Value {
         "mac_display_name": display_name(),
         "workspace_count": workspace_count,
         "terminal_fidelity": "text",
-        "capabilities": ["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image", "feed.list", "feed.text", "feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply", "workspace.actions.v1", "workspace.read_state.v1", "workspace.close.v1", "terminal.create", "workspace.create", "workspace.create.task", "task.attachments.v1"],
+        "capabilities": ["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image", "feed.list", "feed.text", "feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply", "workspace.actions.v1", "workspace.read_state.v1", "workspace.close.v1", "terminal.create", "workspace.create", "workspace.create.task", "task.attachments.v1", "chat.v1"],
     })
 }
 
@@ -635,7 +635,7 @@ mod tests {
         assert_eq!(status["terminal_fidelity"], "text");
         assert_eq!(
             status["capabilities"],
-            json!(["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image", "feed.list", "feed.text", "feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply", "workspace.actions.v1", "workspace.read_state.v1", "workspace.close.v1", "terminal.create", "workspace.create", "workspace.create.task", "task.attachments.v1"])
+            json!(["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image", "feed.list", "feed.text", "feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply", "workspace.actions.v1", "workspace.read_state.v1", "workspace.close.v1", "terminal.create", "workspace.create", "workspace.create.task", "task.attachments.v1", "chat.v1"])
         );
         assert!(status["mac_device_id"].is_string());
         assert!(status["mac_display_name"].is_string());
