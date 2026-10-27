@@ -31,6 +31,7 @@ mod line_reader;
 mod menus;
 #[allow(dead_code)]
 mod mobile;
+mod mobile_attachments;
 mod mobile_host;
 mod mobile_sizing;
 mod mobile_sizing_host;

@@ -206,6 +206,17 @@ async fn handle_connection(
                     }
                 }
             }
+            "mobile.task.attachment.upload" => {
+                // Upstream iOS sends a file in 3 MB chunks, then types its quoted path.
+                let root = crate::mobile_attachments::default_root();
+                let response = match crate::mobile_attachments::upload(&root, &params) {
+                    Ok(result) => success_response(id, result),
+                    Err((code, message)) => error_response(id, &code, &message),
+                };
+                if send_json(&writer, &response).await.is_err() {
+                    break;
+                }
+            }
             "mobile.terminal.create" | "terminal.create" => {
                 // Upstream `v2MobileTerminalCreate`: a new tab in the workspace's focused
                 // pane, without taking focus, answered with the workspace list plus
