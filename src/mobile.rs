@@ -134,7 +134,7 @@ pub fn host_status(workspace_count: usize) -> Value {
         "mac_display_name": display_name(),
         "workspace_count": workspace_count,
         "terminal_fidelity": "text",
-        "capabilities": ["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image", "feed.list", "feed.text", "feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply", "workspace.actions.v1", "workspace.read_state.v1", "workspace.close.v1", "terminal.create", "workspace.create"],
+        "capabilities": ["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image", "feed.list", "feed.text", "feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply", "workspace.actions.v1", "workspace.read_state.v1", "workspace.close.v1", "terminal.create", "workspace.create", "workspace.create.task"],
     })
 }
 
@@ -529,6 +529,75 @@ pub fn workspace_create_title(params: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Folder of a phone `workspace.create` (upstream iOS task composer `working_directory`),
+/// `~` expanded; checked and named like a local workspace (`prepare_local_workspace`).
+pub fn workspace_create_directory(
+    params: &Value,
+    title: Option<&str>,
+) -> Result<Option<(String, std::path::PathBuf)>, (String, String)> {
+    let Some(raw) = params
+        .get("working_directory")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    else {
+        return Ok(None);
+    };
+    let path = match raw.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => {
+            let home = std::env::var_os("HOME").unwrap_or_default();
+            std::path::PathBuf::from(home).join(rest.trim_start_matches('/'))
+        }
+        _ => std::path::PathBuf::from(raw),
+    };
+    if !path.is_absolute() {
+        return Err(("invalid_directory".to_owned(), "working_directory must be an absolute path".to_owned()));
+    }
+    // Same rules as `workspace::prepare_local_workspace`, which this CLI-shared module
+    // cannot reach.
+    let path = path
+        .canonicalize()
+        .map_err(|error| ("invalid_directory".to_owned(), format!("Cannot open that folder: {error}")))?;
+    if !path.is_dir() {
+        return Err(("invalid_directory".to_owned(), "Choose a folder, not a file.".to_owned()));
+    }
+    let name = title
+        .map(str::to_owned)
+        .or_else(|| path.file_name().and_then(|name| name.to_str()).map(str::to_owned))
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "Workspace".to_owned());
+    Ok(Some((name, path)))
+}
+
+/// What the first terminal of a phone task types: upstream iOS sends the template
+/// command (`claude -- "$CMUX_TASK_PROMPT"`) and the prompt in `initial_env`; here the
+/// variables are exported first (single-quoted), then the command runs.
+pub fn task_initial_input(params: &Value) -> Result<Option<String>, (String, String)> {
+    let Some(command) = params
+        .get("initial_command")
+        .and_then(Value::as_str)
+        .filter(|command| !command.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    let invalid = |message: &str| ("invalid_params".to_owned(), message.to_owned());
+    let mut line = String::new();
+    if let Some(env) = params.get("initial_env").filter(|env| !env.is_null()) {
+        let env = env.as_object().ok_or_else(|| invalid("initial_env must be an object"))?;
+        for (key, value) in env {
+            let valid_key = key.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            let value = value.as_str().ok_or_else(|| invalid("initial_env values must be strings"))?;
+            if !valid_key {
+                return Err(invalid(&format!("invalid environment variable name: {key}")));
+            }
+            line.push_str(&format!("export {key}='{}'; ", value.replace('\'', "'\\''")));
+        }
+    }
+    line.push_str(command.trim());
+    Ok(Some(line))
+}
+
 /// Upstream's create replies: the workspace list plus the new id under `key`
 /// (`created_terminal_id`, `created_workspace_id`).
 pub fn with_created(mut list: Value, key: &str, created: Option<&Value>) -> Value {
@@ -566,7 +635,7 @@ mod tests {
         assert_eq!(status["terminal_fidelity"], "text");
         assert_eq!(
             status["capabilities"],
-            json!(["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image", "feed.list", "feed.text", "feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply", "workspace.actions.v1", "workspace.read_state.v1", "workspace.close.v1", "terminal.create", "workspace.create"])
+            json!(["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image", "feed.list", "feed.text", "feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply", "workspace.actions.v1", "workspace.read_state.v1", "workspace.close.v1", "terminal.create", "workspace.create", "workspace.create.task"])
         );
         assert!(status["mac_device_id"].is_string());
         assert!(status["mac_display_name"].is_string());
@@ -583,6 +652,42 @@ mod tests {
         assert_eq!(with_created(json!({}), "created_workspace_id", None), json!({}));
         assert_eq!(workspace_create_title(&json!({"title": "  Essai "})).as_deref(), Some("Essai"));
         assert_eq!(workspace_create_title(&json!({"title": " "})), None);
+    }
+
+    /// A phone task exports its prompt safely, then types the template command.
+    #[test]
+    fn task_initial_input_exports_then_runs() {
+        let params = json!({
+            "initial_command": "claude -- \"$CMUX_TASK_PROMPT\"",
+            "initial_env": {"CMUX_TASK_PROMPT": "it's $HOME"},
+        });
+        assert_eq!(
+            task_initial_input(&params).unwrap().unwrap(),
+            "export CMUX_TASK_PROMPT='it'\\''s $HOME'; claude -- \"$CMUX_TASK_PROMPT\""
+        );
+        assert_eq!(task_initial_input(&json!({"initial_command": "  "})).unwrap(), None);
+        assert!(task_initial_input(&json!({"initial_command": "x", "initial_env": {"A;rm": "v"}})).is_err());
+        assert!(task_initial_input(&json!({"initial_command": "x", "initial_env": {"A": 1}})).is_err());
+    }
+
+    /// A phone task folder must exist; `~` is the home folder and names the workspace.
+    #[test]
+    fn workspace_create_directory_checks_the_folder() {
+        assert_eq!(workspace_create_directory(&json!({}), None).unwrap(), None);
+        let temp = std::env::temp_dir().canonicalize().unwrap();
+        let (name, path) = workspace_create_directory(&json!({"working_directory": temp}), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(path, temp);
+        assert_eq!(name, temp.file_name().unwrap().to_string_lossy());
+        let (name, _) = workspace_create_directory(&json!({"working_directory": temp}), Some("Essai"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(name, "Essai");
+        assert!(workspace_create_directory(&json!({"working_directory": "relatif"}), None).is_err());
+        assert!(workspace_create_directory(&json!({"working_directory": "/nexiste/pas"}), None).is_err());
+        let home = workspace_create_directory(&json!({"working_directory": "~"}), None).unwrap().unwrap();
+        assert_eq!(home.1, std::path::PathBuf::from(std::env::var("HOME").unwrap()).canonicalize().unwrap());
     }
 
     /// A pasted image lands in a new private file with a safe extension.

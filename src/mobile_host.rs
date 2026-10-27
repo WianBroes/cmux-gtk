@@ -245,16 +245,31 @@ async fn handle_connection(
             "workspace.create" => {
                 // Upstream `v2MobileWorkspaceCreate`: in the background (the PC keeps its
                 // selection), answered with the workspace list plus `created_workspace_id`.
+                // Task composer fields (folder, agent command, prompt in the environment).
+                let title = mobile::workspace_create_title(&params);
+                let prepared = mobile::workspace_create_directory(&params, title.as_deref())
+                    .and_then(|folder| Ok((folder, mobile::task_initial_input(&params)?)));
+                let (folder, initial_input) = match prepared {
+                    Ok(prepared) => prepared,
+                    Err((code, message)) => {
+                        let _ = send_json(&writer, &error_response(id, &code, &message)).await;
+                        continue;
+                    }
+                };
+                let (name, working_directory) = match folder {
+                    Some((name, path)) => (Some(name), Some(path)),
+                    None => (title, None),
+                };
                 let created = gtk_call(&cmd_tx, |resp_tx| SocketCommand::WorkspaceCreate {
                     req_id: Value::Null,
                     remote_target: None,
-                    name: mobile::workspace_create_title(&params),
-                    working_directory: None,
+                    name,
+                    working_directory,
                     remote_directory: None,
                     terminal_transport: crate::remote_transport::TerminalTransport::Ssh,
                     terminal_profile: crate::remote_transport::TerminalProfile::Shell,
                     terminal_tmux_session: None,
-                    initial_input: None,
+                    initial_input,
                     focus: false,
                     resp_tx,
                 })
