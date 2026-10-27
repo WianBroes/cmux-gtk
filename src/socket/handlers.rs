@@ -907,6 +907,7 @@ fn handle_socket_command_traced(
                 "sidebar.state",
                 "right_sidebar.apply",
                 "events.agent_hook",
+                "feed.push",
                 "events.stream",
                 "system.diagnostics",
                 "workspace.list",

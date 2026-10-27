@@ -13,6 +13,7 @@ mod browser_timeout;
 mod config;
 mod diagnostics;
 mod events;
+mod feed;
 mod file_explorer;
 mod focus_history;
 mod font_zoom;

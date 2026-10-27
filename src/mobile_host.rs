@@ -92,6 +92,7 @@ async fn handle_connection(
     // Requests keep flowing after a subscription: events go out from their own task.
     let writer = Arc::new(tokio::sync::Mutex::new(writer));
     let mut events: Option<tokio::task::JoinHandle<()>> = None;
+    let mut feed_events: Option<tokio::task::JoinHandle<()>> = None;
     // Wakes the event task right after a scroll or input instead of at the next tick.
     let wake = Arc::new(tokio::sync::Notify::new());
     // Shared sizing: this phone's participant id and the terminal it is sized on
@@ -586,8 +587,65 @@ async fn handle_connection(
                     break;
                 }
             }
+            "feed.list" => {
+                let mut result = match crate::feed::global().lock() {
+                    Ok(store) => store.list(FEED_LIST_LIMIT),
+                    Err(_) => json!({"revision": 0, "items": []}),
+                };
+                enrich_feed_rows(&mut result, &cmd_tx).await;
+                if send_json(&writer, &success_response(id, result)).await.is_err() {
+                    break;
+                }
+            }
+            "feed.text" => {
+                let item = params.get("item_id").and_then(Value::as_str);
+                let offset = params.get("offset").and_then(Value::as_u64);
+                let response = match (item, offset) {
+                    (Some(item), Some(offset)) => {
+                        let version = params.get("version").and_then(Value::as_u64);
+                        let page = crate::feed::global()
+                            .lock()
+                            .map_err(|_| "internal_error")
+                            .and_then(|store| store.text(item, offset as usize, version));
+                        match page {
+                            Ok(page) => success_response(id, page),
+                            Err(code) => error_response(id, code, "feed text unavailable"),
+                        }
+                    }
+                    _ => error_response(
+                        id,
+                        "invalid_params",
+                        "Expected item_id and a nonnegative offset",
+                    ),
+                };
+                if send_json(&writer, &response).await.is_err() {
+                    break;
+                }
+            }
             "mobile.events.subscribe" => {
                 let topics = params.get("topics").and_then(Value::as_array);
+                // Feed invalidations (`feed.changed`) need no terminal; they run beside it.
+                if topics.is_some_and(|topics| {
+                    topics.iter().any(|topic| topic.as_str() == Some("feed.changed"))
+                }) {
+                    if let Some(previous) = feed_events.take() {
+                        previous.abort();
+                    }
+                    feed_events = Some(tokio::spawn(stream_feed_events(writer.clone())));
+                    let terminal = topics.is_some_and(|topics| {
+                        topics.iter().any(|topic| topic.as_str() == Some("terminal.text"))
+                    });
+                    if !terminal {
+                        let ack = success_response(
+                            id,
+                            json!({"subscribed": true, "topics": ["feed.changed"]}),
+                        );
+                        if send_json(&writer, &ack).await.is_err() {
+                            break;
+                        }
+                        continue;
+                    }
+                }
                 if !topics.is_some_and(|topics| {
                     topics
                         .iter()
@@ -688,12 +746,79 @@ async fn handle_connection(
     if let Some(task) = events {
         task.abort();
     }
+    if let Some(task) = feed_events {
+        task.abort();
+    }
     if let Some(surface_id) = sized {
         let _ = sizing_call(&cmd_tx, MobileSizingOp::Detach {
             surface_id,
             participant_id: sizing_id,
         })
         .await;
+    }
+}
+
+/// Rows per `feed.list`, as macOS `mobileFeedMaximumItemCount`.
+const FEED_LIST_LIMIT: usize = 200;
+
+/// Push `feed.changed {revision}` whenever the Feed store moves (macOS `onRevisionChange`);
+/// the phone then re-lists. Polled: the store lives behind a plain mutex, a read is cheap.
+async fn stream_feed_events(writer: Arc<tokio::sync::Mutex<OwnedWriteHalf>>) {
+    let mut last = None;
+    let mut ticker = tokio::time::interval(std::time::Duration::from_millis(500));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticker.tick().await;
+        let Ok(revision) = crate::feed::global().lock().map(|store| store.revision()) else {
+            continue;
+        };
+        if last == Some(revision) {
+            continue;
+        }
+        // The first read only arms the comparison: the phone lists right after subscribing.
+        if last.is_some() {
+            let event = json!({
+                "kind": "event",
+                "topic": "feed.changed",
+                "payload": {"revision": revision},
+            });
+            if send_json(&writer, &event).await.is_err() {
+                return;
+            }
+        }
+        last = Some(revision);
+    }
+}
+
+/// macOS `mobileFeedRow` routing: give each row with a `surface_id` its workspace id and the
+/// workspace and tab titles, from the same records as `mobile.workspace.list`.
+async fn enrich_feed_rows(result: &mut Value, cmd_tx: &mpsc::Sender<SocketCommand>) {
+    let Ok(list) = gtk_call(cmd_tx, |resp_tx| SocketCommand::MobileWorkspaceList {
+        req_id: Value::Null,
+        resp_tx,
+    })
+    .await
+    else {
+        return;
+    };
+    let mut targets = std::collections::HashMap::new();
+    for workspace in list["workspaces"].as_array().into_iter().flatten() {
+        for surface in workspace["surfaces"].as_array().into_iter().flatten() {
+            if let Some(surface_id) = surface["surface_id"].as_str() {
+                targets.insert(surface_id.to_owned(), (workspace, surface));
+            }
+        }
+    }
+    for row in result["items"].as_array_mut().into_iter().flatten() {
+        let Some((workspace, surface)) = row["surface_id"]
+            .as_str()
+            .and_then(|surface_id| targets.get(surface_id))
+        else {
+            continue;
+        };
+        row["workspace_id"] = workspace["id"].clone();
+        row["workspace_title"] = workspace["title"].clone();
+        row["surface_title"] = surface["title"].clone();
     }
 }
 

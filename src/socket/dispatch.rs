@@ -281,6 +281,22 @@ async fn dispatch_request(
         };
     }
 
+    // macOS `feed.push` (telemetry only here): the agent Feed store needs no GTK state either.
+    if method == "feed.push" {
+        let Some(event) = params.get("event").filter(|event| event.is_object()) else {
+            return err(req_id, "invalid_params", "event must be an object");
+        };
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_millis() as u64);
+        let item = match crate::feed::global().lock() {
+            Ok(mut store) => store.ingest(event, now_ms),
+            Err(_) => return err(req_id, "internal_error", "feed store unavailable"),
+        };
+        operation.finish(true);
+        return ok(req_id, serde_json::json!({"accepted": item.is_some(), "item_id": item}));
+    }
+
     if method == "system.diagnostics" {
         drop(params);
         operation.pending();

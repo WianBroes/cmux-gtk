@@ -949,6 +949,21 @@ function text(value) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+// Feed text, as macOS: the newest assistant message of an agent_end event.
+function lastAssistantMessage(event) {
+  const messages = Array.isArray(event?.messages) ? event.messages : [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || message.role !== "assistant") continue;
+    const content = Array.isArray(message.content)
+      ? message.content.filter((part) => part?.type === "text").map((part) => part.text).join("\n")
+      : message.content;
+    const value = text(content);
+    if (value) return value.slice(0, 16000);
+  }
+  return undefined;
+}
+
 function send(subcommand, hookEventName, event, context) {
   if (process.env["__DISABLE_ENV__"] === "1" || !process.env.CMUX_SURFACE_ID) return;
   __ROLE_GUARD__
@@ -958,6 +973,10 @@ function send(subcommand, hookEventName, event, context) {
   const message = text(event?.message) || text(event?.reason);
   const payload = { session_id: sessionId, cwd, hook_event_name: hookEventName };
   if (message) payload.message = message;
+  const prompt = text(event?.prompt);
+  if (prompt) payload.prompt = prompt.slice(0, 16000);
+  const reply = lastAssistantMessage(event);
+  if (reply) payload.last_assistant_message = reply;
   try {
     const child = spawn(cmux, ["hooks", "__PROVIDER__", subcommand], {
       env: process.env, detached: true, stdio: ["pipe", "ignore", "ignore"],
@@ -2104,6 +2123,42 @@ fn report_hook(
         json!({"source": source, "hook_event_name": name, "session_id": session,
             "surface_id": surface, "tool_name": hook_string(payload, &["tool_name", "toolName"])}),
     );
+    let _ = client.call("feed.push", json!({"event": feed_event(source, payload, session, surface)}));
+}
+
+/// The Feed event of one hook (macOS `feed.push`): prompt and last assistant message travel
+/// in `tool_input`, as upstream's `enrichUserPromptSubmitFeedEvent`/`enrichStopFeedEvent`.
+fn feed_event(source: &str, payload: &Value, session: Option<&str>, surface: &str) -> Value {
+    let name = hook_string(
+        payload,
+        &["hook_event_name", "hookEventName", "event_name", "eventName", "event"],
+    );
+    let mut event = json!({"hook_event_name": name, "session_id": session, "_source": source,
+        "surface_id": surface, "cwd": hook_string(payload, &["cwd"]),
+        "tool_name": hook_string(payload, &["tool_name", "toolName"]),
+        "message": hook_string(payload, &["message"])});
+    let mut input = match payload.get("tool_input") {
+        Some(Value::Object(input)) => input.clone(),
+        _ => serde_json::Map::new(),
+    };
+    match name {
+        Some("UserPromptSubmit") => {
+            if let Some(prompt) = hook_string(payload, &["prompt", "user_prompt"]) {
+                input.insert("prompt".into(), prompt.into());
+            }
+        }
+        Some("Stop") => {
+            let keys = ["last_assistant_message", "lastAssistantMessage", "assistant_response"];
+            if let Some(reply) = hook_string(payload, &keys) {
+                input.insert("reason".into(), reply.into());
+            }
+        }
+        _ => {}
+    }
+    if !input.is_empty() {
+        event["tool_input"] = Value::Object(input);
+    }
+    event
 }
 
 fn read_hook_payload(expected: &str) -> Result<(Value, String, String), CliError> {
@@ -2376,5 +2431,19 @@ mod tests {
             settings["hooks"]["SessionStart"][0]["hooks"][0]["command"],
             "user-hook"
         );
+    }
+
+    #[test]
+    fn feed_event_carries_prompt_and_last_reply() {
+        let prompt = json!({"hook_event_name": "UserPromptSubmit", "prompt": "fix it", "cwd": "/tmp"});
+        let event = feed_event("claude", &prompt, Some("s1"), "surface");
+        assert_eq!(event["tool_input"]["prompt"], "fix it");
+        assert_eq!(event["_source"], "claude");
+        assert_eq!(event["surface_id"], "surface");
+        let stop = json!({"hook_event_name": "Stop", "last_assistant_message": "done"});
+        let event = feed_event("pi", &stop, Some("s1"), "surface");
+        assert_eq!(event["tool_input"]["reason"], "done");
+        let start = json!({"hook_event_name": "SessionStart"});
+        assert!(feed_event("claude", &start, Some("s1"), "surface").get("tool_input").is_none());
     }
 }
