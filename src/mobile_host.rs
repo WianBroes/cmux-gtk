@@ -1273,10 +1273,17 @@ async fn stream_terminal_events(
     let mut last_size: Value = Value::Null;
     let mut ticker = tokio::time::interval(std::time::Duration::from_millis(250));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // The echo of a key lands a few ms after the wake: read every 16 ms for a moment
+    // instead of leaving it to the next 250 ms tick (a third of keys waited 100-250 ms).
+    let mut fast_until = tokio::time::Instant::now();
     loop {
+        let fast = tokio::time::Instant::now() < fast_until;
         tokio::select! {
-            _ = ticker.tick() => {}
-            _ = wake.notified() => {}
+            _ = ticker.tick(), if !fast => {}
+            _ = tokio::time::sleep(std::time::Duration::from_millis(16)), if fast => {}
+            _ = wake.notified() => {
+                fast_until = tokio::time::Instant::now() + std::time::Duration::from_millis(300);
+            }
         }
         // Shared sizing: re-measure the PC pane and push the state when it changes.
         if let Ok(size_state) = sizing_call(&cmd_tx, MobileSizingOp::Refresh { surface_id: surface_id.clone() }).await {
