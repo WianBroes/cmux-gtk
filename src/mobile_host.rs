@@ -206,6 +206,43 @@ async fn handle_connection(
                     }
                 }
             }
+            "workspace.action" | "workspace.close" => {
+                let call = if method == "workspace.close" {
+                    match params.get("workspace_id").and_then(Value::as_str) {
+                        Some(workspace) if !workspace.trim().is_empty() => {
+                            let workspace = workspace.to_owned();
+                            Ok(gtk_call(&cmd_tx, |resp_tx| SocketCommand::WorkspaceClose {
+                                req_id: Value::Null,
+                                id: workspace,
+                                resp_tx,
+                            })
+                            .await)
+                        }
+                        _ => Err(("invalid_params".to_owned(), "workspace_id is required".to_owned())),
+                    }
+                } else {
+                    match mobile::workspace_action_request(&params) {
+                        Ok(request) => Ok(gtk_call(&cmd_tx, |resp_tx| SocketCommand::WorkspaceAction {
+                            req_id: Value::Null,
+                            action: request.action,
+                            workspace: Some(request.workspace),
+                            title: request.title,
+                            color: request.color,
+                            description: request.description,
+                            resp_tx,
+                        })
+                        .await),
+                        Err(error) => Err(error),
+                    }
+                };
+                let response = match call.and_then(|result| result) {
+                    Ok(result) => success_response(id, result),
+                    Err((code, message)) => error_response(id, &code, &message),
+                };
+                if send_json(&writer, &response).await.is_err() {
+                    break;
+                }
+            }
             "mobile.terminal.replay" => {
                 let Some(surface_id) = params.get("surface_id").and_then(Value::as_str) else {
                     let _ = send_json(

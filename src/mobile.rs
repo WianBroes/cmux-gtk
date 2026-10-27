@@ -134,7 +134,7 @@ pub fn host_status(workspace_count: usize) -> Value {
         "mac_display_name": display_name(),
         "workspace_count": workspace_count,
         "terminal_fidelity": "text",
-        "capabilities": ["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image", "feed.list", "feed.text", "feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply"],
+        "capabilities": ["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image", "feed.list", "feed.text", "feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply", "workspace.actions.v1", "workspace.read_state.v1", "workspace.close.v1"],
     })
 }
 
@@ -467,6 +467,48 @@ fn hex(bytes: &[u8]) -> String {
     output
 }
 
+/// `workspace.action` from the phone, as upstream iOS sends it
+/// (`MobileShellComposite+WorkspaceActions.swift`): the row swipes and menu only, never
+/// `close_others` and the like, and always an explicit workspace, never the active one.
+pub struct WorkspaceActionRequest {
+    pub action: String,
+    pub workspace: String,
+    pub title: Option<String>,
+    pub color: Option<String>,
+    pub description: Option<String>,
+}
+
+const PHONE_WORKSPACE_ACTIONS: &[&str] = &[
+    "pin",
+    "unpin",
+    "rename",
+    "mark_read",
+    "mark_unread",
+    "set_color",
+    "clear_color",
+    "set_description",
+    "clear_description",
+];
+
+pub fn workspace_action_request(params: &Value) -> Result<WorkspaceActionRequest, (String, String)> {
+    let text = |key: &str| params.get(key).and_then(Value::as_str).map(str::to_owned);
+    let invalid = |message: &str| ("invalid_params".to_owned(), message.to_owned());
+    let action = text("action").ok_or_else(|| invalid("action must be a string"))?;
+    if !PHONE_WORKSPACE_ACTIONS.contains(&action.as_str()) {
+        return Err(invalid(&format!("unsupported workspace action from the phone: {action}")));
+    }
+    let workspace = text("workspace_id")
+        .filter(|id| !id.trim().is_empty())
+        .ok_or_else(|| invalid("workspace_id is required"))?;
+    Ok(WorkspaceActionRequest {
+        action,
+        workspace,
+        title: text("title"),
+        color: text("color"),
+        description: text("description"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -495,7 +537,7 @@ mod tests {
         assert_eq!(status["terminal_fidelity"], "text");
         assert_eq!(
             status["capabilities"],
-            json!(["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image", "feed.list", "feed.text", "feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply"])
+            json!(["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image", "feed.list", "feed.text", "feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply", "workspace.actions.v1", "workspace.read_state.v1", "workspace.close.v1"])
         );
         assert!(status["mac_device_id"].is_string());
         assert!(status["mac_display_name"].is_string());
@@ -643,5 +685,20 @@ mod tests {
         ));
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn phone_workspace_action_keeps_row_actions_and_needs_a_workspace() {
+        let request = workspace_action_request(&json!({
+            "action": "rename", "workspace_id": "w1", "title": "Nouveau", "client_id": "c"
+        }))
+        .unwrap();
+        assert_eq!(request.action, "rename");
+        assert_eq!(request.workspace, "w1");
+        assert_eq!(request.title.as_deref(), Some("Nouveau"));
+        assert!(workspace_action_request(&json!({"action": "mark_unread", "workspace_id": "w1"})).is_ok());
+        // Never the active workspace by omission, never bulk closes.
+        assert!(workspace_action_request(&json!({"action": "pin"})).is_err());
+        assert!(workspace_action_request(&json!({"action": "close_others", "workspace_id": "w1"})).is_err());
     }
 }
