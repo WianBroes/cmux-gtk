@@ -511,7 +511,12 @@ impl ChatTerminal {
             agent: value["agent"].as_str()?.to_owned(),
             workspace_id: value["workspace_id"].as_str()?.to_owned(),
             terminal_id: value["terminal_id"].as_str()?.to_owned(),
-            title: value["title"].as_str().unwrap_or_default().to_owned(),
+            // Claude animates a spinner glyph before its title; it is not a title change.
+            title: value["title"]
+                .as_str()
+                .unwrap_or_default()
+                .trim_start_matches(|c: char| !c.is_alphanumeric())
+                .to_owned(),
             cwd: value["cwd"].as_str().map(str::to_owned),
             config_dir: value["config_dir"].as_str().map(str::to_owned),
             state: match value["state"].as_str() {
@@ -736,11 +741,7 @@ mod tests {
         std::fs::write(folder.join("abc-1.jsonl"), "").unwrap();
         let config_dir = config.to_str();
         assert_eq!(
-            claude_transcript(
-                config_dir,
-                Some("/home/u/projets/mon_app"),
-                "abc-1"
-            ),
+            claude_transcript(config_dir, Some("/home/u/projets/mon_app"), "abc-1"),
             Some(folder.join("abc-1.jsonl"))
         );
         assert_eq!(
@@ -762,6 +763,10 @@ mod tests {
             json!({"state": "working", "since": "2026-10-27T17:00:00Z"})
         );
         assert_eq!(descriptor["agent_kind"], "claude");
+        let spinning = ChatTerminal::from_value(&json!({"session_id": "s", "agent": "claude",
+            "workspace_id": "w", "terminal_id": "t", "title": "◐ Suite du travail"}))
+        .unwrap();
+        assert_eq!(spinning.title, "Suite du travail");
         assert_eq!(iso8601(1_793_120_400), "2026-10-27T17:00:00Z");
         assert_eq!(exit_code("Exit code 127\nnot found"), Some(127));
         assert_eq!(exit_code("ok"), None);
