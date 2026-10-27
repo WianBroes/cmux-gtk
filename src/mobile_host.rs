@@ -206,6 +206,76 @@ async fn handle_connection(
                     }
                 }
             }
+            "mobile.terminal.create" | "terminal.create" => {
+                // Upstream `v2MobileTerminalCreate`: a new tab in the workspace's focused
+                // pane, without taking focus, answered with the workspace list plus
+                // `created_terminal_id` so the phone can open it.
+                let call = match mobile::terminal_create_workspace(&params) {
+                    Ok(workspace) => {
+                        gtk_call(&cmd_tx, |resp_tx| SocketCommand::SurfaceCreate {
+                            req_id: Value::Null,
+                            workspace: Some(workspace),
+                            caller: None,
+                            pane: None,
+                            launch: Default::default(),
+                            focus: false,
+                            resp_tx,
+                        })
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
+                let call = match call {
+                    Ok(created) => gtk_call(&cmd_tx, |resp_tx| SocketCommand::MobileWorkspaceList {
+                        req_id: Value::Null,
+                        resp_tx,
+                    })
+                    .await
+                    .map(|list| mobile::with_created(list, "created_terminal_id", created.get("surface_id"))),
+                    Err(error) => Err(error),
+                };
+                let response = match call {
+                    Ok(result) => success_response(id, result),
+                    Err((code, message)) => error_response(id, &code, &message),
+                };
+                if send_json(&writer, &response).await.is_err() {
+                    break;
+                }
+            }
+            "workspace.create" => {
+                // Upstream `v2MobileWorkspaceCreate`: in the background (the PC keeps its
+                // selection), answered with the workspace list plus `created_workspace_id`.
+                let created = gtk_call(&cmd_tx, |resp_tx| SocketCommand::WorkspaceCreate {
+                    req_id: Value::Null,
+                    remote_target: None,
+                    name: mobile::workspace_create_title(&params),
+                    working_directory: None,
+                    remote_directory: None,
+                    terminal_transport: crate::remote_transport::TerminalTransport::Ssh,
+                    terminal_profile: crate::remote_transport::TerminalProfile::Shell,
+                    terminal_tmux_session: None,
+                    initial_input: None,
+                    focus: false,
+                    resp_tx,
+                })
+                .await;
+                let call = match created {
+                    Ok(created) => gtk_call(&cmd_tx, |resp_tx| SocketCommand::MobileWorkspaceList {
+                        req_id: Value::Null,
+                        resp_tx,
+                    })
+                    .await
+                    .map(|list| mobile::with_created(list, "created_workspace_id", created.get("uuid"))),
+                    Err(error) => Err(error),
+                };
+                let response = match call {
+                    Ok(result) => success_response(id, result),
+                    Err((code, message)) => error_response(id, &code, &message),
+                };
+                if send_json(&writer, &response).await.is_err() {
+                    break;
+                }
+            }
             "workspace.action" | "workspace.close" => {
                 let call = if method == "workspace.close" {
                     match params.get("workspace_id").and_then(Value::as_str) {

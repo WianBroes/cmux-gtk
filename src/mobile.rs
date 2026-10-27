@@ -134,7 +134,7 @@ pub fn host_status(workspace_count: usize) -> Value {
         "mac_display_name": display_name(),
         "workspace_count": workspace_count,
         "terminal_fidelity": "text",
-        "capabilities": ["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image", "feed.list", "feed.text", "feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply", "workspace.actions.v1", "workspace.read_state.v1", "workspace.close.v1"],
+        "capabilities": ["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image", "feed.list", "feed.text", "feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply", "workspace.actions.v1", "workspace.read_state.v1", "workspace.close.v1", "terminal.create", "workspace.create"],
     })
 }
 
@@ -509,6 +509,35 @@ pub fn workspace_action_request(params: &Value) -> Result<WorkspaceActionRequest
     })
 }
 
+/// The workspace a phone `terminal.create` targets: always explicit, never the active one.
+pub fn terminal_create_workspace(params: &Value) -> Result<String, (String, String)> {
+    params
+        .get("workspace_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| ("invalid_params".to_owned(), "workspace_id is required".to_owned()))
+}
+
+/// Optional title of a phone `workspace.create` (upstream iOS sends none, or a spec title).
+pub fn workspace_create_title(params: &Value) -> Option<String> {
+    params
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(str::to_owned)
+}
+
+/// Upstream's create replies: the workspace list plus the new id under `key`
+/// (`created_terminal_id`, `created_workspace_id`).
+pub fn with_created(mut list: Value, key: &str, created: Option<&Value>) -> Value {
+    if let (Some(object), Some(created)) = (list.as_object_mut(), created) {
+        object.insert(key.to_owned(), created.clone());
+    }
+    list
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,10 +566,23 @@ mod tests {
         assert_eq!(status["terminal_fidelity"], "text");
         assert_eq!(
             status["capabilities"],
-            json!(["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image", "feed.list", "feed.text", "feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply", "workspace.actions.v1", "workspace.read_state.v1", "workspace.close.v1"])
+            json!(["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image", "feed.list", "feed.text", "feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply", "workspace.actions.v1", "workspace.read_state.v1", "workspace.close.v1", "terminal.create", "workspace.create"])
         );
         assert!(status["mac_device_id"].is_string());
         assert!(status["mac_display_name"].is_string());
+    }
+
+    /// A phone terminal.create needs an explicit workspace and answers with the new terminal id.
+    #[test]
+    fn terminal_create_targets_an_explicit_workspace() {
+        assert_eq!(terminal_create_workspace(&json!({"workspace_id": "w-1"})).unwrap(), "w-1");
+        assert!(terminal_create_workspace(&json!({})).is_err());
+        assert!(terminal_create_workspace(&json!({"workspace_id": " "})).is_err());
+        let reply = with_created(json!({"workspaces": []}), "created_terminal_id", Some(&json!("s-9")));
+        assert_eq!(reply, json!({"workspaces": [], "created_terminal_id": "s-9"}));
+        assert_eq!(with_created(json!({}), "created_workspace_id", None), json!({}));
+        assert_eq!(workspace_create_title(&json!({"title": "  Essai "})).as_deref(), Some("Essai"));
+        assert_eq!(workspace_create_title(&json!({"title": " "})), None);
     }
 
     /// A pasted image lands in a new private file with a safe extension.
