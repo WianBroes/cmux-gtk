@@ -72,6 +72,21 @@ pub(crate) unsafe fn send_character(
     Ok(())
 }
 
+/// Write `text` as one typed input (no bracketed paste, control bytes kept), like
+/// [`send_character`] for a whole escape sequence.
+pub(crate) unsafe fn send_text_input(
+    surface: ffi::ghostty_surface_t,
+    text: &str,
+) -> Result<(), &'static str> {
+    if text.contains('\0') {
+        return Err("terminal key contains a NUL byte");
+    }
+    // SAFETY: the caller guarantees a live surface; native typed input borrows
+    // the explicit-length UTF-8 buffer only for this synchronous call.
+    unsafe { ffi::ghostty_surface_text_input(surface, text.as_ptr().cast(), text.len()) };
+    Ok(())
+}
+
 /// Copy up to 256 KiB of clipboard-formatted text from the current viewport.
 /// Does not focus, scroll or alter selection. Concurrent terminal output may move
 /// rows between the scrollbar snapshot and extraction; this is a best-effort read.

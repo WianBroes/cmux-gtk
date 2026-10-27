@@ -951,8 +951,10 @@ mod tests {
         for sample in samples {
             for key in crate::mobile::input_keys(sample) {
                 assert!(
-                    key.chars().count() == 1 || crate::ghostty::named_key::parse(&key).is_some(),
-                    "{key:?} from {sample:?} is neither a character nor a key name",
+                    key.chars().count() == 1
+                        || crate::ghostty::named_key::parse(&key).is_some()
+                        || key.starts_with('\u{1b}'),
+                    "{key:?} from {sample:?} is neither a character, a key name nor an escape sequence",
                 );
             }
         }

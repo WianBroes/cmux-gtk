@@ -189,7 +189,20 @@ fn escape_keys(characters: &[char], index: &mut usize) -> Vec<String> {
         *index += consumed;
         return vec![key];
     }
-    if next == '[' || next == 'O' {
+    if next == '[' {
+        // A complete CSI sequence with no key name (mouse report `ESC[<64;10;5M`, …)
+        // is passed through whole, like the Mac host writing the phone's bytes to the
+        // PTY: `send_key` writes it as one typed input instead of literal text.
+        if let Some(length) = csi_length(characters, *index + 1) {
+            let raw: String = std::iter::once('\u{1b}')
+                .chain(characters[*index..*index + length].iter().copied())
+                .collect();
+            *index += length;
+            return vec![raw];
+        }
+        return vec!["escape".to_owned()];
+    }
+    if next == 'O' {
         return vec!["escape".to_owned()];
     }
     if next.is_ascii_alphabetic() {
@@ -201,6 +214,21 @@ fn escape_keys(characters: &[char], index: &mut usize) -> Vec<String> {
         return vec!["escape".to_owned(), next.to_string()];
     }
     vec!["escape".to_owned()]
+}
+
+/// Length from the `[` of a complete CSI sequence (parameters 0x30–0x3F,
+/// intermediates 0x20–0x2F, final 0x40–0x7E), or `None` when it is cut short.
+fn csi_length(characters: &[char], start: usize) -> Option<usize> {
+    let mut position = start;
+    while let Some(&character) = characters.get(position) {
+        position += 1;
+        match character {
+            '\u{30}'..='\u{3f}' | '\u{20}'..='\u{2f}' => {}
+            '\u{40}'..='\u{7e}' => return Some(position - start + 1),
+            _ => return None,
+        }
+    }
+    None
 }
 
 /// Key name of a CSI sequence (`ESC [ …`) and the characters it spans from the `[`.
@@ -502,10 +530,14 @@ mod tests {
         assert_eq!(input_keys("\x1b"), ["escape"]);
         assert_eq!(input_keys("\x1bb"), ["alt-b"]);
         assert_eq!(input_keys("a\r\nb"), ["a", "enter", "b"]);
+        // Mouse reports and other unnamed CSI sequences stay whole.
+        assert_eq!(input_keys("\x1b[<64;98;25M"), ["\x1b[<64;98;25M"]);
+        assert_eq!(input_keys("\x1b[<0;3;4m\x1b[A"), ["\x1b[<0;3;4m", "up"]);
+        assert_eq!(input_keys("\x1b[<64;9"), ["escape", "[", "<", "6", "4", ";", "9"]);
         assert_eq!(input_keys("\x7f"), ["backspace"]);
         assert_eq!(input_keys("a b"), ["a", " ", "b"]);
         assert_eq!(input_keys("\x1b[Z"), ["shift-tab"]);
-        assert_eq!(input_keys("\x1b[9x"), ["escape", "[", "9", "x"]);
+        assert_eq!(input_keys("\x1b[9x"), ["\x1b[9x"]);
     }
 
     /// The remaining control bytes and escape sequences, including what is dropped.

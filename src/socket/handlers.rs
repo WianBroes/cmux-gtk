@@ -3049,6 +3049,15 @@ fn handle_socket_command_traced(
                     // live GTK-owned terminal; no teardown occurs before input.
                     unsafe { crate::ghostty::named_key::send(surface, named) }
                 })
+            } else if key.starts_with('\u{1b}') && key.chars().count() > 1 {
+                // A raw escape sequence (phone mouse report): one typed input, so the
+                // program reads it whole rather than an Escape followed by text.
+                terminal_target(state, id.as_deref(), workspace.as_deref()).and_then(|surface| {
+                    // SAFETY: resolution releases the model borrow and returns a
+                    // live GTK-owned terminal; no teardown occurs before input.
+                    unsafe { crate::ghostty::text::send_text_input(surface, &key) }
+                        .map_err(|message| ("invalid_params", message))
+                })
             } else if let (Some(character), None) = (characters.next(), characters.next()) {
                 terminal_target(state, id.as_deref(), workspace.as_deref()).and_then(|surface| {
                     // SAFETY: resolution releases the model borrow and returns a
@@ -3059,7 +3068,7 @@ fn handle_socket_command_traced(
             } else {
                 Err((
                     "not_supported",
-                    "send-key accepts a key name (enter, tab, escape, up, ctrl-c…) or one literal character",
+                    "send-key accepts a key name (enter, tab, escape, up, ctrl-c…), one literal character or an escape sequence",
                 ))
             };
             let response = match result {
