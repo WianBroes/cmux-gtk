@@ -559,3 +559,38 @@ async fn invalid_pane_swap_params_never_reach_gtk() {
         assert!(rx.try_recv().is_err());
     }
 }
+
+/// A blocking `feed.push` holds its hook until the phone's reply verb delivers the decision.
+#[tokio::test]
+async fn blocking_feed_push_returns_the_reply_decision() {
+    let (tx, _rx) = tokio::sync::mpsc::channel(COMMAND_CAPACITY);
+    let request_id = format!("dispatch-test-{}", uuid::Uuid::new_v4());
+    let push = serde_json::json!({"id": 1, "method": "feed.push", "params": {
+        "wait_timeout_seconds": 5,
+        "event": {"hook_event_name": "PermissionRequest", "session_id": request_id,
+            "_source": "claude", "_opencode_request_id": request_id, "tool_name": "Bash",
+            "tool_input": {"command": "ls"}}}});
+    let reply = serde_json::json!({"id": 2, "method": "feed.permission.reply",
+        "params": {"request_id": request_id, "mode": "deny"}});
+    let waiting = dispatch_line(push.to_string(), &tx);
+    let answering = async {
+        // Retry until the push has registered its pending item.
+        loop {
+            let response = dispatch_line(reply.to_string(), &tx).await;
+            let response: serde_json::Value = serde_json::from_str(&response.body).unwrap();
+            if response["ok"] == true {
+                break;
+            }
+            assert_eq!(response["error"]["code"], "not_found");
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    };
+    let (response, ()) = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        tokio::join!(waiting, answering)
+    })
+    .await
+    .expect("the reply must release the blocked push");
+    let response: serde_json::Value = serde_json::from_str(&response.body).unwrap();
+    assert_eq!(response["result"]["status"], "resolved");
+    assert_eq!(response["result"]["decision"]["mode"], "deny");
+}

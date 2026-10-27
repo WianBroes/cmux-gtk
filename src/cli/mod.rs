@@ -333,6 +333,12 @@ pub fn run(mut cli: Cli) -> Result<(), CliError> {
         Commands::Project { .. } => Duration::from_secs(30),
         Commands::ProjectActions { .. } => Duration::from_secs(7),
         Commands::ProjectRun { .. } => Duration::from_secs(30),
+        Commands::Hooks {
+            command:
+                args::HookCommands::Claude {
+                    event: args::ClaudeHookEvent::PermissionRequest,
+                },
+        } => hooks::PERMISSION_CLIENT_DEADLINE,
         _ => Duration::from_secs(5),
     };
 

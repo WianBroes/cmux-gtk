@@ -281,20 +281,79 @@ async fn dispatch_request(
         };
     }
 
-    // macOS `feed.push` (telemetry only here): the agent Feed store needs no GTK state either.
+    // macOS `feed.push`: the agent Feed store needs no GTK state either. With
+    // `wait_timeout_seconds`, a blocking request (permission, plan, question) holds the hook
+    // until a `feed.*.reply` resolves it or the wait ends.
     if method == "feed.push" {
         let Some(event) = params.get("event").filter(|event| event.is_object()) else {
             return err(req_id, "invalid_params", "event must be an object");
         };
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_millis() as u64);
-        let item = match crate::feed::global().lock() {
-            Ok(mut store) => store.ingest(event, now_ms),
+        let wait = match params.get("wait_timeout_seconds") {
+            None => 0.0,
+            Some(value) => match value.as_f64() {
+                Some(seconds) if (0.0..=120.0).contains(&seconds) => seconds,
+                _ => {
+                    return err(
+                        req_id,
+                        "invalid_params",
+                        "feed.push wait_timeout_seconds must be numeric and between 0 and 120",
+                    )
+                }
+            },
+        };
+        let (item, waiter) = match crate::feed::global().lock() {
+            Ok(mut store) => {
+                let item = store.ingest(event, crate::feed::now_ms());
+                let waiter = item
+                    .as_deref()
+                    .filter(|_| wait > 0.0)
+                    .and_then(|item| store.wait_for(item));
+                (item, waiter)
+            }
             Err(_) => return err(req_id, "internal_error", "feed store unavailable"),
         };
+        let Some((request_id, decision)) = waiter else {
+            operation.finish(true);
+            return ok(req_id, serde_json::json!({"accepted": item.is_some(), "item_id": item}));
+        };
+        operation.pending();
+        let wait = std::time::Duration::from_secs_f64(wait);
+        let result = match tokio::time::timeout(wait, decision).await {
+            Ok(Ok(decision)) => serde_json::json!({"status": "resolved", "decision": decision}),
+            Ok(Err(_)) => serde_json::json!({"status": "expired"}),
+            Err(_) => {
+                if let Ok(mut store) = crate::feed::global().lock() {
+                    store.expire(&request_id, crate::feed::now_ms());
+                }
+                serde_json::json!({"status": "timed_out"})
+            }
+        };
         operation.finish(true);
-        return ok(req_id, serde_json::json!({"accepted": item.is_some(), "item_id": item}));
+        let mut result = result;
+        result["item_id"] = serde_json::json!(item);
+        return ok(req_id, result);
+    }
+
+    // macOS `feed.list` on the control socket: `{items}`, newest first.
+    if method == "feed.list" {
+        return match crate::feed::global().lock() {
+            Ok(store) => {
+                operation.finish(true);
+                let items = store.list(500)["items"].clone();
+                ok(req_id, serde_json::json!({"items": items}))
+            }
+            Err(_) => err(req_id, "internal_error", "feed store unavailable"),
+        };
+    }
+
+    if crate::feed::REPLY_METHODS.contains(&method.as_str()) {
+        return match crate::feed::reply_rpc(&method, &params, crate::feed::now_ms()) {
+            Ok(result) => {
+                operation.finish(true);
+                ok(req_id, result)
+            }
+            Err((code, message)) => err(req_id, code, &message),
+        };
     }
 
     if method == "system.diagnostics" {

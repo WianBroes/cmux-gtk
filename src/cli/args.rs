@@ -1554,6 +1554,8 @@ pub enum ClaudeHookEvent {
     SessionEnd,
     Stop,
     Notification,
+    /// Blocking: waits for a Feed decision and prints it as Claude's hook output
+    PermissionRequest,
 }
 
 #[derive(Clone, Copy, Subcommand)]

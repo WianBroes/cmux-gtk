@@ -33,6 +33,12 @@ struct ResumeCommand<'a> {
     environment: &'a [&'a str],
 }
 
+/// Claude's PermissionRequest hook timeout; the client deadline and the Feed wait end before it,
+/// so a silent phone hands the decision back to Claude's own dialog (macOS keeps 120 s / 118 / 115).
+const PERMISSION_HOOK_TIMEOUT_SECS: u64 = 125;
+pub const PERMISSION_CLIENT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(118);
+const PERMISSION_DECISION_WAIT_SECS: u64 = 115;
+
 const CLAUDE_RESUME: ResumeCommand<'static> = ResumeCommand {
     kind: "claude",
     executable: "claude",
@@ -325,12 +331,13 @@ fn merge_claude_hooks(settings: &mut Value, binary: &Path) -> Result<(), CliErro
         .or_insert_with(|| json!({}))
         .as_object_mut()
         .ok_or_else(|| CliError::Command("agent hooks must be an object".into()))?;
-    for (event, command) in [
-        ("SessionStart", "session-start"),
-        ("UserPromptSubmit", "prompt-submit"),
-        ("SessionEnd", "session-end"),
-        ("Stop", "stop"),
-        ("Notification", "notification"),
+    for (event, command, timeout) in [
+        ("SessionStart", "session-start", 10),
+        ("UserPromptSubmit", "prompt-submit", 10),
+        ("SessionEnd", "session-end", 10),
+        ("Stop", "stop", 10),
+        ("Notification", "notification", 10),
+        ("PermissionRequest", "permission-request", PERMISSION_HOOK_TIMEOUT_SECS),
     ] {
         let entries = hooks
             .entry(event)
@@ -350,7 +357,7 @@ fn merge_claude_hooks(settings: &mut Value, binary: &Path) -> Result<(), CliErro
             }
             true
         });
-        entries.push(json!({"hooks": [{"type": "command", "command": format!("{} hooks claude {} {}", shell_argument(&binary.to_string_lossy()), command, MARKER), "timeout": 10}]}));
+        entries.push(json!({"hooks": [{"type": "command", "command": format!("{} hooks claude {} {}", shell_argument(&binary.to_string_lossy()), command, MARKER), "timeout": timeout}]}));
     }
     Ok(())
 }
@@ -1712,12 +1719,19 @@ fn setup_rovodev(explicit: bool) -> Result<(), CliError> {
 /// Consume a bounded native payload and persist its exact session identity without granting automatic trust.
 /// Session-end clears only the matching checkpoint; commands, prompts and payload bodies are not logged.
 pub fn claude_event(client: &mut SocketClient, event: ClaudeHookEvent) -> Result<(), CliError> {
+    if matches!(event, ClaudeHookEvent::PermissionRequest) {
+        // Fails open: any error leaves Claude's own permission dialog in charge.
+        let output = claude_permission_request(client).unwrap_or_else(|_| "{}".into());
+        println!("{output}");
+        return Ok(());
+    }
     let expected = match event {
         ClaudeHookEvent::SessionStart => "SessionStart",
         ClaudeHookEvent::PromptSubmit => "UserPromptSubmit",
         ClaudeHookEvent::SessionEnd => "SessionEnd",
         ClaudeHookEvent::Stop => "Stop",
         ClaudeHookEvent::Notification => "Notification",
+        ClaudeHookEvent::PermissionRequest => unreachable!("handled above"),
     };
     let (payload, id, surface) = read_hook_payload(expected)?;
     report_hook(client, "claude", &payload, Some(&id), &surface);
@@ -1732,6 +1746,7 @@ pub fn claude_event(client: &mut SocketClient, event: ClaudeHookEvent) -> Result
             record_turn_baseline(&payload, &surface, &id)
         }
         ClaudeHookEvent::SessionEnd => clear_agent_resume(client, &surface, &id)?,
+        ClaudeHookEvent::PermissionRequest => {}
         ClaudeHookEvent::Stop | ClaudeHookEvent::Notification => {
             let (title_key, title_default, body_key, body_default) =
                 if matches!(event, ClaudeHookEvent::Stop) {
@@ -2114,6 +2129,17 @@ fn report_hook(
     session: Option<&str>,
     surface: &str,
 ) {
+    report_agent_hook(client, source, payload, session, surface);
+    let _ = client.call("feed.push", json!({"event": feed_event(source, payload, session, surface)}));
+}
+
+fn report_agent_hook(
+    client: &mut SocketClient,
+    source: &str,
+    payload: &Value,
+    session: Option<&str>,
+    surface: &str,
+) {
     let name = hook_string(
         payload,
         &["hook_event_name", "hookEventName", "event_name", "eventName", "event"],
@@ -2123,7 +2149,98 @@ fn report_hook(
         json!({"source": source, "hook_event_name": name, "session_id": session,
             "surface_id": surface, "tool_name": hook_string(payload, &["tool_name", "toolName"])}),
     );
-    let _ = client.call("feed.push", json!({"event": feed_event(source, payload, session, surface)}));
+}
+
+/// Claude's PermissionRequest (permissions, AskUserQuestion, ExitPlanMode): publish a pending
+/// Feed request and wait for a phone decision while Claude shows its own dialog beside it
+/// (measured 2026-10-27: an answer in the terminal goes through at once, the hook is abandoned).
+fn claude_permission_request(client: &mut SocketClient) -> Result<String, CliError> {
+    let (payload, id, surface) = read_hook_payload("PermissionRequest")?;
+    report_agent_hook(client, "claude", &payload, Some(&id), &surface);
+    let mut event = feed_event("claude", &payload, Some(&id), &surface);
+    event["_opencode_request_id"] = json!(uuid::Uuid::new_v4().to_string());
+    let result = client.call(
+        "feed.push",
+        json!({"event": event, "wait_timeout_seconds": PERMISSION_DECISION_WAIT_SECS}),
+    )?;
+    if result.get("status").and_then(Value::as_str) != Some("resolved") {
+        return Ok("{}".into());
+    }
+    let decision = result.get("decision").cloned().unwrap_or(Value::Null);
+    Ok(claude_decision_output(&payload, &decision).to_string())
+}
+
+/// Claude's PermissionRequest output for one Feed decision (macOS `renderAgentDecision`, claude).
+fn claude_decision_output(payload: &Value, decision: &Value) -> Value {
+    fn output(behavior: &str, message: Option<&str>, input: Option<Value>, permissions: Option<Value>) -> Value {
+        let mut inner = json!({"behavior": behavior});
+        if behavior == "deny" {
+            inner["message"] = json!(message.unwrap_or("User denied permission via cmux Feed."));
+        }
+        if let Some(input) = input.filter(|input| input.as_object().is_some_and(|map| !map.is_empty())) {
+            inner["updatedInput"] = input;
+        }
+        if let Some(permissions) = permissions.filter(|list| list.as_array().is_some_and(|list| !list.is_empty())) {
+            inner["updatedPermissions"] = permissions;
+        }
+        json!({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": inner}})
+    }
+    let mode = decision.get("mode").and_then(Value::as_str);
+    let tool_input = payload.get("tool_input").cloned();
+    match decision.get("kind").and_then(Value::as_str) {
+        Some("permission") => match mode {
+            Some("deny") | None => output("deny", None, None, None),
+            Some(mode) => {
+                let permissions = matches!(mode, "always" | "all")
+                    .then(|| payload.get("permission_suggestions").cloned())
+                    .flatten();
+                output("allow", None, None, permissions)
+            }
+        },
+        Some("exit_plan") => {
+            let feedback = decision
+                .get("feedback")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty());
+            if let Some(feedback) = feedback {
+                let message = format!("User rejected the plan via cmux Feed and wants this change: {feedback}");
+                return output("deny", Some(&message), None, None);
+            }
+            match mode {
+                Some("deny") | None => output("deny", Some("User rejected the plan via cmux Feed."), None, None),
+                Some("ultraplan") => output(
+                    "deny",
+                    Some("User chose Ultraplan via cmux Feed. Refine this plan with Ultraplan on Claude Code on the web."),
+                    None,
+                    None,
+                ),
+                Some(mode) => {
+                    let permissions = (mode == "autoAccept")
+                        .then(|| json!([{"type": "setMode", "mode": "auto", "destination": "session"}]));
+                    output("allow", None, tool_input, permissions)
+                }
+            }
+        }
+        Some("question") => {
+            let mut input = tool_input.filter(Value::is_object).unwrap_or_else(|| json!({}));
+            let questions = input.get("questions").and_then(Value::as_array).cloned().unwrap_or_default();
+            let mut answers = serde_json::Map::new();
+            let selections = decision.get("selections").and_then(Value::as_array).cloned().unwrap_or_default();
+            for (index, selection) in selections.iter().filter_map(Value::as_str).enumerate() {
+                let key = questions
+                    .get(index)
+                    .and_then(|question| question.get("question"))
+                    .and_then(Value::as_str)
+                    .filter(|text| !text.is_empty())
+                    .map_or_else(|| format!("Answer {}", index + 1), str::to_owned);
+                answers.insert(key, json!(selection));
+            }
+            input["answers"] = Value::Object(answers);
+            output("allow", None, Some(input), None)
+        }
+        _ => json!({}),
+    }
 }
 
 /// The Feed event of one hook (macOS `feed.push`): prompt and last assistant message travel
@@ -2445,5 +2562,51 @@ mod tests {
         assert_eq!(event["tool_input"]["reason"], "done");
         let start = json!({"hook_event_name": "SessionStart"});
         assert!(feed_event("claude", &start, Some("s1"), "surface").get("tool_input").is_none());
+    }
+
+    /// Installation adds the blocking PermissionRequest hook with its long timeout.
+    #[test]
+    fn merge_installs_blocking_permission_hook() {
+        let mut settings = json!({});
+        merge_claude_hooks(&mut settings, Path::new("/bin/cmux")).unwrap();
+        let handler = &settings["hooks"]["PermissionRequest"][0]["hooks"][0];
+        assert!(handler["command"].as_str().unwrap().contains("hooks claude permission-request"));
+        assert_eq!(handler["timeout"], PERMISSION_HOOK_TIMEOUT_SECS);
+        assert_eq!(settings["hooks"]["Stop"][0]["hooks"][0]["timeout"], 10);
+    }
+
+    /// Feed decisions become Claude's PermissionRequest output, as macOS renders them.
+    #[test]
+    fn feed_decisions_render_as_claude_hook_output() {
+        let suggestions = json!([{"type": "addDirectories", "directories": ["/tmp"], "destination": "session"}]);
+        let write = json!({"tool_name": "Write", "tool_input": {"file_path": "/tmp/x"},
+            "permission_suggestions": suggestions});
+        let once = claude_decision_output(&write, &json!({"kind": "permission", "mode": "once"}));
+        assert_eq!(once["hookSpecificOutput"]["decision"], json!({"behavior": "allow"}));
+        let always = claude_decision_output(&write, &json!({"kind": "permission", "mode": "always"}));
+        assert_eq!(always["hookSpecificOutput"]["decision"]["updatedPermissions"], suggestions);
+        let deny = claude_decision_output(&write, &json!({"kind": "permission", "mode": "deny"}));
+        assert_eq!(deny["hookSpecificOutput"]["decision"]["behavior"], "deny");
+
+        let ask = json!({"tool_name": "AskUserQuestion", "tool_input": {"questions": [
+            {"question": "Thé ou café ?", "options": [{"label": "Thé"}, {"label": "Café"}]}]}});
+        let answer = claude_decision_output(&ask, &json!({"kind": "question", "selections": ["Café"]}));
+        let decision = &answer["hookSpecificOutput"]["decision"];
+        assert_eq!(decision["behavior"], "allow");
+        assert_eq!(decision["updatedInput"]["answers"]["Thé ou café ?"], "Café");
+        assert_eq!(decision["updatedInput"]["questions"][0]["options"][1]["label"], "Café");
+
+        let plan = json!({"tool_name": "ExitPlanMode", "tool_input": {"plan": "# Plan"}});
+        let feedback = claude_decision_output(
+            &plan,
+            &json!({"kind": "exit_plan", "mode": "manual", "feedback": "plus court"}),
+        );
+        let decision = &feedback["hookSpecificOutput"]["decision"];
+        assert_eq!(decision["behavior"], "deny");
+        assert!(decision["message"].as_str().unwrap().ends_with("plus court"));
+        let auto = claude_decision_output(&plan, &json!({"kind": "exit_plan", "mode": "autoAccept"}));
+        let decision = &auto["hookSpecificOutput"]["decision"];
+        assert_eq!(decision["updatedInput"]["plan"], "# Plan");
+        assert_eq!(decision["updatedPermissions"][0]["mode"], "auto");
     }
 }

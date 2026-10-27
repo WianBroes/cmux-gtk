@@ -1,6 +1,7 @@
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 const PREVIEW_LIMIT: usize = 8_000;
@@ -34,11 +35,17 @@ struct Item {
     tool_result_is_error: Option<bool>,
     context: Context,
     full_text: String,
+    /// Blocking decisions (`permissionRequest`, `exitPlan`, `question`) only.
+    request_id: Option<String>,
+    tool_input_value: Option<Value>,
+    decision: Option<Value>,
+    resolved_at_ms: Option<u64>,
 }
 
 impl Item {
     fn is_visible(&self) -> bool {
         match self.kind.as_str() {
+            "permissionRequest" | "exitPlan" | "question" => true,
             "assistantMessage" => self
                 .text
                 .as_deref()
@@ -137,7 +144,50 @@ impl Item {
                     row.insert("tool_result_is_error".to_string(), json!(is_error));
                 }
             }
+            "permissionRequest" => {
+                insert_optional(&mut row, "request_id", self.request_id.as_deref());
+                insert_optional(&mut row, "tool_name", self.tool_name.as_deref());
+                insert_truncated(
+                    &mut row,
+                    "tool_input",
+                    self.tool_input.as_deref(),
+                    PREVIEW_LIMIT,
+                );
+            }
+            "exitPlan" => {
+                insert_optional(&mut row, "request_id", self.request_id.as_deref());
+                let plan = self
+                    .tool_input_value
+                    .as_ref()
+                    .and_then(|input| input.get("plan"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                insert_truncated(&mut row, "plan", Some(plan), PREVIEW_LIMIT);
+                if let Some(summary) = plan.lines().map(str::trim).find(|line| !line.is_empty()) {
+                    row.insert("plan_summary".to_string(), json!(summary));
+                }
+                row.insert("default_mode".to_string(), json!("manual"));
+            }
+            "question" => {
+                insert_optional(&mut row, "request_id", self.request_id.as_deref());
+                let questions = question_prompts(self.tool_input_value.as_ref());
+                if let Some(first) = questions.first() {
+                    row.insert("question_prompt".to_string(), first["prompt"].clone());
+                    row.insert(
+                        "question_multi_select".to_string(),
+                        first["multi_select"].clone(),
+                    );
+                    row.insert("question_options".to_string(), first["options"].clone());
+                }
+                row.insert("questions".to_string(), Value::Array(questions));
+            }
             _ => {}
+        }
+        if let Some(decision) = &self.decision {
+            row.insert("decision".to_string(), decision.clone());
+        }
+        if let Some(at) = self.resolved_at_ms {
+            row.insert("resolved_at".to_string(), json!(iso8601_utc(at)));
         }
 
         let mut context = Map::new();
@@ -175,6 +225,8 @@ pub struct FeedStore {
     revision: u64,
     cap: usize,
     contexts: HashMap<String, Context>,
+    /// Hooks blocked in `feed.push`, by request id; dropping a sender wakes its hook empty-handed.
+    waiters: HashMap<String, oneshot::Sender<Value>>,
 }
 
 impl FeedStore {
@@ -184,6 +236,83 @@ impl FeedStore {
             revision: 0,
             cap,
             contexts: HashMap::new(),
+            waiters: HashMap::new(),
+        }
+    }
+
+    /// Register the hook that waits for a pending item's decision (macOS `ingestBlocking`).
+    pub fn wait_for(&mut self, item_id: &str) -> Option<(String, oneshot::Receiver<Value>)> {
+        let item = self.items.iter().find(|item| item.id == item_id)?;
+        if item.status != "pending" {
+            return None;
+        }
+        let request_id = item.request_id.clone()?;
+        let (sender, receiver) = oneshot::channel();
+        self.waiters.insert(request_id.clone(), sender);
+        Some((request_id, receiver))
+    }
+
+    /// Resolve a pending request with a validated decision and wake its hook.
+    pub fn reply(
+        &mut self,
+        request_id: &str,
+        decision: Value,
+        now_ms: u64,
+    ) -> Result<(), &'static str> {
+        let expected_kind = match decision.get("kind").and_then(Value::as_str) {
+            Some("permission") => "permissionRequest",
+            Some("exit_plan") => "exitPlan",
+            Some("question") => "question",
+            _ => return Err("invalid_params"),
+        };
+        let item = self
+            .items
+            .iter_mut()
+            .find(|item| item.request_id.as_deref() == Some(request_id))
+            .ok_or("not_found")?;
+        if item.kind != expected_kind {
+            return Err("invalid_params");
+        }
+        if item.status != "pending" {
+            return Err("not_pending");
+        }
+        item.status = "resolved".to_string();
+        item.decision = Some(decision.clone());
+        item.updated_at_ms = now_ms;
+        item.resolved_at_ms = Some(now_ms);
+        self.revision += 1;
+        if let Some(waiter) = self.waiters.remove(request_id) {
+            let _ = waiter.send(decision);
+        }
+        Ok(())
+    }
+
+    /// The hook gave up (timeout): the agent falls back to its own prompt.
+    pub fn expire(&mut self, request_id: &str, now_ms: u64) {
+        self.waiters.remove(request_id);
+        let pending = self.items.iter_mut().find(|item| {
+            item.request_id.as_deref() == Some(request_id) && item.status == "pending"
+        });
+        if let Some(item) = pending {
+            item.status = "expired".to_string();
+            item.updated_at_ms = now_ms;
+            item.resolved_at_ms = Some(now_ms);
+            self.revision += 1;
+        }
+    }
+
+    /// A later prompt, stop or session end proves the agent moved past its pending decisions
+    /// (answered in the terminal: Claude keeps the abandoned hook waiting), as macOS
+    /// `supersedesPendingDecisions`.
+    fn expire_superseded(&mut self, workstream_id: &str, now_ms: u64) {
+        let superseded: Vec<String> = self
+            .items
+            .iter()
+            .filter(|item| item.workstream_id == workstream_id && item.status == "pending")
+            .filter_map(|item| item.request_id.clone())
+            .collect();
+        for request_id in superseded {
+            self.expire(&request_id, now_ms);
         }
     }
 
@@ -195,6 +324,9 @@ impl FeedStore {
             non_empty_str(event, "_source").unwrap_or_else(|| "claude".to_string());
         let payload = decode_hook(event, &hook)?;
         let workstream_id = format!("{}-{}", source, session_id);
+        if matches!(hook.as_str(), "UserPromptSubmit" | "Stop" | "SessionEnd") {
+            self.expire_superseded(&workstream_id, now_ms);
+        }
 
         let HookPayload {
             kind,
@@ -234,7 +366,28 @@ impl FeedStore {
             "stop" => reason.clone().unwrap_or_default(),
             "toolUse" => tool_input.clone().unwrap_or_default(),
             "toolResult" => tool_result.clone().unwrap_or_default(),
+            "permissionRequest" | "exitPlan" | "question" => tool_input.clone().unwrap_or_default(),
             _ => String::new(),
+        };
+
+        let blocking = matches!(kind, "permissionRequest" | "exitPlan" | "question");
+        let request_id = if blocking {
+            Some(
+                non_empty_str(event, "_opencode_request_id")
+                    .or_else(|| non_empty_str(event, "request_id"))
+                    .unwrap_or_else(|| Uuid::new_v4().to_string()),
+            )
+        } else {
+            None
+        };
+        let tool_input_value = if blocking {
+            match event.get("tool_input") {
+                Some(Value::String(text)) => serde_json::from_str(text).ok(),
+                Some(value @ Value::Object(_)) => Some(value.clone()),
+                _ => None,
+            }
+        } else {
+            None
         };
 
         let id = Uuid::new_v4().to_string();
@@ -245,7 +398,7 @@ impl FeedStore {
             workstream_id,
             source,
             kind: kind.to_string(),
-            status: "telemetry".to_string(),
+            status: if blocking { "pending" } else { "telemetry" }.to_string(),
             created_at_ms: now_ms,
             updated_at_ms: now_ms,
             cwd: non_empty_str(event, "cwd"),
@@ -260,10 +413,18 @@ impl FeedStore {
             tool_result_is_error,
             context,
             full_text,
+            request_id,
+            tool_input_value,
+            decision: None,
+            resolved_at_ms: None,
         });
 
         while self.items.len() > self.cap {
-            self.items.pop_front();
+            if let Some(dropped) = self.items.pop_front() {
+                if let Some(request_id) = dropped.request_id {
+                    self.waiters.remove(&request_id);
+                }
+            }
         }
 
         Some(id)
@@ -330,6 +491,120 @@ impl FeedStore {
 pub fn global() -> &'static Mutex<FeedStore> {
     static GLOBAL: OnceLock<Mutex<FeedStore>> = OnceLock::new();
     GLOBAL.get_or_init(|| Mutex::new(FeedStore::new(500)))
+}
+
+pub fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64)
+}
+
+pub const REPLY_METHODS: [&str; 3] =
+    ["feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply"];
+
+/// Validate one reply verb (macOS `v2FeedPermissionReply`…) into `(request_id, decision)`.
+pub fn decision_from_reply(method: &str, params: &Value) -> Result<(String, Value), String> {
+    let request_id = params
+        .get("request_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{method} requires request_id"))?
+        .to_string();
+    let mode = params.get("mode").and_then(Value::as_str);
+    let decision = match method {
+        "feed.permission.reply" => match mode {
+            Some(mode @ ("once" | "always" | "all" | "bypass" | "deny")) => {
+                json!({"kind": "permission", "mode": mode})
+            }
+            _ => return Err(format!("{method} requires mode ∈ once|always|all|bypass|deny")),
+        },
+        "feed.question.reply" => {
+            let selections = params
+                .get("selections")
+                .and_then(Value::as_array)
+                .filter(|list| list.iter().all(Value::is_string))
+                .ok_or_else(|| format!("{method} requires selections: [string]"))?;
+            json!({"kind": "question", "selections": selections})
+        }
+        "feed.exit_plan.reply" => match mode {
+            Some(mode @ ("ultraplan" | "bypassPermissions" | "autoAccept" | "manual" | "deny")) => {
+                let mut decision = json!({"kind": "exit_plan", "mode": mode});
+                if let Some(feedback) = params
+                    .get("feedback")
+                    .and_then(Value::as_str)
+                    .filter(|text| !text.trim().is_empty())
+                {
+                    decision["feedback"] = json!(feedback);
+                }
+                decision
+            }
+            _ => {
+                return Err(format!(
+                    "{method} requires mode ∈ ultraplan|bypassPermissions|autoAccept|manual|deny"
+                ))
+            }
+        },
+        _ => return Err(format!("unknown reply method {method}")),
+    };
+    Ok((request_id, decision))
+}
+
+/// One reply verb against the global store: `Ok({"delivered": true})` or `(code, message)`.
+pub fn reply_rpc(method: &str, params: &Value, now_ms: u64) -> Result<Value, (&'static str, String)> {
+    let (request_id, decision) =
+        decision_from_reply(method, params).map_err(|message| ("invalid_params", message))?;
+    let mut store = global()
+        .lock()
+        .map_err(|_| ("internal_error", "feed store unavailable".to_string()))?;
+    store
+        .reply(&request_id, decision, now_ms)
+        .map_err(|code| (code, format!("{method}: {code}")))?;
+    Ok(json!({"delivered": true}))
+}
+
+/// AskUserQuestion prompts in the macOS `questionDict` shape; option ids are their labels,
+/// which `feed.question.reply` sends back as selections.
+fn question_prompts(input: Option<&Value>) -> Vec<Value> {
+    let Some(questions) = input
+        .and_then(|input| input.get("questions"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    questions
+        .iter()
+        .enumerate()
+        .map(|(index, question)| {
+            let options: Vec<Value> = question
+                .get("options")
+                .and_then(Value::as_array)
+                .map(|options| {
+                    options
+                        .iter()
+                        .filter_map(|option| {
+                            let label = option.get("label").and_then(Value::as_str)?;
+                            let mut row = json!({"id": label, "label": label});
+                            if let Some(description) =
+                                option.get("description").and_then(Value::as_str)
+                            {
+                                row["description"] = json!(description);
+                            }
+                            Some(row)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut prompt = json!({
+                "id": index.to_string(),
+                "prompt": question.get("question").and_then(Value::as_str).unwrap_or_default(),
+                "multi_select": question.get("multiSelect").and_then(Value::as_bool).unwrap_or(false),
+                "options": options,
+            });
+            if let Some(header) = question.get("header").and_then(Value::as_str) {
+                prompt["header"] = json!(header);
+            }
+            prompt
+        })
+        .collect()
 }
 
 struct HookPayload {
@@ -418,6 +693,19 @@ fn decode_hook(event: &Value, hook: &str) -> Option<HookPayload> {
             tool_input: None,
             tool_result: tool_result_value(event, &message),
             tool_result_is_error: Some(false),
+        }),
+        "PermissionRequest" => Some(HookPayload {
+            kind: match tool_name.as_deref() {
+                Some("AskUserQuestion") => "question",
+                Some("ExitPlanMode") => "exitPlan",
+                _ => "permissionRequest",
+            },
+            text: None,
+            reason: None,
+            tool_name,
+            tool_input: tool_input_json_string(event),
+            tool_result: None,
+            tool_result_is_error: None,
         }),
         "AssistantMessage" => Some(HookPayload {
             kind: "assistantMessage",
@@ -733,5 +1021,121 @@ mod tests {
             iso8601_utc(1_793_102_464_000),
             "2026-10-27T12:01:04Z"
         );
+    }
+
+    fn permission_event(session: &str, tool: &str, input: Value) -> Value {
+        json!({
+            "hook_event_name": "PermissionRequest",
+            "session_id": session,
+            "_source": "claude",
+            "_opencode_request_id": format!("req-{session}-{tool}"),
+            "tool_name": tool,
+            "tool_input": input,
+        })
+    }
+
+    /// A permission request is a pending row; a phone reply resolves it and wakes the hook.
+    #[test]
+    fn reply_resolves_pending_request_and_wakes_hook() {
+        let mut store = FeedStore::new(10);
+        let event = permission_event("s1", "Write", json!({"file_path": "/tmp/x"}));
+        let id = store.ingest(&event, 1_000).expect("item");
+        let row = &store.list(10)["items"][0];
+        assert_eq!(row["kind"], "permissionRequest");
+        assert_eq!(row["status"], "pending");
+        assert_eq!(row["request_id"], "req-s1-Write");
+
+        let (request_id, mut waiter) = store.wait_for(&id).expect("pending waiter");
+        let revision = store.revision();
+        let decision = json!({"kind": "permission", "mode": "once"});
+        store.reply(&request_id, decision.clone(), 2_000).unwrap();
+        assert_eq!(waiter.try_recv().unwrap(), decision);
+        assert!(store.revision() > revision, "phones must see the status change");
+        let row = &store.list(10)["items"][0];
+        assert_eq!(row["status"], "resolved");
+        assert_eq!(row["decision"]["mode"], "once");
+        assert_eq!(store.reply(&request_id, decision, 3_000), Err("not_pending"));
+        assert!(store.wait_for(&id).is_none());
+    }
+
+    /// A decision of another kind cannot answer the request.
+    #[test]
+    fn reply_kind_must_match_request() {
+        let mut store = FeedStore::new(10);
+        store.ingest(&permission_event("s1", "Write", json!({})), 1_000);
+        let wrong = json!({"kind": "question", "selections": ["Thé"]});
+        assert_eq!(store.reply("req-s1-Write", wrong, 2_000), Err("invalid_params"));
+        let unknown = json!({"kind": "permission", "mode": "once"});
+        assert_eq!(store.reply("missing", unknown, 2_000), Err("not_found"));
+    }
+
+    /// Answered in the terminal: the next Stop of the same agent expires the request and
+    /// releases its hook; another agent's Stop leaves it pending.
+    #[test]
+    fn later_stop_expires_only_its_own_pending_requests() {
+        let mut store = FeedStore::new(10);
+        let mine = store.ingest(&permission_event("s1", "Write", json!({})), 1_000).unwrap();
+        let (_, mut waiter) = store.wait_for(&mine).unwrap();
+        let other = json!({"hook_event_name": "Stop", "session_id": "s2", "_source": "claude"});
+        store.ingest(&other, 2_000);
+        assert!(matches!(
+            waiter.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        let stop = json!({"hook_event_name": "Stop", "session_id": "s1", "_source": "claude"});
+        store.ingest(&stop, 3_000);
+        assert!(matches!(
+            waiter.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+        ));
+        let rows = store.list(10);
+        let row = rows["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == mine)
+            .unwrap();
+        assert_eq!(row["status"], "expired");
+    }
+
+    /// AskUserQuestion and ExitPlanMode become question / plan rows in the macOS shape.
+    #[test]
+    fn question_and_plan_rows_carry_their_choices() {
+        let mut store = FeedStore::new(10);
+        let question = json!({"questions": [{"question": "Thé ou café ?", "header": "Boisson",
+            "multiSelect": false, "options": [{"label": "Thé", "description": "Infusion"},
+            {"label": "Café"}]}]});
+        store.ingest(&permission_event("s1", "AskUserQuestion", question), 1_000);
+        let plan = json!({"plan": "\n# Plan\n- étape"});
+        store.ingest(&permission_event("s1", "ExitPlanMode", plan), 2_000);
+        let rows = store.list(10);
+        let plan_row = &rows["items"][0];
+        assert_eq!(plan_row["kind"], "exitPlan");
+        assert_eq!(plan_row["plan_summary"], "# Plan");
+        let question_row = &rows["items"][1];
+        assert_eq!(question_row["kind"], "question");
+        assert_eq!(question_row["question_prompt"], "Thé ou café ?");
+        assert_eq!(question_row["question_options"][0]["id"], "Thé");
+        assert_eq!(question_row["question_options"][0]["description"], "Infusion");
+        assert_eq!(question_row["questions"][0]["header"], "Boisson");
+    }
+
+    /// Reply verbs accept only the macOS modes and shapes.
+    #[test]
+    fn reply_verbs_validate_like_macos() {
+        let ok = decision_from_reply(
+            "feed.exit_plan.reply",
+            &json!({"request_id": "r", "mode": "manual", "feedback": "  plus court "}),
+        )
+        .unwrap();
+        assert_eq!(ok.1, json!({"kind": "exit_plan", "mode": "manual", "feedback": "  plus court "}));
+        for (method, params) in [
+            ("feed.permission.reply", json!({"request_id": "r", "mode": "maybe"})),
+            ("feed.permission.reply", json!({"mode": "once"})),
+            ("feed.question.reply", json!({"request_id": "r", "selections": [1]})),
+            ("feed.exit_plan.reply", json!({"request_id": "r", "mode": "auto"})),
+        ] {
+            assert!(decision_from_reply(method, &params).is_err(), "{method} {params}");
+        }
     }
 }

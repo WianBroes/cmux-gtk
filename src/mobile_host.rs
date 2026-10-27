@@ -622,6 +622,16 @@ async fn handle_connection(
                     break;
                 }
             }
+            "feed.permission.reply" | "feed.question.reply" | "feed.exit_plan.reply" => {
+                let response = match crate::feed::reply_rpc(method, &params, crate::feed::now_ms())
+                {
+                    Ok(result) => success_response(id, result),
+                    Err((code, message)) => error_response(id, code, &message),
+                };
+                if send_json(&writer, &response).await.is_err() {
+                    break;
+                }
+            }
             "mobile.events.subscribe" => {
                 let topics = params.get("topics").and_then(Value::as_array);
                 // Feed invalidations (`feed.changed`) need no terminal; they run beside it.
