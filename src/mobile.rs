@@ -134,7 +134,7 @@ pub fn host_status(workspace_count: usize) -> Value {
         "mac_display_name": display_name(),
         "workspace_count": workspace_count,
         "terminal_fidelity": "text",
-        "capabilities": ["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image", "feed.list", "feed.text", "feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply", "workspace.actions.v1", "workspace.read_state.v1", "workspace.close.v1", "terminal.create", "workspace.create", "workspace.create.task", "task.attachments.v1", "chat.v1", "terminal.mouse"],
+        "capabilities": ["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image", "feed.list", "feed.text", "feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply", "workspace.actions.v1", "workspace.read_state.v1", "workspace.close.v1", "terminal.create", "terminal.close", "workspace.create", "workspace.create.task", "task.attachments.v1", "chat.v1", "terminal.mouse"],
     })
 }
 
@@ -519,6 +519,16 @@ pub fn terminal_create_workspace(params: &Value) -> Result<String, (String, Stri
         .ok_or_else(|| ("invalid_params".to_owned(), "workspace_id is required".to_owned()))
 }
 
+/// Surface of a phone `terminal.close` (a Linux addition: upstream iOS only deletes workspaces).
+pub fn terminal_close_surface(params: &Value) -> Result<String, (String, String)> {
+    params
+        .get("surface_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| ("invalid_params".to_owned(), "surface_id is required".to_owned()))
+}
+
 /// Optional title of a phone `workspace.create` (upstream iOS sends none, or a spec title).
 pub fn workspace_create_title(params: &Value) -> Option<String> {
     params
@@ -635,7 +645,7 @@ mod tests {
         assert_eq!(status["terminal_fidelity"], "text");
         assert_eq!(
             status["capabilities"],
-            json!(["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image", "feed.list", "feed.text", "feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply", "workspace.actions.v1", "workspace.read_state.v1", "workspace.close.v1", "terminal.create", "workspace.create", "workspace.create.task", "task.attachments.v1", "chat.v1", "terminal.mouse"])
+            json!(["terminal.text", "app.update", "terminal.input.keys", "terminal.paste", "terminal.paste_image", "feed.list", "feed.text", "feed.permission.reply", "feed.question.reply", "feed.exit_plan.reply", "workspace.actions.v1", "workspace.read_state.v1", "workspace.close.v1", "terminal.create", "terminal.close", "workspace.create", "workspace.create.task", "task.attachments.v1", "chat.v1", "terminal.mouse"])
         );
         assert!(status["mac_device_id"].is_string());
         assert!(status["mac_display_name"].is_string());
@@ -652,6 +662,14 @@ mod tests {
         assert_eq!(with_created(json!({}), "created_workspace_id", None), json!({}));
         assert_eq!(workspace_create_title(&json!({"title": "  Essai "})).as_deref(), Some("Essai"));
         assert_eq!(workspace_create_title(&json!({"title": " "})), None);
+    }
+
+    /// A phone terminal.close needs an explicit surface.
+    #[test]
+    fn terminal_close_targets_an_explicit_surface() {
+        assert_eq!(terminal_close_surface(&json!({"surface_id": "s-1"})).unwrap(), "s-1");
+        assert!(terminal_close_surface(&json!({})).is_err());
+        assert!(terminal_close_surface(&json!({"surface_id": " "})).is_err());
     }
 
     /// A phone task exports its prompt safely, then types the template command.

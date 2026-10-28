@@ -255,6 +255,35 @@ async fn handle_connection(
                     break;
                 }
             }
+            "terminal.close" => {
+                // Linux addition (upstream iOS only deletes workspaces): close one terminal,
+                // answered with the workspace list. The last terminal of a workspace is refused
+                // (`close_failed`); the phone closes the workspace instead.
+                let call = match mobile::terminal_close_surface(&params) {
+                    Ok(surface) => gtk_call(&cmd_tx, |resp_tx| SocketCommand::SurfaceClose {
+                        req_id: Value::Null,
+                        id: surface,
+                        resp_tx,
+                    })
+                    .await,
+                    Err(error) => Err(error),
+                };
+                let call = match call {
+                    Ok(_) => gtk_call(&cmd_tx, |resp_tx| SocketCommand::MobileWorkspaceList {
+                        req_id: Value::Null,
+                        resp_tx,
+                    })
+                    .await,
+                    Err(error) => Err(error),
+                };
+                let response = match call {
+                    Ok(result) => success_response(id, result),
+                    Err((code, message)) => error_response(id, &code, &message),
+                };
+                if send_json(&writer, &response).await.is_err() {
+                    break;
+                }
+            }
             "workspace.create" => {
                 // Upstream `v2MobileWorkspaceCreate`: in the background (the PC keeps its
                 // selection), answered with the workspace list plus `created_workspace_id`.
