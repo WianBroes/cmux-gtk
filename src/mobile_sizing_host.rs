@@ -238,7 +238,15 @@ fn remeasure(entry: &mut Entry) {
                 "own": own.map(|g| [g.cols, g.rows])}),
         );
         entry.parent_px = parent_px;
-        entry.own = own;
+        entry.own = match (entry.own, own) {
+            // A pane in a split sizes its box to the shrunk terminal, so while a phone holds it
+            // the box no longer tells the PC's grid: it only grows, else it shrank at every pinch
+            // until the phone could not zoom out.
+            (Some(old), Some(new)) if area.size_request() != (-1, -1) => {
+                Some(TerminalGridSize::new(old.cols.max(new.cols), old.rows.max(new.rows)))
+            }
+            _ => own,
+        };
     }
     if let Some(grid) = entry.own {
         entry.engine.report(PC_ID, grid);
@@ -289,12 +297,19 @@ fn apply(entry: &Entry) {
 /// lands once it is shown, while the phone watches it now. Size Ghostty
 /// directly; nothing renders until it is shown, at the requested size.
 fn size_hidden(area: &gtk4::GLArea, grid: TerminalGridSize, (pad_w, pad_h): (f64, f64)) {
+    let surface = crate::split_engine::surface_for_area(area);
+    // SAFETY: the surface belongs to this live GLArea on the GTK thread.
+    let before = surface.map(|surface| unsafe { ffi::ghostty_surface_size(surface) });
+    crate::diagnostics::record(
+        "mobile.sizing.hidden",
+        serde_json::json!({"mapped": area.is_mapped(), "visible": area.is_visible(), "alloc": [area.width(), area.height()],
+            "parent": area.parent().map(|p| [p.width(), p.height()]), "grid": [grid.cols, grid.rows],
+            "ghostty": before.map(|s| [s.columns, s.rows])}),
+    );
     if area.is_mapped() {
         return;
     }
-    let Some(surface) = crate::split_engine::surface_for_area(area) else { return; };
-    // SAFETY: the surface belongs to this live GLArea on the GTK thread.
-    let size = unsafe { ffi::ghostty_surface_size(surface) };
+    let (Some(surface), Some(size)) = (surface, before) else { return; };
     if size.cell_width_px == 0 || size.cell_height_px == 0 {
         return;
     }
