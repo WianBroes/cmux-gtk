@@ -2653,11 +2653,15 @@ fn replace_child_in_parent(
         let page = stack.page(old_widget);
         if let Some(name) = page.name() {
             let name_str = name.to_string();
+            // A split collapsing in a workspace not shown must not bring it on screen.
+            let was_visible = stack.visible_child().as_ref() == Some(old_widget);
             stack.remove(old_widget);
             // new_widget may still be parented to the Paned we're replacing; unparent first.
             remove_widget_from_parent(new_widget);
             stack.add_named(new_widget, Some(&name_str));
-            stack.set_visible_child_name(&name_str);
+            if was_visible {
+                stack.set_visible_child_name(&name_str);
+            }
         } else {
             stack.remove(old_widget);
         }
