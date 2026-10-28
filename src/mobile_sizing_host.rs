@@ -102,6 +102,9 @@ pub(crate) fn detach(surface_id: &str, participant_id: &str) -> Option<TerminalS
             let removed = engines.remove(surface_id)?;
             if let Some(area) = removed.area.upgrade() {
                 release(&area);
+                if let (Some(own), Some(pad)) = (removed.own, removed.pad) {
+                    size_hidden(&area, own, pad);
+                }
             }
             None
         } else {
@@ -186,14 +189,24 @@ fn measure_pad(area: &gtk4::GLArea) -> Option<(f64, f64)> {
 }
 
 /// The grid `area`'s tab can show, from the tab size and the cell size, with the
-/// padding measured once. `None` for a hidden pane (its tab has no size yet).
+/// padding measured once. A pane not shown since start (its tab has no size yet)
+/// keeps the grid Ghostty already has, unless a phone shrank it.
 fn own_grid(area: &gtk4::GLArea, pad: Option<(f64, f64)>) -> ((i32, i32), Option<TerminalGridSize>) {
     let Some(parent) = area.parent() else {
         return ((0, 0), None);
     };
     let parent_px = (parent.width(), parent.height());
     if parent_px.0 <= 0 || parent_px.1 <= 0 {
-        return (parent_px, None);
+        let surface = crate::split_engine::surface_for_area(area);
+        let (Some(surface), (-1, -1)) = (surface, area.size_request()) else {
+            return (parent_px, None);
+        };
+        // SAFETY: the surface belongs to this live GLArea on the GTK thread.
+        let size = unsafe { ffi::ghostty_surface_size(surface) };
+        if size.columns == 0 || size.rows == 0 {
+            return (parent_px, None);
+        }
+        return (parent_px, Some(TerminalGridSize::new(size.columns, size.rows)));
     }
     let (Some((pad_w, pad_h)), Some(surface)) = (pad, crate::split_engine::surface_for_area(area)) else {
         return (parent_px, None);
@@ -241,6 +254,7 @@ fn apply(entry: &Entry) {
     let (Some(own), Some((pad_w, pad_h))) = (entry.own, entry.pad) else { return; };
     let Some(TerminalGridSize { cols: columns, rows }) = limited(own, entry.engine.state().size()) else {
         release(&area);
+        size_hidden(&area, own, (pad_w, pad_h));
         return;
     };
     let Some(surface) = crate::split_engine::surface_for_area(&area) else {
@@ -268,15 +282,26 @@ fn apply(entry: &Entry) {
     area.set_halign(gtk4::Align::Start);
     area.set_valign(gtk4::Align::Start);
     area.set_size_request(width, height);
-    // A pane of a workspace not shown gets no allocation, so the request only
-    // lands once it is shown, while the phone watches it now. Size Ghostty
-    // directly; nothing renders until it is shown, at this same size.
-    if !area.is_mapped() {
-        let phys_w = (f64::from(columns) * cell_w + pad_w).round() as u32;
-        let phys_h = (f64::from(rows) * cell_h + pad_h).round() as u32;
-        // SAFETY: the surface belongs to this live GLArea on the GTK thread.
-        unsafe { ffi::ghostty_surface_set_size(surface, phys_w, phys_h) };
+    size_hidden(&area, TerminalGridSize::new(columns, rows), (pad_w, pad_h));
+}
+
+/// A pane of a workspace not shown gets no allocation, so a size request only
+/// lands once it is shown, while the phone watches it now. Size Ghostty
+/// directly; nothing renders until it is shown, at the requested size.
+fn size_hidden(area: &gtk4::GLArea, grid: TerminalGridSize, (pad_w, pad_h): (f64, f64)) {
+    if area.is_mapped() {
+        return;
     }
+    let Some(surface) = crate::split_engine::surface_for_area(area) else { return; };
+    // SAFETY: the surface belongs to this live GLArea on the GTK thread.
+    let size = unsafe { ffi::ghostty_surface_size(surface) };
+    if size.cell_width_px == 0 || size.cell_height_px == 0 {
+        return;
+    }
+    let phys_w = (f64::from(grid.cols) * f64::from(size.cell_width_px) + pad_w).round() as u32;
+    let phys_h = (f64::from(grid.rows) * f64::from(size.cell_height_px) + pad_h).round() as u32;
+    // SAFETY: as above.
+    unsafe { ffi::ghostty_surface_set_size(surface, phys_w, phys_h) };
 }
 
 /// Return the pane to its full tab size.
