@@ -268,6 +268,15 @@ fn apply(entry: &Entry) {
     area.set_halign(gtk4::Align::Start);
     area.set_valign(gtk4::Align::Start);
     area.set_size_request(width, height);
+    // A pane of a workspace not shown gets no allocation, so the request only
+    // lands once it is shown, while the phone watches it now. Size Ghostty
+    // directly; nothing renders until it is shown, at this same size.
+    if !area.is_mapped() {
+        let phys_w = (f64::from(columns) * cell_w + pad_w).round() as u32;
+        let phys_h = (f64::from(rows) * cell_h + pad_h).round() as u32;
+        // SAFETY: the surface belongs to this live GLArea on the GTK thread.
+        unsafe { ffi::ghostty_surface_set_size(surface, phys_w, phys_h) };
+    }
 }
 
 /// Return the pane to its full tab size.
