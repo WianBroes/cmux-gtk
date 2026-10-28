@@ -307,9 +307,36 @@ fn size_hidden(area: &gtk4::GLArea, grid: TerminalGridSize, (pad_w, pad_h): (f64
             "ghostty": before.map(|s| [s.columns, s.rows])}),
     );
     if area.is_mapped() {
+        // A shown pane takes its size from GTK's next layout, which never comes while the
+        // window is covered or minimized (Wayland stops its frame clock). Size Ghostty
+        // ourselves if the layout has not done it shortly after.
+        let weak = area.downgrade();
+        let request = area.size_request();
+        gtk4::glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
+            let Some(area) = weak.upgrade() else { return; };
+            if area.size_request() != request {
+                return;
+            }
+            let Some(surface) = crate::split_engine::surface_for_area(&area) else { return; };
+            // SAFETY: the surface belongs to this live GLArea on the GTK thread.
+            let size = unsafe { ffi::ghostty_surface_size(surface) };
+            if (size.columns, size.rows) == (grid.cols, grid.rows) {
+                return;
+            }
+            crate::diagnostics::record(
+                "mobile.sizing.forced",
+                serde_json::json!({"grid": [grid.cols, grid.rows], "ghostty": [size.columns, size.rows], "alloc": [area.width(), area.height()]}),
+            );
+            set_grid(surface, size, grid, (pad_w, pad_h));
+        });
         return;
     }
     let (Some(surface), Some(size)) = (surface, before) else { return; };
+    set_grid(surface, size, grid, (pad_w, pad_h));
+}
+
+/// Size Ghostty to `grid` cells plus its padding.
+fn set_grid(surface: ffi::ghostty_surface_t, size: ffi::ghostty_surface_size_s, grid: TerminalGridSize, (pad_w, pad_h): (f64, f64)) {
     if size.cell_width_px == 0 || size.cell_height_px == 0 {
         return;
     }
