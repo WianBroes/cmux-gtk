@@ -1060,6 +1060,20 @@ pub fn create_surface(
     });
     gl_area.add_controller(drop_target);
 
+    // Placed in a workspace not shown, GTK never realizes the area, so the realize handler
+    // above (which starts the terminal at the window's size) never ran: realize it once it
+    // is in the window.
+    gtk4::glib::idle_add_local_once({
+        let area = gl_area.downgrade();
+        move || {
+            if let Some(area) = area.upgrade() {
+                if area.root().is_some() && !area.is_realized() {
+                    area.realize();
+                }
+            }
+        }
+    });
+
     (gl_area, surface_cell)
 }
 
