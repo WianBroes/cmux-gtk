@@ -482,7 +482,9 @@ pub fn create_surface(
                     ffi::ghostty_surface_display_realized(existing_surface);
                     let phys_w = (w as f64 * scale) as u32;
                     let phys_h = (h as f64 * scale) as u32;
-                    if phys_w > 0 && phys_h > 0 {
+                    // Not shown (split of a workspace in the background): the allocation is
+                    // stale and would undo a phone's shared size; resize sets it when shown.
+                    if phys_w > 0 && phys_h > 0 && area.is_mapped() {
                         ffi::ghostty_surface_set_size(existing_surface, phys_w, phys_h);
                     }
                     ffi::ghostty_surface_set_content_scale(existing_surface, scale, scale);
@@ -492,8 +494,16 @@ pub fn create_surface(
                 return;
             }
 
-            let w = area.width();
-            let h = area.height();
+            let (mut w, mut h) = (area.width(), area.height());
+            // A terminal created in a workspace not shown (new-split, new-surface) gets no size
+            // until it is shown, and its command waited for that: start it at the window's size,
+            // like macOS, and let resize give the real size once shown.
+            if (w <= 0 || h <= 0) && !area.is_mapped() {
+                if let Some(root) = area.root() {
+                    let root = root.upcast_ref::<gtk4::Widget>();
+                    (w, h) = (root.width(), root.height());
+                }
+            }
             if initialize_surface(area, &cell, &init, w, h).is_none() {
                 eprintln!(
                     "cmux: deferring Ghostty initialization until non-zero resize ({}x{})",
