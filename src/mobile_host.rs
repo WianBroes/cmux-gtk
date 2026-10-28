@@ -459,6 +459,43 @@ async fn handle_connection(
                     break;
                 }
             }
+            "mobile.terminal.mouse" => {
+                let Some(surface_id) = params.get("surface_id").and_then(Value::as_str) else {
+                    let _ = send_json(
+                        &writer,
+                        &error_response(id, "invalid_params", "Missing surface_id"),
+                    )
+                    .await;
+                    continue;
+                };
+                let cell = |key: &str| {
+                    params
+                        .get(key)
+                        .and_then(Value::as_i64)
+                        .map_or(0, |value| value.clamp(0, i64::from(u16::MAX)) as u32)
+                };
+                let (col, row) = (cell("col"), cell("row"));
+                let clicked = gtk_call(&cmd_tx, |resp_tx| SocketCommand::SurfaceMouseClick {
+                    req_id: Value::Null,
+                    id: Some(surface_id.to_owned()),
+                    col,
+                    row,
+                    resp_tx,
+                })
+                .await;
+                if let Err((code, message)) = clicked {
+                    let _ = send_json(&writer, &error_response(id, &code, &message)).await;
+                    continue;
+                }
+                wake.notify_one();
+                let result = json!({"surface_id": surface_id});
+                if send_json(&writer, &success_response(id, result))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
             "mobile.terminal.scroll" => {
                 let Some(surface_id) = params.get("surface_id").and_then(Value::as_str) else {
                     let _ = send_json(

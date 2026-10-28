@@ -3126,6 +3126,42 @@ fn handle_socket_command_traced(
             let _ = resp_tx.send(response);
         }
 
+        SocketCommand::SurfaceMouseClick {
+            req_id,
+            id,
+            col,
+            row,
+            resp_tx,
+        } => {
+            // Like upstream mobileClick: pointer at the middle of the cell, then a left
+            // press and release. libghostty self-gates: a program tracking the mouse gets
+            // the click, a plain screen makes an empty selection.
+            let scale = id.as_deref().and_then(|surface_id| {
+                let s = state.borrow();
+                s.split_engines.iter().find_map(|engine| engine.gl_area_for_surface(surface_id))
+            }).map_or(1.0, |area| f64::from(area.scale_factor().max(1)));
+            let result = terminal_target(state, id.as_deref(), None).map(|surface| {
+                use crate::ghostty::ffi;
+                // SAFETY: resolution found a live GTK-owned terminal; no model
+                // borrow or event-loop iteration spans these native calls.
+                unsafe {
+                    let size = ffi::ghostty_surface_size(surface);
+                    // Pointer positions are in logical pixels, cells in device pixels.
+                    let x = (f64::from(col) + 0.5) * f64::from(size.cell_width_px) / scale;
+                    let y = (f64::from(row) + 0.5) * f64::from(size.cell_height_px) / scale;
+                    ffi::ghostty_surface_mouse_pos(surface, x, y, 0);
+                    let left = ffi::ghostty_input_mouse_button_e_GHOSTTY_MOUSE_LEFT;
+                    ffi::ghostty_surface_mouse_button(surface, ffi::ghostty_input_mouse_state_e_GHOSTTY_MOUSE_PRESS, left, 0);
+                    ffi::ghostty_surface_mouse_button(surface, ffi::ghostty_input_mouse_state_e_GHOSTTY_MOUSE_RELEASE, left, 0);
+                }
+            });
+            let response = match result {
+                Ok(()) => ok(req_id, json!({})),
+                Err((code, message)) => err(req_id, code, message),
+            };
+            let _ = resp_tx.send(response);
+        }
+
         SocketCommand::SurfaceMouseScroll {
             req_id,
             id,

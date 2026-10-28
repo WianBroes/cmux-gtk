@@ -344,6 +344,14 @@ pub enum SocketCommand {
         key: String,
         resp_tx: RespTx,
     },
+    /// Left click at a grid cell of a terminal (mobile.terminal.mouse, a phone tap).
+    SurfaceMouseClick {
+        req_id: Value,
+        id: Option<String>,
+        col: u32,
+        row: u32,
+        resp_tx: RespTx,
+    },
     /// Mouse-wheel scroll of `delta_lines` lines on a terminal (mobile.terminal.scroll).
     SurfaceMouseScroll {
         req_id: Value,
