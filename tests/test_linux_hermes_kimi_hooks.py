@@ -81,6 +81,8 @@ def main():
         assert set(k_commands) == {"SessionStart", "UserPromptSubmit", "Notification", "Stop", "SessionEnd"}
         assert all(entry["timeout"] == 10 for entry in kimi["hooks"])
 
+        hook_agent = root / "hook-agent.py"
+        hook_agent.write_text("import subprocess, sys\nresult = subprocess.run(['/bin/sh', '-c', sys.argv[1]], input=sys.stdin.read(),\n                      text=True, capture_output=True)\nsys.stdout.write(result.stdout)\nsys.stderr.write(result.stderr)\nraise SystemExit(result.returncode)\n")
         with running_app(root, env, startup_timeout=20) as app:
             target = next(row["uuid"] for row in app.surfaces() if row["active"])
             hook_env = dict(app.environment, CMUX_SURFACE_ID=target, CMUX_SOCKET=str(app.socket_path))
@@ -106,7 +108,7 @@ def main():
                     if message:
                         payload["message"] = message
                     result = subprocess.run(
-                        ["/bin/sh", "-c", commands[event]], env=hook_env,
+                        ["python3", str(hook_agent), commands[event]], env=hook_env,
                         input=json.dumps(payload), text=True, capture_output=True, timeout=10,
                     )
                     assert result.returncode == 0, result.stderr
@@ -119,7 +121,7 @@ def main():
                 assert binding["kind"] == provider and binding["checkpoint_id"] == native_id
                 argv_output = root / f"{provider}-argv"
                 subprocess.run(
-                    ["/bin/sh", "-c", binding["command"]], check=True, timeout=10,
+                    ["python3", str(hook_agent), binding["command"]], check=True, timeout=10,
                     env=dict(hook_env, HOOK_ARGV_OUT=str(argv_output)),
                 )
                 assert argv_output.read_text().splitlines() == prefix + [native_id]

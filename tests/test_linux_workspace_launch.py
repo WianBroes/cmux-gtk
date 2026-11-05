@@ -194,7 +194,7 @@ Subsystem sftp internal-sftp
         """Observe native/prompt readiness, submit once, then verify complete remote marker contents."""
         def ready():
             """Wait read-only for realization and this fixture's remote-directory prompt before sending input."""
-            if not json.loads(cli("health", "--json"))["alive"]:
+            if not any(row.get("alive") for row in json.loads(cli("health", "--json")).get("surfaces", [])):
                 return False
             text = cli("read-text").replace("\n", "").replace("\r", "")
             return str(root / "remote") in text

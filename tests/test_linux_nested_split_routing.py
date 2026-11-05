@@ -17,7 +17,7 @@ def main():
         with running_app(Path(directory)) as app:
             app.wait_for(lambda: len(app.children()) == 1, "initial shell")
             for iteration in range(8):
-                workspace = json.loads(app.cli("new-workspace", "--json"))["uuid"]
+                workspace = json.loads(app.cli("new-workspace", "--focus", "true", "--json"))["uuid"]
                 app.wait_for(lambda: len(app.children()) == 2, "new workspace shell")
                 surfaces = [selected_surface(app)]
                 for count in range(2):

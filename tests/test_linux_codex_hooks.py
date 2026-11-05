@@ -37,15 +37,17 @@ def main():
 
         with running_app(root, {"PATH": env["PATH"], "CODEX_HOME": str(config)}) as app:
             initial = next(row for row in app.surfaces() if row["active"])
-            app.cli("new-workspace", "--name", "codex-hook-target")
+            app.cli("new-workspace", "--focus", "true", "--name", "codex-hook-target")
             target = next(row["uuid"] for row in app.surfaces() if row["active"])
             app.cli("select-workspace", initial["workspace_uuid"])
+            hook_agent = root / "hook-agent.py"
+            hook_agent.write_text("import subprocess, sys\nresult = subprocess.run(['/bin/sh', '-c', sys.argv[1]], input=sys.stdin.read(),\n                      text=True, capture_output=True)\nsys.stdout.write(result.stdout)\nsys.stderr.write(result.stderr)\nraise SystemExit(result.returncode)\n")
             hook_env = dict(app.environment, CMUX_SURFACE_ID=target, CMUX_SOCKET=str(app.socket_path))
             native_id = "codex-session-id"
 
             def event(name, **extra):
                 payload = {"hook_event_name": name, "session_id": native_id, "cwd": str(root), **extra}
-                result = subprocess.run(["/bin/sh", "-c", commands[name]], env=hook_env,
+                result = subprocess.run(["python3", str(hook_agent), commands[name]], env=hook_env,
                                         input=json.dumps(payload), text=True, capture_output=True, timeout=10)
                 assert result.returncode == 0, result.stderr
 
@@ -55,7 +57,7 @@ def main():
             assert binding["kind"] == "codex" and binding["checkpoint_id"] == native_id
             assert binding["environment"]["CODEX_HOME"] == str(config)
             argv_output = root / "codex-argv"
-            subprocess.run(["/bin/sh", "-c", binding["command"]], check=True, timeout=10,
+            subprocess.run(["python3", str(hook_agent), binding["command"]], check=True, timeout=10,
                            env=dict(hook_env, HOOK_ARGV_OUT=str(argv_output)))
             assert argv_output.read_text().splitlines() == ["resume", native_id]
             event("Stop", summary="Review complete")

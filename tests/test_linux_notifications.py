@@ -20,7 +20,7 @@ def main():
             with running_app(root) as app:
                 app.wait_for(lambda: bool(app.surfaces()), "initial surface")
                 initial = next(row for row in app.surfaces() if row["active"])
-                app.cli("new-workspace", "--name", "background")
+                app.cli("new-workspace", "--focus", "true", "--name", "background")
                 first = next(row for row in app.surfaces() if row["active"])
                 app.cli("split", "--direction", "horizontal")
                 second = next(row for row in app.surfaces() if row["active"])

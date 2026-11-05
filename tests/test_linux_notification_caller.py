@@ -29,7 +29,7 @@ def main():
                 assert tty.startswith("/dev/pts/")
                 key(window(app), "ctrl+t")
                 app.wait_for(lambda: len(app.surfaces()) == 2, "source inactive sibling")
-                app.cli("new-workspace", "--name", "caller background")
+                app.cli("new-workspace", "--focus", "true", "--name", "caller background")
                 second = next(row for row in app.surfaces() if row["active"])
                 key(window(app), "ctrl+t")
                 app.wait_for(lambda: len(app.surfaces()) == 4, "background sibling")
