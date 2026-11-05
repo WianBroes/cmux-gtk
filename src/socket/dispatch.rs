@@ -5,6 +5,17 @@ use super::{
     response::{err, ok},
 };
 
+/// Expire a blocking Feed item even when its client disconnects and drops the dispatch future.
+struct FeedWaitGuard(String);
+
+impl Drop for FeedWaitGuard {
+    fn drop(&mut self) {
+        if let Ok(mut store) = crate::feed::global().lock() {
+            store.expire(&self.0, crate::feed::now_ms());
+        }
+    }
+}
+
 /// Decode a nullable optional target without silently turning malformed IDs into active-pane fallback.
 fn optional_target(params: &serde_json::Value) -> Result<Option<String>, &'static str> {
     // Upstream clients name the target `surface_id`; `id` is our older spelling.
@@ -316,6 +327,7 @@ async fn dispatch_request(
             operation.finish(true);
             return ok(req_id, serde_json::json!({"accepted": item.is_some(), "item_id": item}));
         };
+        let _guard = FeedWaitGuard(request_id.clone());
         operation.pending();
         let wait = std::time::Duration::from_secs_f64(wait);
         let result = match tokio::time::timeout(wait, decision).await {

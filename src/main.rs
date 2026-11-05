@@ -14,6 +14,7 @@ mod config;
 mod diagnostics;
 mod events;
 mod feed;
+mod feed_permission;
 mod file_explorer;
 mod focus_history;
 mod font_zoom;
@@ -87,6 +88,8 @@ const APP_ID: &str = "io.cmux.App";
 const APP_CSS: &str = "
 /* cmux Phase 2 styles — per UI-SPEC.md */
 window { background-color: #1a1a1a; }
+.codex-permission .approval-reason, .codex-permission .approval-context { color: #e0e0e0; }
+.codex-permission textview, .codex-permission textview text { background-color: #242424; color: #f0f0f0; }
 .sidebar { background-color: #242424; }
 /* File explorer (right sidebar Files mode): rows, header and selection follow the dark
    sidebar instead of the light theme's white treeview. */
@@ -582,6 +585,7 @@ fn build_ui(
     crate::file_explorer::start_root_refresh(&state);
     crate::ports::start(&state, &window);
     crate::agent_activity::start(&state, &window);
+    crate::feed_permission::start(&window);
     crate::browser::location::start(&state, &window);
 
     // Attach command receiver to GTK main loop via glib::MainContext::default().spawn_local.

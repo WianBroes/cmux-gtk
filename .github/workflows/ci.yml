@@ -218,6 +218,10 @@ jobs:
         if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_codex_hooks.py
 
+      - name: Test visible Codex desktop approvals
+        if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
+        run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_codex_permissions.py
+
       - name: Test nested JSON agent hook lifecycles
         if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
         run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_json_agent_hooks.py
