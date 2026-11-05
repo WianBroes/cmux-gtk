@@ -116,7 +116,8 @@ window { background-color: #1a1a1a; }
 .workspace-list .group-unread { background: #5b8dd9; color: #ffffff; border-radius: 8px; padding: 0 5px; }
 .notification-unread { outline: 2px solid #5b8dd9; outline-offset: -2px; }
 .tab-unread-dot { min-width: 7px; min-height: 7px; border-radius: 4px; background-color: #5b8dd9; }
-.active-pane { border: 1px solid #5b8dd9; }
+/* Focus decoration must not change layout minima during GTK width-for-height probes. */
+.active-pane { outline: 1px solid #5b8dd9; outline-offset: -1px; }
 .rename-entry { font-size: 14px; padding: 2px 4px; }
 /* GtkPaned separator styling — makes divider visible on dark backgrounds.
    wide-handle is set programmatically; separator gets min-width/height for draggability. */
