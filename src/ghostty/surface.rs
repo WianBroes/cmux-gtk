@@ -263,7 +263,8 @@ fn initialize_surface(
         );
     }
     // A terminal created with `--focus false` leaves keyboard focus where it is.
-    if area.has_css_class(crate::split_engine::NO_INITIAL_FOCUS) {
+    // GTK may already have selected this widget before its native surface was ready.
+    if area.has_css_class(crate::split_engine::NO_INITIAL_FOCUS) && !area.has_focus() {
         // SAFETY: the freshly registered surface is live on GTK.
         unsafe { ffi::ghostty_surface_set_focus(surface, false) };
     } else {

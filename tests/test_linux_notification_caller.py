@@ -99,7 +99,10 @@ def main():
                 saved = rows()
                 quit_app(app)
             with running_app(root) as app:
-                assert rows() == saved, "nullable terminal identity did not survive session restore"
+                restored = rows()
+                assert restored == saved, ("notification history changed during restore", {
+                    "saved": saved, "restored": restored,
+                })
         finally:
             stop_process(wm)
     print("caller native TTY/UUID scope, workspace-only history and restoration passed")

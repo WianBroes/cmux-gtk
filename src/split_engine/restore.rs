@@ -104,6 +104,8 @@ impl RestoreContext<'_> {
             pane_id,
             launch,
         );
+        // Every restored workspace stays guarded; only actual GTK focus may override it.
+        gl_area.add_css_class(super::NO_INITIAL_FOCUS);
         crate::scrollback::prepare(&gl_area, scrollback);
         attach_terminal_context_menu(&gl_area);
         PaneSurface::Terminal {

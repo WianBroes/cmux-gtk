@@ -910,6 +910,11 @@ fn build_ui(
     crate::window_state::install(&window);
     crate::inbox_actions::refresh(&state.borrow());
     window.present();
+    // Pre-map focus requests can fail. Select only the active workspace after mapping;
+    // late native initialization observes GTK focus without unguarding hidden workspaces.
+    if let Some(engine) = state.borrow().active_split_engine() {
+        engine.focus_active_surface();
+    }
 
     // Browser widgets are part of the saved pane tree; reconnect them only after
     // the window is presented so viewport dimensions and focus are meaningful.

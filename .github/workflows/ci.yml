@@ -164,7 +164,22 @@ jobs:
 
       - name: Test diff preparation, placement and restore lifecycle
         if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
-        run: dbus-run-session -- xvfb-run -a python3 tests/test_linux_diff_viewer.py
+        run: |
+          # Keep the original scenario; capture the native GTK failure on this disposable runner.
+          sudo sysctl -w kernel.core_pattern=/tmp/cmux-core.%p
+          ulimit -c unlimited
+          result=0
+          dbus-run-session -- xvfb-run -a python3 tests/test_linux_diff_viewer.py || result=$?
+          if [ "$result" -ne 0 ]; then
+            sudo apt-get install -y gdb
+            for core in /tmp/cmux-core.*; do
+              [ -f "$core" ] || continue
+              DEBUGINFOD_URLS=https://debuginfod.ubuntu.com timeout 120 gdb -batch \
+                -iex 'set debuginfod enabled on' -ex 'set pagination off' \
+                -ex 'bt full' target/debug/cmux-app "$core" || true
+            done
+          fi
+          exit "$result"
 
       - name: Test agent terminal I/O verbs against a real shell
         if: ${{ !cancelled() && steps.debug_build.conclusion == 'success' }}
