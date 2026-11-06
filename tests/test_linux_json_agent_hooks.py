@@ -55,6 +55,8 @@ def main():
             assert decoded["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "true"
             installed[name] = decoded["hooks"]
 
+        hook_agent = root / "hook-agent.py"
+        hook_agent.write_text("import subprocess, sys\nresult = subprocess.run(['/bin/sh', '-c', sys.argv[1]], input=sys.stdin.read(),\n                      text=True, capture_output=True)\nsys.stdout.write(result.stdout)\nsys.stderr.write(result.stderr)\nraise SystemExit(result.returncode)\n")
         # The six durable config syncs above can leave a loaded hosted runner briefly I/O-bound.
         with running_app(root, env, startup_timeout=20) as app:
             target = next(row["uuid"] for row in app.surfaces() if row["active"])
@@ -71,7 +73,7 @@ def main():
                     else:
                         payload = {"hook_event_name": event_name, "session_id": native_id,
                                    "cwd": str(root), **extra}
-                    result = subprocess.run(["/bin/sh", "-c", command], env=hook_env,
+                    result = subprocess.run(["python3", str(hook_agent), command], env=hook_env,
                                             input=json.dumps(payload), text=True,
                                             capture_output=True, timeout=10)
                     assert result.returncode == 0, (name, command_name, result.stderr)
@@ -82,7 +84,7 @@ def main():
                 binding = json.loads(app.cli("surface", "resume", "show", "--surface", target, "--json"))["resume_binding"]
                 assert binding["kind"] == name and binding["checkpoint_id"] == native_id
                 argv_output = root / (name + "-argv")
-                subprocess.run(["/bin/sh", "-c", binding["command"]], env=dict(hook_env, HOOK_ARGV_OUT=str(argv_output)),
+                subprocess.run(["python3", str(hook_agent), binding["command"]], env=dict(hook_env, HOOK_ARGV_OUT=str(argv_output)),
                                check=True, timeout=10)
                 assert argv_output.read_text().splitlines() == resume_prefix + [native_id]
                 event(stop_name, "stop", summary=name + " complete")

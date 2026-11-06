@@ -135,7 +135,7 @@ def main():
 
                 with pending_open(app, browser_dir) as pending:
                     subprocess.run(command(app, "ping"), env=app.environment, check=True, capture_output=True, timeout=2)
-                    target = json.loads(app.cli("new-workspace", "--json"))["uuid"]
+                    target = json.loads(app.cli("new-workspace", "--focus", "true", "--json"))["uuid"]
                     before = app.layout()
                     finish_open(pending, browser_dir, True)
                     assert [row for row in app.layout() if row["workspace_uuid"] == target] == [row for row in before if row["workspace_uuid"] == target], "browser completion changed the new workspace"
@@ -151,7 +151,7 @@ def main():
                         raise AssertionError("invalid explicit browser workspace was accepted")
                     assert app.layout() == before
                 # Target a third workspace while the observer stays selected.
-                third = json.loads(app.cli("new-workspace", "--name", "explicit browser target", "--json"))["uuid"]
+                third = json.loads(app.cli("new-workspace", "--focus", "true", "--name", "explicit browser target", "--json"))["uuid"]
                 app.cli("select-workspace", target)
                 active_before = {item["uuid"] for item in app.surfaces() if item["active"]}
                 previous_daemons = set(browser_dir.glob("*.pid"))
@@ -165,7 +165,7 @@ def main():
                 app.wait_for(lambda: all(not pid.exists() for pid in third_daemons), "closed workspace browser daemon exit")
                 assert all(pid.exists() for pid in previous_daemons), "closing one workspace retired another browser"
                 (root / "cmux.json").write_text(json.dumps({"actions": {"fixture.browser": {"builtin": "cmux.newBrowser"}}}))
-                project = json.loads(app.cli("new-workspace", "--cwd", str(root), "--json"))["uuid"]
+                project = json.loads(app.cli("new-workspace", "--focus", "true", "--cwd", str(root), "--json"))["uuid"]
                 reviewed = json.loads(app.cli("project-actions", "--workspace", project, "--json"))
                 source_terminal = next(row["uuid"] for row in app.surfaces() if row["active"])
                 before_daemons = set(browser_dir.glob("*.pid"))
@@ -199,7 +199,7 @@ def main():
                     "type": "workspace", "workspace": {"name": "Browser layout", "layout": {
                         "pane": {"surfaces": [{"type": "browser", "url": "https://layout.example/path", "focus": True}]}
                     }}}}}))
-                layout_source = json.loads(app.cli("new-workspace", "--cwd", str(root), "--json"))["uuid"]
+                layout_source = json.loads(app.cli("new-workspace", "--focus", "true", "--cwd", str(root), "--json"))["uuid"]
                 reviewed_layout = json.loads(app.cli("project-actions", "--workspace", layout_source, "--json"))
                 before_daemons = set(browser_dir.glob("*.pid"))
                 layout_workspace = json.loads(app.cli("project-run", "fixture.layout", "--workspace", layout_source,

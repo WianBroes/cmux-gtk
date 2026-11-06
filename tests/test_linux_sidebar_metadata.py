@@ -20,7 +20,7 @@ def main():
             with running_app(root) as app:
                 app.wait_for(lambda: bool(app.surfaces()), "initial surface")
                 initial = next(row for row in app.surfaces() if row["active"])
-                app.cli("new-workspace", "--name", "metadata")
+                app.cli("new-workspace", "--focus", "true", "--name", "metadata")
                 target = next(row for row in app.surfaces() if row["active"])["workspace_uuid"]
                 app.cli("select-workspace", initial["workspace_uuid"])
 
@@ -69,7 +69,8 @@ def main():
                 assert next(row["uuid"] for row in app.surfaces() if row["active"]) == initial["uuid"]
                 quit_app(app)
             with running_app(root) as app:
-                assert metadata() == saved, "metadata changed across normal quit/restart"
+                # Runtime statuses expire; the remaining metadata survives a normal restart.
+                assert metadata() == {**saved, "statuses": {}}, "metadata changed across normal quit/restart"
                 app.cli("clear-meta-block", "block0", "--workspace", target)
                 assert "block0" not in metadata()["blocks"]
                 app.cli("clear-status", "agent", "--workspace", target)

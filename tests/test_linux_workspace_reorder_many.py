@@ -21,7 +21,7 @@ def main():
                 app.wait_for(lambda: bool(app.surfaces()), "initial surface")
                 ids = [next(row for row in app.surfaces() if row["active"])["workspace_uuid"]]
                 for name in ("second", "third"):
-                    app.cli("new-workspace", "--name", name)
+                    app.cli("new-workspace", "--focus", "true", "--name", name)
                     ids.append(next(row for row in app.surfaces() if row["active"])["workspace_uuid"])
                 app.cli("select-workspace", ids[1])
                 active = next(row["uuid"] for row in app.surfaces() if row["active"])

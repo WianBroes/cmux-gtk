@@ -20,7 +20,7 @@ def main():
             with running_app(root) as app:
                 app.wait_for(lambda: bool(app.surfaces()), "initial surface")
                 initial = next(row for row in app.surfaces() if row["active"])
-                app.cli("new-workspace", "--name", "background")
+                app.cli("new-workspace", "--focus", "true", "--name", "background")
                 first = next(row for row in app.surfaces() if row["active"])
                 app.cli("split", "--direction", "horizontal")
                 second = next(row for row in app.surfaces() if row["active"])
@@ -94,7 +94,7 @@ def main():
                 assert active() == initial["uuid"]
                 opened = json.loads(app.cli("notifications", "jump-to-unread", "--json"))
                 assert opened["id"] == reachable["id"] and active() == first["uuid"]
-                assert next(row for row in messages() if row["id"] == stale["id"])["is_read"] is False
+                assert all(row["id"] != stale["id"] for row in messages()), "closed terminal notification retained"
                 app.cli("select-workspace", initial["workspace_uuid"])
                 assert json.loads(app.cli("notifications", "jump-to-unread", "--json"))["opened"] is False
                 assert active() == initial["uuid"]

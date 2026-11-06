@@ -40,7 +40,7 @@ def main():
             with running_app(root, environment) as app:
                 app.wait_for(lambda: bool(app.surfaces()), "initial terminal")
                 initial = next(row for row in app.surfaces() if row["active"])
-                app.cli("new-workspace", "--name", "desktop target")
+                app.cli("new-workspace", "--name", "desktop target", "--focus", "true")
                 key(window(app), "ctrl+t")
                 app.wait_for(lambda: len(app.surfaces()) == 3, "sibling terminal")
                 target = next(row for row in app.surfaces() if row["active"])

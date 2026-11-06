@@ -774,9 +774,17 @@ pub fn create_preview_pane() -> PreviewPaneWidgets {
     nav_bar.append(&go_btn);
     nav_bar.append(&devtools_btn);
 
+    // Clip the navigation bar in narrow panes instead of letting its minimum width
+    // become the pane's minimum (which crashes GTK allocation in deep splits).
+    let nav_bar_clip = gtk4::ScrolledWindow::new();
+    nav_bar_clip.set_policy(gtk4::PolicyType::External, gtk4::PolicyType::Never);
+    nav_bar_clip.set_propagate_natural_width(true);
+    nav_bar_clip.set_propagate_natural_height(true);
+    nav_bar_clip.set_child(Some(&nav_bar));
+
     // Vertical box: nav bar on top, picture overlay below
     let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-    vbox.append(&nav_bar);
+    vbox.append(&nav_bar_clip);
     vbox.append(&overlay);
 
     PreviewPaneWidgets {

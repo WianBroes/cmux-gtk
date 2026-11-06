@@ -247,6 +247,7 @@ impl FeedStore {
             return None;
         }
         let request_id = item.request_id.clone()?;
+        if self.waiters.contains_key(&request_id) { return None; }
         let (sender, receiver) = oneshot::channel();
         self.waiters.insert(request_id.clone(), sender);
         Some((request_id, receiver))
@@ -285,6 +286,13 @@ impl FeedStore {
             let _ = waiter.send(decision);
         }
         Ok(())
+    }
+
+    /// Reply only to the exact item shown by the desktop, including after client-id reuse.
+    pub fn reply_item(&mut self, item_id: &str, decision: Value, now_ms: u64) -> Result<(), &'static str> {
+        let request = self.items.iter().find(|item| item.id == item_id)
+            .and_then(|item| item.request_id.clone()).ok_or("not_found")?;
+        self.reply(&request, decision, now_ms)
     }
 
     /// The hook gave up (timeout): the agent falls back to its own prompt.
@@ -380,6 +388,10 @@ impl FeedStore {
         } else {
             None
         };
+        // A client-provided id must never replace another hook's decision channel.
+        if request_id.as_ref().is_some_and(|id| self.items.iter().any(|item| item.request_id.as_ref() == Some(id))) {
+            return None;
+        }
         let tool_input_value = if blocking {
             match event.get("tool_input") {
                 Some(Value::String(text)) => serde_json::from_str(text).ok(),
@@ -432,6 +444,19 @@ impl FeedStore {
 
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Full inputs for live Codex waiters, for desktop approval without truncated commands.
+    /// Telemetry without a waiting hook must never open an actionable dialog.
+    pub fn desktop_permissions(&self) -> Vec<Value> {
+        self.items.iter()
+            .filter(|item| item.source == "codex" && item.kind == "permissionRequest" && item.status == "pending")
+            .filter(|item| item.request_id.as_ref().is_some_and(|id| self.waiters.contains_key(id)))
+            .map(|item| {
+                let mut row = item.to_json();
+                row["desktop_input"] = item.tool_input_value.clone().unwrap_or_else(|| json!(item.full_text));
+                row
+            }).collect()
     }
 
     /// Visible feed rows, newest first.

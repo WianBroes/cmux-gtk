@@ -194,12 +194,22 @@ Subsystem sftp internal-sftp
         """Observe native/prompt readiness, submit once, then verify complete remote marker contents."""
         def ready():
             """Wait read-only for realization and this fixture's remote-directory prompt before sending input."""
-            if not json.loads(cli("health", "--json"))["alive"]:
+            if not any(row.get("alive") for row in json.loads(cli("health", "--json")).get("surfaces", [])):
                 return False
             text = cli("read-text").replace("\n", "").replace("\r", "")
             return str(root / "remote") in text
         started = time.perf_counter_ns()
-        eventually(ready)
+        try:
+            eventually(ready)
+        except AssertionError:
+            # Keep the actual fixture-owned terminal state when readiness fails after restore.
+            for arguments in (("current-workspace", "--json"), ("health", "--json"),
+                              ("list-surfaces", "--json"), ("read-text",)):
+                try:
+                    print("SSH readiness", name, arguments[0], cli(*arguments, timeout=3)[:4096], flush=True)
+                except (subprocess.SubprocessError, OSError) as error:
+                    print("SSH readiness diagnostic failed", name, arguments[0], type(error).__name__, flush=True)
+            raise
         readiness_us = (time.perf_counter_ns() - started) / 1000
         before = json.loads(cli("diagnostics", "--json"))
         assert before["pid"] == app.pid and before["build_profile"] == expected_profile

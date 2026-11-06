@@ -18,7 +18,7 @@ def main():
         with running_app(Path(directory)) as app:
             app.wait_for(lambda: len(app.children()) == 1, "initial shell")
             first = selected_surface(app)
-            app.cli("new-workspace")
+            app.cli("new-workspace", "--focus", "true")
             app.wait_for(lambda: len(app.children()) == 2, "second shell")
             focused = selected_surface(app)
             assert focused != first

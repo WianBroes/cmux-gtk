@@ -14,6 +14,7 @@ mod config;
 mod diagnostics;
 mod events;
 mod feed;
+mod feed_permission;
 mod file_explorer;
 mod focus_history;
 mod font_zoom;
@@ -87,6 +88,8 @@ const APP_ID: &str = "io.cmux.App";
 const APP_CSS: &str = "
 /* cmux Phase 2 styles — per UI-SPEC.md */
 window { background-color: #1a1a1a; }
+.codex-permission .approval-reason, .codex-permission .approval-context { color: #e0e0e0; }
+.codex-permission textview, .codex-permission textview text { background-color: #242424; color: #f0f0f0; }
 .sidebar { background-color: #242424; }
 /* File explorer (right sidebar Files mode): rows, header and selection follow the dark
    sidebar instead of the light theme's white treeview. */
@@ -113,7 +116,8 @@ window { background-color: #1a1a1a; }
 .workspace-list .group-unread { background: #5b8dd9; color: #ffffff; border-radius: 8px; padding: 0 5px; }
 .notification-unread { outline: 2px solid #5b8dd9; outline-offset: -2px; }
 .tab-unread-dot { min-width: 7px; min-height: 7px; border-radius: 4px; background-color: #5b8dd9; }
-.active-pane { border: 1px solid #5b8dd9; }
+/* Focus decoration must not change layout minima during GTK width-for-height probes. */
+.active-pane { outline: 1px solid #5b8dd9; outline-offset: -1px; }
 .rename-entry { font-size: 14px; padding: 2px 4px; }
 /* GtkPaned separator styling — makes divider visible on dark backgrounds.
    wide-handle is set programmatically; separator gets min-width/height for draggability. */
@@ -582,6 +586,7 @@ fn build_ui(
     crate::file_explorer::start_root_refresh(&state);
     crate::ports::start(&state, &window);
     crate::agent_activity::start(&state, &window);
+    crate::feed_permission::start(&window);
     crate::browser::location::start(&state, &window);
 
     // Attach command receiver to GTK main loop via glib::MainContext::default().spawn_local.
@@ -906,6 +911,11 @@ fn build_ui(
     crate::window_state::install(&window);
     crate::inbox_actions::refresh(&state.borrow());
     window.present();
+    // Pre-map focus requests can fail. Select only the active workspace after mapping;
+    // late native initialization observes GTK focus without unguarding hidden workspaces.
+    if let Some(engine) = state.borrow().active_split_engine() {
+        engine.focus_active_surface();
+    }
 
     // Browser widgets are part of the saved pane tree; reconnect them only after
     // the window is presented so viewport dimensions and focus are meaningful.

@@ -41,14 +41,16 @@ def main():
         settings_path.write_bytes(first)
         with running_app(root, {"PATH": env["PATH"], "CLAUDE_CONFIG_DIR": str(config)}) as app:
             initial = next(row for row in app.surfaces() if row["active"])
-            app.cli("new-workspace", "--name", "hook-target")
+            app.cli("new-workspace", "--focus", "true", "--name", "hook-target")
             target = next(row["uuid"] for row in app.surfaces() if row["active"])
+            hook_agent = root / "hook-agent.py"
+            hook_agent.write_text("import subprocess, sys\nresult = subprocess.run(['/bin/sh', '-c', sys.argv[1]], input=sys.stdin.read(),\n                      text=True, capture_output=True)\nsys.stdout.write(result.stdout)\nsys.stderr.write(result.stderr)\nraise SystemExit(result.returncode)\n")
             hook_env = dict(app.environment, CMUX_SURFACE_ID=target, CMUX_SOCKET=str(app.socket_path))
             native_id = "session-with-'quotes'"
 
             def event(name, session_id, valid=True, **extra):
                 """Run the actual installed shell command with native JSON on stdin and bounded waits."""
-                result = subprocess.run(["/bin/sh", "-c", commands[name]], env=hook_env,
+                result = subprocess.run(["python3", str(hook_agent), commands[name]], env=hook_env,
                                         input=json.dumps(dict({"hook_event_name": name, "session_id": session_id, "cwd": str(root)}, **extra)),
                                         text=True, capture_output=True, timeout=10)
                 assert (result.returncode == 0) == valid, result.stderr
@@ -60,7 +62,7 @@ def main():
             assert binding["cwd"] == str(root)
             assert binding["environment"]["CLAUDE_CONFIG_DIR"] == str(config)
             argv_output = root / "provider-argv"
-            subprocess.run(["/bin/sh", "-c", binding["command"]], check=True, timeout=10,
+            subprocess.run(["python3", str(hook_agent), binding["command"]], check=True, timeout=10,
                            env=dict(hook_env, HOOK_ARGV_OUT=str(argv_output)))
             assert argv_output.read_text().splitlines() == ["--resume", native_id]
             app.cli("select-workspace", initial["workspace_uuid"])

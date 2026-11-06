@@ -87,7 +87,7 @@ def verify_remote_browser(root, cli, eventually, remote_id, second_remote_id, lo
         url = f'http://localhost:{decoy.server_port}/redirect'
         for identity, workspace in [('first', remote_id), ('second', second_remote_id)]:
             cli('select-workspace', workspace)
-            eventually(lambda: json.loads(cli('health', '--json'))['alive'] and
+            eventually(lambda: any(row.get('alive') for row in json.loads(cli('health', '--json')).get('surfaces', [])) and
                        str(root / 'remote') in cli('read-text').replace('\n', '').replace('\r', ''))
             directory = root / 'remote' / identity
             directory.mkdir()

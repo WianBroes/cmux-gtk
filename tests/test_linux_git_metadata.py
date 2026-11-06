@@ -19,7 +19,7 @@ def main():
         repo.mkdir()
         subprocess.check_call(["git", "init", "-b", "initial", str(repo)])
         with running_app(root) as app:
-            app.cli("new-workspace", "--name", "repo", "--cwd", str(repo))
+            app.cli("new-workspace", "--focus", "true", "--name", "repo", "--cwd", str(repo))
             target = next(row for row in app.surfaces() if row["active"])
 
             def metadata():
@@ -51,7 +51,7 @@ def main():
             (repo / ".cmux").mkdir()
             (repo / ".cmux/cmux.json").write_text(json.dumps({"actions": {"fixture.repo": {"command": "touch MUST_NOT_RUN"}}}))
             (root / "cmux.json").write_text(json.dumps({"actions": {"fixture.parent": {"command": "pwd"}}}))
-            app.cli("new-workspace", "--name", "observer")
+            app.cli("new-workspace", "--focus", "true", "--name", "observer")
             active = next(row["uuid"] for row in app.surfaces() if row["active"])
             (repo / "new.txt").write_text("edited\n")
             app.wait_for(lambda: observed() == {"branch": "feature", "dirty": True}, "background workspace change")

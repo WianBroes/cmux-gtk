@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
-import time
 from functools import partial
 from process_support import stop_process, wait_until
 
@@ -32,16 +31,16 @@ with tempfile.TemporaryDirectory(prefix="cmux-window-") as directory:
             return {}
 
     def start():
-        """Launch the isolated GTK process and wait for its first visible X11 window."""
+        """Launch GTK and wait for its top-level window to be managed by Openbox."""
         global app
         app = subprocess.Popen(["target/debug/cmux-app"], env=env, stdout=log, stderr=log)
         windows = []
 
         def found():
             """Refresh the visible-window list for the owned application process."""
-            result = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(app.pid)],
-                                    capture_output=True, text=True)
-            windows[:] = result.stdout.split()
+            result = subprocess.run(["wmctrl", "-lp"], capture_output=True, text=True, timeout=5)
+            windows[:] = [str(int(fields[0], 16)) for line in result.stdout.splitlines()
+                          if len(fields := line.split(None, 4)) >= 3 and fields[2] == str(app.pid)]
             return bool(windows)
 
         eventually(found)
@@ -58,7 +57,12 @@ with tempfile.TemporaryDirectory(prefix="cmux-window-") as directory:
         return dict(line.split("=", 1) for line in output.splitlines())
 
     try:
-        time.sleep(0.5)
+        def manager_ready():
+            """EWMH close requests require a live window manager, not a startup delay."""
+            result = subprocess.run(["wmctrl", "-m"], capture_output=True, text=True, timeout=5)
+            return result.returncode == 0 and "Name: Openbox" in result.stdout
+
+        eventually(manager_ready)
         window = start()
         subprocess.run(["xdotool", "windowsize", window, "900", "650"], check=True)
         subprocess.run(["xdotool", "windowmove", window, "100", "90"], check=True)

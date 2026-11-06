@@ -33,7 +33,7 @@ def main():
             app.wait_for(lambda: (root / "pid").exists(), "owned server ready")
             port = int((root / "port").read_text())
             pid = int((root / "pid").read_text())
-            app.cli("new-workspace", "--name", "observer")
+            app.cli("new-workspace", "--focus", "true", "--name", "observer")
             selected = next(row["uuid"] for row in app.surfaces() if row["active"])
 
             def ports():

@@ -29,7 +29,7 @@ def main():
                 assert tty.startswith("/dev/pts/")
                 key(window(app), "ctrl+t")
                 app.wait_for(lambda: len(app.surfaces()) == 2, "source inactive sibling")
-                app.cli("new-workspace", "--name", "caller background")
+                app.cli("new-workspace", "--focus", "true", "--name", "caller background")
                 second = next(row for row in app.surfaces() if row["active"])
                 key(window(app), "ctrl+t")
                 app.wait_for(lambda: len(app.surfaces()) == 4, "background sibling")
@@ -99,7 +99,10 @@ def main():
                 saved = rows()
                 quit_app(app)
             with running_app(root) as app:
-                assert rows() == saved, "nullable terminal identity did not survive session restore"
+                restored = rows()
+                assert restored == saved, ("notification history changed during restore", {
+                    "saved": saved, "restored": restored,
+                })
         finally:
             stop_process(wm)
     print("caller native TTY/UUID scope, workspace-only history and restoration passed")
